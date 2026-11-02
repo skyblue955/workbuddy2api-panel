@@ -42,4 +42,11 @@ Exit status: 0. Complete output: rollback-tests.txt.
 Restored behavior/status: copy matches baseline source hashes and passes original suite, including original startup/error/logging behavior; actual maintenance branch retains the fixes.
 For committed changes use: bash maintenance/ROLLBACK.sh --commit COMMIT (creates a revert commit; no reset/force push).
 
+Actual Git revert rehearsal (after code commit 1d9195b):
+Input: isolated local clone /private/tmp/workbuddy-git-rollback.2g5IyZ.
+Command: git -C /private/tmp/workbuddy-git-rollback.2g5IyZ revert --no-commit 1d9195b
+Command: compare git write-tree against git rev-parse 0486572^{tree}.
+Literal result: GIT_REVERT_COPY=PASS restored_tree=c3bd35b1631fdb640abb1d0d18032a8085756327
+Exit status: 0. Entire staged source tree matches the baseline; actual branch retains all changes. This evidence-only follow-up commit does not alter executable behavior.
+
 Limits: no registered official-app credentials or real-account reward mutation used. Connector is not yet panel-integrated. No upstream-account health or credit receipts are claimed. Container build, OS package scan and hosted CI still require separate validation.
