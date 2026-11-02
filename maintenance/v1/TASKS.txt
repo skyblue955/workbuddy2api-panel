@@ -7,7 +7,7 @@ T3 IMPLEMENTED: official OAuth state, fixed authorization/token endpoints, bound
 T4 IMPLEMENTED: explicit dry-run-first redemption CLI with stable caller request_id. Acceptance: no live request without execute, no ID rotation/retry, known token expiry/scope validated. Local durable redemption reconciliation ledger remains NOT implemented.
 T5 IMPLEMENTED: source-backed activities/status API; actual eligibility unknown, expired and rules-only entries distinguishable. Acceptance: no assumed reward, expiry boundary/duplicates/eligibility errors tested; original legacy features not removed.
 T6 DONE_LOCAL: full regression/race/vet/build, source vulnerability scan, five-platform cross builds, clean Docker build/network-isolated smoke, independent review and fixes. Hosted CI is separate.
-T7 IN_PROGRESS: documentation and patch rollback passed; commits/push/PR and actual Git rollback rehearsal are recorded after commit.
+T7 DONE: implementation commit d002062 pushed to fork; draft PR https://github.com/skyblue955/workbuddy2api-panel/pull/1 ; patch rollback and actual Git revert reproduce phase1 tree. Hosted CI results remain separate from local acceptance.
 T8 BLOCKED_ON_USER: official registered app/user grant, read-only account validation authorization, separately approved stateful reward test. No real-account or credit recovery claim until evidence exists.
 
 Design decisions

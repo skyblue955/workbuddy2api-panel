@@ -32,3 +32,8 @@ Restored behavior: copy returns to phase1 protocol/error/startup and reward impl
 
 No user credentials, live OAuth user grant, real account validation or stateful reward action used. See ACCEPTANCE.txt for mandatory incomplete live rows and DEPLOY.txt for local completion instructions.
 Environment preflight: OFFICIAL_APP_SECRET=missing; auths absent; data/openapi absent; data/openapi-token.json absent. Only existence was checked; no secret contents inspected.
+
+Committed code d002062: actual isolated Git clone + git revert --no-commit d002062, then git write-tree == git rev-parse dab77f1^{tree}.
+Literal result: GIT_REVERT_COPY=PASS restored_tree=df28f4dbdd4d209d4b899c0001ee2e25c040a2cf; exit0.
+Fork branch pushed: origin/maintenance/v1-compat-rewards. Draft PR: https://github.com/skyblue955/workbuddy2api-panel/pull/1
+This evidence-only follow-up does not change executable code. Overall delivery remains incomplete pending mandatory real-account gates in ACCEPTANCE.txt.
