@@ -1,0 +1,16 @@
+Real personal-account acceptance — 2026-11-02T21:05:27+08:00
+User explicitly completed browser device authorization and authorized read-only acceptance. No developer registration or Open API client secret was required.
+
+Execution: GOCACHE=/private/tmp/workbuddy-gocache go run ./data/live-acceptance
+Exit status0. Sanitized result: live-readonly-result.json.
+PASS: original ordinary-account login returned a valid credential bundle; credential values not displayed or committed.
+PASS: real upstream GET /v3/config HTTP200.
+PASS: real upstream GET /console/enterprises/personal/models HTTP200.
+PASS: actual gateway /v1/models handler returned HTTP200, OpenAI list schema,18 nonempty model IDs.
+PASS: real upstream read-only billing resource query HTTP200, parsed balances valid; amounts redacted.
+PASS: unauthenticated gateway model/capability requests rejected401.
+
+Isolation: used CLI url/poll only, not login.sh or panel login completion. No server scheduler started. HTTP transport strictly allowed only model catalogue/capabilities and resource-query endpoints; redirects denied; other upstream paths blocked. Gateway tested through its actual in-memory HTTP handler; prior Docker smoke separately covered real HTTP listener/transport. Credential bundle0600 under Git-ignored data/live-acceptance/, directory0700. Logs suppressed; no account identifiers, balances or credentials in Git evidence.
+
+NOT EXECUTED: model inference (including streaming), token refresh, sign-in, task completion, reward claims, redemption, adoption, region registration or agreement acceptance. Counts: inference0, reward mutations0, refresh0.
+These results prove current ordinary-account login/model discovery/resource querying only. They do not prove chat inference or credit receipt. Next inference validation may consume credits and requires explicit user approval of bounded requests; any reward state change requires separate account/action/effect approval.
