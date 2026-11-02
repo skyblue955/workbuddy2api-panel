@@ -2,6 +2,9 @@ auths/
 data/
 *.tmp
 .git/
+.codex/
+.agents/
+maintenance/
 .gitignore
 docs/
 scripts/__pycache__/

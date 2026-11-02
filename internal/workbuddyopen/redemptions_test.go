@@ -24,6 +24,27 @@ func validSingle() RedemptionRequest {
 	return RedemptionRequest{Code: "code", RequestID: "request-1"}
 }
 
+func TestRedeemKeepsIdempotencyKeyAcrossCallerRetries(t *testing.T) {
+	const body = `{"status":"success","flow_no":"same-flow","credits":1,"open_id":"fixture"}`
+	calls := 0
+	c := &Client{HTTP: &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		calls++
+		raw, _ := io.ReadAll(r.Body)
+		if !strings.Contains(string(raw), `"request_id":"request-1"`) {
+			t.Error("caller idempotency key changed")
+		}
+		return response(200, body, nil), nil
+	})}}
+	for i := 0; i < 2; i++ {
+		if _, err := c.Redeem(context.Background(), "fixture", validSingle()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if calls != 2 {
+		t.Fatalf("calls=%d; no implicit retry expected", calls)
+	}
+}
+
 func validDual() RedemptionRequest {
 	return RedemptionRequest{GiftKey: "giftkey", GiftCode: "giftcode", RequestID: "request-2"}
 }

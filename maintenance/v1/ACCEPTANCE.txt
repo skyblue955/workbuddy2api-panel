@@ -1,0 +1,21 @@
+V1 acceptance matrix — mock/local and real account evidence are separate
+Baseline: dab77f1 (phase1 fully preserved).
+PASS mock/local: legacy core regression via scripts/verify.sh (Go vet/race/all-package build plus JS and shell checks).
+PASS mock/local: valid chat/tool/multimodal extensions retained; malformed/trailing/null/missing fields rejected before upstream. Empty messages retained for backward compatibility;64MiB limit returns413.
+PASS mock/local: authenticated protocol discovery; unsupported Responses/full Messages explicitly501, never a fabricated successful translation.
+PASS mock/local: original429/hard credit cooling, Retry-After, refresh expiry/session-dead, idle/header timeouts and abnormal response cases in existing server/upstream suites.
+PASS mock/local: new OAuth timeout/malformed token/blank state/mismatch/expiry/missing scope; private token/session files and outputs do not disclose credentials.
+PASS mock/local: activity eligibility known/unknown/error distinguished, already-claimed/disabled/expired rules; registry does not imply rewards for any account.
+PASS mock/local: redemption is dry-run by default; explicit execute only; caller request_id unchanged across caller retries; no implicit retry/redirect; malformed responses/HTTP failures stay failures. No local crash-safe redemption journal; upstream idempotency is NOT live-verified.
+PASS local build: server and openapi cross-compiled for linux amd64/arm64, darwin amd64/arm64, windows amd64. See CROSS_BUILD record in VERIFICATION.
+PASS container: Docker clean build; ephemeral --network none smoke validates CLI activities/dryrun, secure first-config creation, authenticated capability query and unauthorized refusal. No host port, real credentials or external account calls used.
+PASS source scan: govulncheck v1.9.0 final output "No vulnerabilities found." Network EOF on first scan resolved on retry; this is not an OS-image vulnerability scan.
+PASS independent review: separate read-only agent review; remediation for blank state, token metadata, partial-success handling and one-use .used guard; parent inspected code and ran full checks.
+PASS rollback: isolated patch reverse and baseline tests; actual Git revert evidence recorded after commit.
+
+NOT COMPLETE: user app registration/scope approval and OAuth user grant; live account API health/current model compatibility; actual check-in/reward eligibility/credit receipt; live duplicate-claim/expired-activity behavior. No real account test authorized or performed.
+NOT IMPLEMENTED: raw Responses/Anthropic translation, private policy bypass, new synthetic-task/identity telemetry, automatic token refresh daemon, official OAuth panel credential UX, local durable redemption ledger. These are not silently presented as restored features.
+PRESERVED BUT UNVERIFIED LIVE: original sign-in/tasks/travel/compensation/UI. Source-observed private endpoint behavior is not proof of official third-party support. No new active promotional entitlement established; referral rules are informational, enterprise doublecredits is historical/expired.
+
+User intervention needed for live gates only:
+Open https://open.workbuddy.cn/ and register/enable a third-party credits app with user.credit.exchange and exact callback URI (see DEPLOY.txt). Put secret locally via password manager/environment, never chat. Complete official browser OAuth using CLI authorize/exchange and retain token under a private data directory. Report only completion and private file path, not file contents. Separately authorize read-only real account API/status validation. Any concrete redemption, check-in, adoption or agreement action must list account/action/expected effect and receive explicit approval first.

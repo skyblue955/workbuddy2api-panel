@@ -283,8 +283,8 @@ func TestMessagesRouteDoesNotShadowV1Messages(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader([]byte(`{}`)))
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
-	if rec.Code != http.StatusNotFound {
-		t.Errorf("POST /v1/messages code=%d want 404（该路径留给模型对话）", rec.Code)
+	if rec.Code != http.StatusNotImplemented || !strings.Contains(rec.Body.String(), "unsupported_protocol") {
+		t.Errorf("POST /v1/messages code=%d want explicit 501 unsupported_protocol, never a search response", rec.Code)
 	}
 }
 

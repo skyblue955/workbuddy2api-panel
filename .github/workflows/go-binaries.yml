@@ -68,7 +68,9 @@ jobs:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: 0
-        run: go build -ldflags "-s -w" -o "wb2api${{ matrix.goos == 'windows' && '.exe' || '' }}" ./cmd/server
+        run: |
+          go build -ldflags "-s -w" -o "wb2api${{ matrix.goos == 'windows' && '.exe' || '' }}" ./cmd/server
+          go build -ldflags "-s -w" -o "wbopenapi${{ matrix.goos == 'windows' && '.exe' || '' }}" ./cmd/openapi
 
       # 版本串断言：二进制必须含源码 appVersion（防交叉编译矩阵里编错树/漏 ldflags）
       - name: 断言二进制版本串
@@ -87,11 +89,11 @@ jobs:
           case "${{ matrix.goos }}" in
             windows)
               NAME="wb2api-panel-v${V}-windows-amd64.zip"
-              zip -q "$NAME" wb2api.exe config.example.json README.md
+              zip -q "$NAME" wb2api.exe wbopenapi.exe config.example.json README.md
               ;;
             *)
               NAME="wb2api-panel-v${V}-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz"
-              tar czf "$NAME" wb2api config.example.json README.md
+              tar czf "$NAME" wb2api wbopenapi config.example.json README.md
               ;;
           esac
           echo "name=$NAME" >> "$GITHUB_ENV"

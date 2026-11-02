@@ -1,4 +1,5 @@
 Maintenance milestone state
+Continuation v1: see maintenance/v1/TASKS.txt, DEPLOY.txt and VERIFICATION.txt. Version1 implementation work proceeds on maintenance/v1-compat-rewards; phase1 is preserved, not the overall completion boundary.
 M1 audit + acceptance harness: delivered in this change. Evidence: phase1-audit.txt and VERIFICATION.txt.
 M2 first defensive fixes: delivered (secure startup, secret redaction, Retry-After preservation, deterministic model test).
 M3 official credit connector: library and mock tests delivered; UI/OAuth integration and live validation NOT completed.

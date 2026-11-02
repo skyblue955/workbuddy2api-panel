@@ -1,0 +1,85 @@
+#0 building with "orbstack" instance using docker driver
+
+#1 [internal] load build definition from Dockerfile
+#1 transferring dockerfile: 2.05kB done
+#1 DONE 0.1s
+
+#2 resolve image config for docker-image://docker.io/docker/dockerfile:1
+#2 DONE 1.8s
+
+#3 docker-image://docker.io/docker/dockerfile:1@sha256:4edf897a3ffa55b89f906fc8cc78afdb3f1834cc9c7083565e611a8a7d5fe99e
+#3 CACHED
+
+#4 [internal] load metadata for docker.io/library/golang:1.27.3-alpine
+#4 DONE 1.1s
+
+#5 [internal] load metadata for docker.io/library/alpine:3.20
+#5 DONE 1.5s
+
+#6 [internal] load .dockerignore
+#6 transferring context: 408B done
+#6 DONE 0.0s
+
+#7 [stage-1  1/12] FROM docker.io/library/alpine:3.20@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc
+#7 DONE 0.0s
+
+#8 [build 1/6] FROM docker.io/library/golang:1.27.3-alpine@sha256:d200d2dd76b03a99b52651fd1325aff7dcd35422c35c01bac56571b0507f3deb
+#8 DONE 0.0s
+
+#9 [internal] load build context
+#9 transferring context: 44.69kB 0.0s done
+#9 DONE 0.3s
+
+#10 [build 2/6] WORKDIR /src
+#10 CACHED
+
+#11 [build 3/6] COPY go.mod go.sum ./
+#11 CACHED
+
+#12 [build 4/6] RUN go env -w GOPROXY=https://goproxy.cn,direct &&     go env GOPROXY &&     go mod download
+#12 CACHED
+
+#13 [build 5/6] COPY . .
+#13 DONE 0.6s
+
+#14 [build 6/6] RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/wb2api ./cmd/server  && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/signin_bin ./cmd/signin  && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/login ./cmd/login  && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/credit ./cmd/credit  && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/openapi ./cmd/openapi
+#14 DONE 16.7s
+
+#15 [stage-1  2/12] RUN apk add --no-cache wget ca-certificates tzdata python3 bash  && adduser -D -u 10001 app  && mkdir -p /app/auths /app/data  && chown -R app:app /app
+#15 CACHED
+
+#16 [stage-1  3/12] WORKDIR /app
+#16 CACHED
+
+#17 [stage-1  4/12] COPY --from=build /out/wb2api /app/wb2api
+#17 CACHED
+
+#18 [stage-1  5/12] COPY --from=build /out/signin_bin /app/signin_bin
+#18 CACHED
+
+#19 [stage-1  6/12] COPY --from=build /out/login /app/login
+#19 CACHED
+
+#20 [stage-1  7/12] COPY --from=build /out/credit /app/credit
+#20 CACHED
+
+#21 [stage-1  8/12] COPY --from=build /out/openapi /app/openapi
+#21 DONE 0.0s
+
+#22 [stage-1  9/12] COPY login.sh signin.sh credit.sh /app/
+#22 DONE 0.1s
+
+#23 [stage-1 10/12] COPY scripts/probe_active.py /app/scripts/probe_active.py
+#23 DONE 0.1s
+
+#24 [stage-1 11/12] RUN sed -i 's/\r$//' /app/login.sh /app/signin.sh /app/credit.sh && chmod 755 /app/login.sh /app/signin.sh /app/credit.sh
+#24 DONE 0.2s
+
+#25 [stage-1 12/12] COPY config.example.json /app/config.example.json
+#25 DONE 0.1s
+
+#26 exporting to image
+#26 exporting layers 0.1s done
+#26 writing image sha256:d5967e81ac440aa4877acc9d609019b11fad9e3e561a5a25f0031884894c6955 done
+#26 naming to docker.io/library/workbuddy-maintenance:v1-check done
+#26 DONE 0.1s

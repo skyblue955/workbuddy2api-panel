@@ -1,0 +1,18 @@
+Version1 queue — branch maintenance/v1-compat-rewards; baseline dab77f1.
+User-approved scope: API compatibility/recovery and legitimate credit activities. No production deploy, publication, paid operations or live account mutation authorized.
+
+T1 DONE: phase1 status/history evidence read and preserved; no repeated phase1 implementation.
+T2 IMPLEMENTED: fail-fast JSON/model/messages shape, 64MiB inbound limit, explicit protocol capability response and501 for unimplemented protocols. Acceptance: no upstream call on invalid/oversized requests; unknown tools/multimodal fields preserved; old core regressions.
+T3 IMPLEMENTED: official OAuth state, fixed authorization/token endpoints, bounded timeout/no redirects, expiry and scope validation, authorize/exchange CLI using0600 separate state/token documents. Acceptance: invalid state/expired session/no scope deny before mutation; no secret output; body close and malformed-response tests.
+T4 IMPLEMENTED: explicit dry-run-first redemption CLI with stable caller request_id. Acceptance: no live request without execute, no ID rotation/retry, known token expiry/scope validated. Local durable redemption reconciliation ledger remains NOT implemented.
+T5 IMPLEMENTED: source-backed activities/status API; actual eligibility unknown, expired and rules-only entries distinguishable. Acceptance: no assumed reward, expiry boundary/duplicates/eligibility errors tested; original legacy features not removed.
+T6 DONE_LOCAL: full regression/race/vet/build, source vulnerability scan, five-platform cross builds, clean Docker build/network-isolated smoke, independent review and fixes. Hosted CI is separate.
+T7 IN_PROGRESS: documentation and patch rollback passed; commits/push/PR and actual Git rollback rehearsal are recorded after commit.
+T8 BLOCKED_ON_USER: official registered app/user grant, read-only account validation authorization, separately approved stateful reward test. No real-account or credit recovery claim until evidence exists.
+
+Design decisions
+- Preserve messages:[] for legacy routing compatibility; reject missing/null/scalar messages. Do not declare complete OpenAI/Responses/Anthropic support.
+- Bound inbound body64MiB to prevent unbounded allocation; supported extension fields remain untouched. Large-body behavior is a documented change.
+- OAuth credentials are not legacy WorkBuddy client credentials; no automatic account transfer.
+- Official limitations remain observable; no fabricated task progress, identity spoofing or bypass changes.
+- Activity catalog verification date is a source-audit date, not live account eligibility. Referral rules are informational only; no new free-credit entitlement invented.

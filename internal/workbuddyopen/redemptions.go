@@ -46,6 +46,9 @@ type RedemptionResponse struct {
 	OpenID  string `json:"open_id"`
 }
 
+// Validate checks a redemption request without making a network call.
+func (in RedemptionRequest) Validate() error { return validateRequest(in) }
+
 // Redeem submits one redemption request. It performs no automatic retries.
 func (c *Client) Redeem(ctx context.Context, accessToken string, input RedemptionRequest) (*RedemptionResponse, error) {
 	if strings.TrimSpace(accessToken) == "" {
@@ -129,11 +132,17 @@ func validateRequest(in RedemptionRequest) error {
 	if single && !validLen(in.Code, 1, 64) {
 		return errors.New("redemption: code must be 1-64 characters")
 	}
+	if single && strings.TrimSpace(in.Code) == "" {
+		return errors.New("redemption: code must not be blank")
+	}
 	if dual && (!validLen(in.GiftKey, 6, 64) || !validLen(in.GiftCode, 8, 64)) {
 		return errors.New("redemption: gift_key/gift_code length is invalid")
 	}
 	if dual && (in.GiftKey == "" || in.GiftCode == "") {
 		return errors.New("redemption: gift_key and gift_code are required together")
+	}
+	if dual && (strings.TrimSpace(in.GiftKey) == "" || strings.TrimSpace(in.GiftCode) == "") {
+		return errors.New("redemption: gift_key and gift_code must not be blank")
 	}
 	return nil
 }
