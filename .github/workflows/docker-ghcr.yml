@@ -34,7 +34,21 @@ env:
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.3'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: bash scripts/verify.sh
+      - run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
+
   build-and-publish:
+    needs: test
     runs-on: ubuntu-latest
     permissions:
       contents: read

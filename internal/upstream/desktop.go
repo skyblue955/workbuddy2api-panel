@@ -456,12 +456,7 @@ func (c *Client) DesktopChatWithExpert(a *auth.Auth, expertID string) (conversat
 	if expertID != "" {
 		h.Set("X-Expert-Id", expertID)
 	}
-	if os.Getenv("WB2A_DEBUG_CHAT") != "" {
-		fmt.Printf("[dbg] URL=%s\n", req.URL)
-		for k := range req.Header {
-			fmt.Printf("[dbg] %s: %s\n", k, req.Header.Get(k))
-		}
-	}
+	// Never dump request headers: Authorization contains a reusable account token.
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
 		return "", "", err
@@ -482,13 +477,7 @@ func (c *Client) DesktopChatWithExpert(a *auth.Auth, expertID string) (conversat
 		n, rerr := resp.Body.Read(tmp)
 		if n > 0 {
 			buf = append(buf, tmp[:n]...)
-			if os.Getenv("WB2A_DEBUG_CHAT") != "" {
-				dbg := string(tmp[:n])
-				if len(dbg) > 120 {
-					dbg = dbg[:120]
-				}
-				fmt.Printf("[dbg-rd %d] %q\n", n, dbg)
-			}
+			// Response chunks may contain personal content or echoed credentials.
 			// 从上次搜索位置继续：SSE 里 `"id":"` 可能先出现在消息 id 等字段，
 			// 若不推进偏移，首个不匹配的 id 会让循环永远重复命中同一位置，
 			// 读满 1MB 后误报"未找到 requestId"。

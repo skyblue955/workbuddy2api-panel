@@ -1,0 +1,927 @@
+diff --git a/.github/workflows/docker-ghcr.yml b/.github/workflows/docker-ghcr.yml
+index 80b454e..0bf6021 100644
+--- a/.github/workflows/docker-ghcr.yml
++++ b/.github/workflows/docker-ghcr.yml
+@@ -34,7 +34,21 @@ env:
+   IMAGE_NAME: ${{ github.repository }}
+ 
+ jobs:
++  test:
++    runs-on: ubuntu-latest
++    steps:
++      - uses: actions/checkout@v4
++      - uses: actions/setup-go@v5
++        with:
++          go-version: '1.27.3'
++      - uses: actions/setup-node@v4
++        with:
++          node-version: '22'
++      - run: bash scripts/verify.sh
++      - run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
++
+   build-and-publish:
++    needs: test
+     runs-on: ubuntu-latest
+     permissions:
+       contents: read
+diff --git a/.github/workflows/go-binaries.yml b/.github/workflows/go-binaries.yml
+index faee088..953a6da 100644
+--- a/.github/workflows/go-binaries.yml
++++ b/.github/workflows/go-binaries.yml
+@@ -16,6 +16,7 @@ on:
+       - "cmd/**"
+       - "internal/**"
+       - "config.example.json"
++      - "scripts/verify.sh"
+       - ".github/workflows/go-binaries.yml"
+   workflow_dispatch:
+ 
+@@ -33,9 +34,12 @@ jobs:
+       - uses: actions/checkout@v4
+       - uses: actions/setup-go@v5
+         with:
+-          go-version-file: go.mod
+-      # ubuntu runner 自带 node → panel 包的 JS 运行时冒烟测试（TestAppJSTopLevelSmoke）会真实执行
+-      - run: go test ./...
++          go-version: '1.27.3'
++      - uses: actions/setup-node@v4
++        with:
++          node-version: '22'
++      - run: bash scripts/verify.sh
++      - run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
+ 
+   build:
+     needs: test
+@@ -53,7 +57,7 @@ jobs:
+       - uses: actions/checkout@v4
+       - uses: actions/setup-go@v5
+         with:
+-          go-version-file: go.mod
++          go-version: '1.27.3'
+ 
+       - name: 取源码版本号
+         id: ver
+diff --git a/.gitignore b/.gitignore
+index 60a1f39..b15211d 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -34,6 +34,7 @@ docs/
+ # 设计/计划文档（但 README.md 必须进版本库）
+ *.md
+ !README.md
++!AGENTS.md
+ 
+ # Windows binaries
+ /wb2api.exe
+diff --git a/Dockerfile b/Dockerfile
+index a7b4617..ed01552 100644
+--- a/Dockerfile
++++ b/Dockerfile
+@@ -1,7 +1,7 @@
+ # syntax=docker/dockerfile:1
+-FROM golang:1.23-alpine AS build
++FROM golang:1.27.3-alpine AS build
+ WORKDIR /src
+-COPY go.mod ./
++COPY go.mod go.sum ./
+ # 防止因为直接使用官方源导致下载失败
+ RUN go env -w GOPROXY=https://goproxy.cn,direct && \
+     go env GOPROXY && \
+diff --git a/cmd/server/main.go b/cmd/server/main.go
+index c90f5ec..7db71b1 100644
+--- a/cmd/server/main.go
++++ b/cmd/server/main.go
+@@ -8,7 +8,6 @@ import (
+ 	"flag"
+ 	"fmt"
+ 	"io"
+-	"io/fs"
+ 	"log"
+ 	"net/http"
+ 	"os"
+@@ -52,25 +51,9 @@ func main() {
+ 	cfgPath := flag.String("config", "config.json", "配置文件路径（默认当前目录 config.json；不存在时自动生成推荐配置）")
+ 	flag.Parse()
+ 
+-	cfg, err := Load(*cfgPath)
++	cfg, err := loadStartupConfig(*cfgPath)
+ 	if err != nil {
+-		// errors.Is 才能看穿 Load 里 fmt.Errorf("%w") 的包装；os.IsNotExist 不行。
+-		if errors.Is(err, fs.ErrNotExist) {
+-			// 首次运行：目录下没有配置 → 自动落一份推荐配置（含随机 api_key）再加载。
+-			// 双击 exe / 裸跑 docker 即开，无需先手工复制样例。
+-			if key, werr := WriteDefault(*cfgPath); werr == nil {
+-				log.Printf("config %s 不存在，已生成推荐配置（api_key=%s，记录在该文件里，可自行修改）", *cfgPath, key)
+-				cfg, err = Load(*cfgPath)
+-			}
+-			if err != nil {
+-				// 生成失败（目录只读等）：退回纯默认 + env（旧行为兜底），不阻塞启动。
+-				log.Printf("config %s not found (auto-generate failed), using defaults+env: %v", *cfgPath, err)
+-				cfg, err = Load("")
+-			}
+-		}
+-		if err != nil {
+-			log.Fatalf("load config: %v", err)
+-		}
++		log.Fatalf("load config: %v", err)
+ 	}
+ 
+ 	auths, err := auth.LoadDir(cfg.AuthDir)
+diff --git a/go.mod b/go.mod
+index df58145..3b6f0af 100644
+--- a/go.mod
++++ b/go.mod
+@@ -2,6 +2,8 @@ module github.com/linguo2625469/workbuddy2api-panel
+ 
+ go 1.22.5
+ 
++toolchain go1.27.3
++
+ require (
+ 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
+ 	github.com/dgryski/go-rendezvous v0.0.0-20200823014737-9f7001d12a5f // indirect
+diff --git a/internal/server/handler_test.go b/internal/server/handler_test.go
+index 8b6bc7c..4eba3bb 100644
+--- a/internal/server/handler_test.go
++++ b/internal/server/handler_test.go
+@@ -971,7 +971,26 @@ func TestChatModelForbiddenByAccountTypeReturns400(t *testing.T) {
+ }
+ 
+ func TestModelsEndpoint(t *testing.T) {
+-	h := NewHandler(Config{Pool: testPoolWith(&auth.Auth{UID: "u1", AccessToken: "at", ExpiresAt: 9999999999}), Upstream: upstream.New()})
++	// Keep this endpoint test deterministic: /v1/models must not contact the
++	// live CN service just to discover the model list.  The existing model
++	// failure tests below cover the empty/failed fetch response shape.
++	dynamicModelsCache.Lock()
++	dynamicModelsCache.ids = nil
++	dynamicModelsCache.fetched = time.Time{}
++	dynamicModelsCache.lastFail = time.Time{}
++	dynamicModelsCache.Unlock()
++	t.Cleanup(func() {
++		dynamicModelsCache.Lock()
++		dynamicModelsCache.ids = nil
++		dynamicModelsCache.fetched = time.Time{}
++		dynamicModelsCache.lastFail = time.Time{}
++		dynamicModelsCache.Unlock()
++	})
++	const modelsFixture = `{"code":0,"data":{"models":[{"id":"glm-5.2","maxInputTokens":131072,"maxOutputTokens":32768},{"id":"deepseek-v3","maxInputTokens":131072,"maxOutputTokens":16384},{"id":"qwen-3","maxInputTokens":65536,"maxOutputTokens":8192},{"id":"gpt-5","maxInputTokens":131072,"maxOutputTokens":16384},{"id":"kimi-k2","maxInputTokens":131072,"maxOutputTokens":16384}],"agents":[{"name":"cli","models":["glm-5.2","deepseek-v3","qwen-3","gpt-5","kimi-k2"]}]}}`
++	up := newFakeUpstream(t, func(authz string) (int, string, bool) {
++		return http.StatusOK, modelsFixture, false
++	})
++	h := NewHandler(Config{Pool: testPoolWith(&auth.Auth{UID: "u1", AccessToken: "at", ExpiresAt: 9999999999}), Upstream: up})
+ 	req := httptest.NewRequest("GET", "/v1/models", nil)
+ 	rec := httptest.NewRecorder()
+ 	h.ServeHTTP(rec, req)
+@@ -979,18 +998,30 @@ func TestModelsEndpoint(t *testing.T) {
+ 		t.Fatalf("code=%d", rec.Code)
+ 	}
+ 	var resp map[string]any
+-	json.Unmarshal(rec.Body.Bytes(), &resp)
++	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
++		t.Fatalf("decode response: %v body=%s", err, rec.Body)
++	}
+ 	if resp["object"] != "list" {
+ 		t.Errorf("object=%v", resp["object"])
+ 	}
+-	data := resp["data"].([]any)
+-	if len(data) < 5 {
+-		t.Errorf("models count=%d", len(data))
++	data, ok := resp["data"].([]any)
++	if !ok {
++		t.Fatalf("data has unexpected type: %T", resp["data"])
++	}
++	if len(data) != 5 {
++		t.Errorf("models count=%d want 5 fixture models", len(data))
+ 	}
+ 	found := false
+ 	for _, m := range data {
+-		if m.(map[string]any)["id"] == "cn:glm-5.2" {
++		mm, ok := m.(map[string]any)
++		if !ok {
++			t.Fatalf("model has unexpected type: %T", m)
++		}
++		if mm["id"] == "cn:glm-5.2" {
+ 			found = true
++			if mm["context_length"] != float64(131072) || mm["max_output_tokens"] != float64(32768) {
++				t.Errorf("glm-5.2 schema=%v", mm)
++			}
+ 		}
+ 	}
+ 	if !found {
+diff --git a/internal/upstream/desktop.go b/internal/upstream/desktop.go
+index 0271b4b..893c262 100644
+--- a/internal/upstream/desktop.go
++++ b/internal/upstream/desktop.go
+@@ -456,12 +456,7 @@ func (c *Client) DesktopChatWithExpert(a *auth.Auth, expertID string) (conversat
+ 	if expertID != "" {
+ 		h.Set("X-Expert-Id", expertID)
+ 	}
+-	if os.Getenv("WB2A_DEBUG_CHAT") != "" {
+-		fmt.Printf("[dbg] URL=%s\n", req.URL)
+-		for k := range req.Header {
+-			fmt.Printf("[dbg] %s: %s\n", k, req.Header.Get(k))
+-		}
+-	}
++	// Never dump request headers: Authorization contains a reusable account token.
+ 	resp, err := c.HTTP.Do(req)
+ 	if err != nil {
+ 		return "", "", err
+@@ -482,13 +477,7 @@ func (c *Client) DesktopChatWithExpert(a *auth.Auth, expertID string) (conversat
+ 		n, rerr := resp.Body.Read(tmp)
+ 		if n > 0 {
+ 			buf = append(buf, tmp[:n]...)
+-			if os.Getenv("WB2A_DEBUG_CHAT") != "" {
+-				dbg := string(tmp[:n])
+-				if len(dbg) > 120 {
+-					dbg = dbg[:120]
+-				}
+-				fmt.Printf("[dbg-rd %d] %q\n", n, dbg)
+-			}
++			// Response chunks may contain personal content or echoed credentials.
+ 			// 从上次搜索位置继续：SSE 里 `"id":"` 可能先出现在消息 id 等字段，
+ 			// 若不推进偏移，首个不匹配的 id 会让循环永远重复命中同一位置，
+ 			// 读满 1MB 后误报"未找到 requestId"。
+diff --git a/internal/upstream/search.go b/internal/upstream/search.go
+index 02857ef..c55b8b0 100644
+--- a/internal/upstream/search.go
++++ b/internal/upstream/search.go
+@@ -169,7 +169,11 @@ func (c *Client) doSearch(req *http.Request) (*SearchOutcome, error) {
+ 	}
+ 	if resp.StatusCode >= 400 {
+ 		kind := Classify(resp.StatusCode, string(raw))
+-		return nil, &Error{Kind: kind, Status: resp.StatusCode, Msg: truncate(string(raw), 200)}
++		ue := &Error{Kind: kind, Status: resp.StatusCode, Msg: truncate(string(raw), 200)}
++		if d, ok := ParseRetryAfter(resp.Header); ok {
++			ue.RetryAfter = d
++		}
++		return nil, ue
+ 	}
+ 	// 成功响应没有 data 包裹：code/msg 与结果字段同级，用嵌入结构一次性解出。
+ 	var parsed struct {
+@@ -185,8 +189,12 @@ func (c *Client) doSearch(req *http.Request) (*SearchOutcome, error) {
+ 		if kind == ErrNone {
+ 			kind = ErrClient
+ 		}
+-		return nil, &Error{Kind: kind, Status: resp.StatusCode,
++		ue := &Error{Kind: kind, Status: resp.StatusCode,
+ 			Msg: fmt.Sprintf("code=%d msg=%s", parsed.Code, truncate(parsed.Msg, 160))}
++		if d, ok := ParseRetryAfter(resp.Header); ok {
++			ue.RetryAfter = d
++		}
++		return nil, ue
+ 	}
+ 	out := parsed.SearchOutcome
+ 	// results 恒输出为数组（nil 会让 JSON 变成 null，调用方还要判空）。
+diff --git a/internal/upstream/search_test.go b/internal/upstream/search_test.go
+index 7c2d202..08aee7d 100644
+--- a/internal/upstream/search_test.go
++++ b/internal/upstream/search_test.go
+@@ -9,6 +9,7 @@ import (
+ 	"net/http/httptest"
+ 	"strings"
+ 	"testing"
++	"time"
+ 
+ 	"github.com/linguo2625469/workbuddy2api-panel/internal/auth"
+ )
+@@ -250,3 +251,37 @@ func TestSearchHTTPErrorClassified(t *testing.T) {
+ 		}
+ 	}
+ }
++
++func TestSearchErrorsPreserveRetryAfter(t *testing.T) {
++	tests := []struct {
++		name   string
++		status int
++		header string
++		body   string
++		want   time.Duration
++	}{
++		{name: "http seconds", status: http.StatusTooManyRequests, header: "7", body: `{"code":429,"msg":"rate limit"}`, want: 7 * time.Second},
++		{name: "business seconds", status: http.StatusOK, header: "11", body: `{"code":15003,"msg":"unsupported search type"}`, want: 11 * time.Second},
++		{name: "invalid header", status: http.StatusTooManyRequests, header: "not-a-duration", body: `{"code":429,"msg":"rate limit"}`},
++		{name: "absent header", status: http.StatusTooManyRequests, body: `{"code":429,"msg":"rate limit"}`},
++	}
++	for _, tc := range tests {
++		t.Run(tc.name, func(t *testing.T) {
++			c := searchTestClient(t, func(w http.ResponseWriter, r *http.Request) {
++				if tc.header != "" {
++					w.Header().Set("Retry-After", tc.header)
++				}
++				w.WriteHeader(tc.status)
++				_, _ = w.Write([]byte(tc.body))
++			})
++			_, err := c.Search(context.Background(), &auth.Auth{AccessToken: "at", UID: "u"}, "xy", 5, ChatMeta{})
++			var ue *Error
++			if !errors.As(err, &ue) {
++				t.Fatalf("err=%v want *Error", err)
++			}
++			if ue.RetryAfter != tc.want {
++				t.Errorf("RetryAfter=%v want %v", ue.RetryAfter, tc.want)
++			}
++		})
++	}
++}
+diff --git a/AGENTS.md b/AGENTS.md
+new file mode 100644
+index 0000000..af25d4e
+--- /dev/null
++++ b/AGENTS.md
+@@ -0,0 +1,11 @@
++# Project maintenance workflow
++
++- Coordinator owns requirements, scope, architecture decisions, integration, acceptance, and final reporting.
++- Delegate bounded implementation to `implementer`; use `repo_explorer`, `test_engineer`, `reviewer`, `security_reviewer`, and `docs_release` for their configured roles. Preserve project-local model settings; never modify global Codex configuration.
++- Delegate read-only investigations in parallel. Assign explicit file ownership before writes; agents must not revert other agents' work. Coordinate overlapping changes serially.
++- Save milestones and outstanding work in `maintenance/ROADMAP.txt`. Keep routine progress in files; notify the user only for delivery, terminal failure, or a decision that actually requires their input.
++- Before acceptance run `bash scripts/verify.sh`, inspect the diff, and obtain independent review. Report actual commands and exit codes, not unexecuted expectations.
++- Keep fixes in small reversible Git commits. Do not push main, create release tags, or publish images automatically; use a maintenance branch and an integration PR.
++- New upstream integrations require a current official contract and an explicit opt-in path. Keep Open API OAuth tokens separate from legacy client credentials. Never invent account progress, bypass enforcement, or represent legacy/private endpoints as officially supported.
++- No live account or reward mutation in automated tests. Use deterministic fixtures; never commit/log tokens, redemption codes, real account records, or personal request payloads.
++- Use `uv` for Python tooling/execution, `fnm` for Node environments, and `jenv` for Java environments when needed.
+diff --git a/cmd/server/startup.go b/cmd/server/startup.go
+new file mode 100644
+index 0000000..b2f6b8d
+--- /dev/null
++++ b/cmd/server/startup.go
+@@ -0,0 +1,24 @@
++package main
++
++import (
++	"errors"
++	"io/fs"
++)
++
++// loadStartupConfig loads the configured file, creating the secure default only
++// when the path is missing. A failure to create or reload that file is fatal:
++// falling back to Load("") could otherwise start an unauthenticated listener.
++// An empty path intentionally retains Load's env-only semantics.
++func loadStartupConfig(path string) (*Config, error) {
++	cfg, err := Load(path)
++	if err == nil {
++		return cfg, nil
++	}
++	if path == "" || !errors.Is(err, fs.ErrNotExist) {
++		return nil, err
++	}
++	if _, writeErr := WriteDefault(path); writeErr != nil {
++		return nil, writeErr
++	}
++	return Load(path)
++}
+diff --git a/cmd/server/startup_test.go b/cmd/server/startup_test.go
+new file mode 100644
+index 0000000..98a7f8a
+--- /dev/null
++++ b/cmd/server/startup_test.go
+@@ -0,0 +1,81 @@
++package main
++
++import (
++	"os"
++	"path/filepath"
++	"strings"
++	"testing"
++)
++
++func TestLoadStartupConfigCreatesMissingFile(t *testing.T) {
++	t.Setenv("WB2A_API_KEY", "")
++	path := filepath.Join(t.TempDir(), "config.json")
++	cfg, err := loadStartupConfig(path)
++	if err != nil {
++		t.Fatalf("loadStartupConfig: %v", err)
++	}
++	if cfg.APIKey == "" {
++		t.Fatal("generated config must have an api key")
++	}
++	if _, err := os.Stat(path); err != nil {
++		t.Fatalf("generated config missing: %v", err)
++	}
++}
++
++func TestLoadStartupConfigFailsClosedWhenDefaultWriteFails(t *testing.T) {
++	parent := filepath.Join(t.TempDir(), "parent-file")
++	if err := os.WriteFile(parent, []byte("not a directory"), 0o600); err != nil {
++		t.Fatal(err)
++	}
++	_, err := loadStartupConfig(filepath.Join(parent, "config.json"))
++	if err == nil {
++		t.Fatal("expected default-write failure")
++	}
++}
++
++func TestLoadStartupConfigPreservesExistingAndEnvOverride(t *testing.T) {
++	path := filepath.Join(t.TempDir(), "config.json")
++	original := `{"api_key":"file-key","listen":":9001"}`
++	if err := os.WriteFile(path, []byte(original), 0o600); err != nil {
++		t.Fatal(err)
++	}
++	t.Setenv("WB2A_API_KEY", "env-key")
++	cfg, err := loadStartupConfig(path)
++	if err != nil {
++		t.Fatalf("loadStartupConfig: %v", err)
++	}
++	if cfg.APIKey != "env-key" || cfg.Listen != ":9001" {
++		t.Fatalf("cfg=%+v", cfg)
++	}
++	raw, err := os.ReadFile(path)
++	if err != nil || string(raw) != original {
++		t.Fatalf("existing config changed: %q (%v)", raw, err)
++	}
++}
++
++func TestLoadStartupConfigMalformedFileIsNotOverwritten(t *testing.T) {
++	path := filepath.Join(t.TempDir(), "config.json")
++	original := "{malformed"
++	if err := os.WriteFile(path, []byte(original), 0o600); err != nil {
++		t.Fatal(err)
++	}
++	_, err := loadStartupConfig(path)
++	if err == nil || !strings.Contains(err.Error(), "parse config") {
++		t.Fatalf("err=%v want parse error", err)
++	}
++	raw, readErr := os.ReadFile(path)
++	if readErr != nil || string(raw) != original {
++		t.Fatalf("malformed config changed: %q (%v)", raw, readErr)
++	}
++}
++
++func TestLoadStartupConfigEmptyPathUsesEnvironment(t *testing.T) {
++	t.Setenv("WB2A_API_KEY", "env-only-key")
++	cfg, err := loadStartupConfig("")
++	if err != nil {
++		t.Fatalf("loadStartupConfig: %v", err)
++	}
++	if cfg.APIKey != "env-only-key" {
++		t.Fatalf("api_key=%q want env-only-key", cfg.APIKey)
++	}
++}
+diff --git a/internal/upstream/desktop_logging_test.go b/internal/upstream/desktop_logging_test.go
+new file mode 100644
+index 0000000..b97b3d5
+--- /dev/null
++++ b/internal/upstream/desktop_logging_test.go
+@@ -0,0 +1,43 @@
++package upstream
++
++import (
++	"io"
++	"net/http"
++	"os"
++	"strings"
++	"testing"
++
++	"github.com/linguo2625469/workbuddy2api-panel/internal/auth"
++)
++
++func TestDesktopDebugDoesNotLogCredentials(t *testing.T) {
++	t.Setenv("WB2A_DEBUG_CHAT", "1")
++	const secret = "dummy-upstream-access-token"
++	c := &Client{ChatBaseCN: "https://mock.invalid", HTTP: &http.Client{Transport: rtFunc(func(r *http.Request) (*http.Response, error) {
++		if r.Header.Get("Authorization") != "Bearer "+secret {
++			t.Error("outbound authentication was lost")
++		}
++		return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`data: {"id":"cmb-0123456789abcdef0123456789abcdef","content":"` + secret + `"}`))}, nil
++	})}}
++	r, w, err := os.Pipe()
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer r.Close()
++	original := os.Stdout
++	os.Stdout = w
++	defer func() { os.Stdout = original; w.Close() }()
++	_, _, callErr := c.DesktopChatWithExpert(&auth.Auth{UID: "dummy-user", AccessToken: secret}, "")
++	w.Close()
++	os.Stdout = original
++	out, readErr := io.ReadAll(r)
++	if readErr != nil {
++		t.Fatal(readErr)
++	}
++	if callErr != nil {
++		t.Fatal(callErr)
++	}
++	if strings.Contains(string(out), secret) || strings.Contains(string(out), "Authorization") {
++		t.Fatalf("debug output exposes credentials")
++	}
++}
+diff --git a/internal/workbuddyopen/redemptions.go b/internal/workbuddyopen/redemptions.go
+new file mode 100644
+index 0000000..a321f36
+--- /dev/null
++++ b/internal/workbuddyopen/redemptions.go
+@@ -0,0 +1,144 @@
++// Package workbuddyopen contains opt-in connectors for the official WorkBuddy Open API.
++package workbuddyopen
++
++import (
++	"bytes"
++	"context"
++	"encoding/json"
++	"errors"
++	"fmt"
++	"io"
++	"net/http"
++	"strings"
++	"time"
++	"unicode/utf8"
++)
++
++const (
++	RedemptionsURL  = "https://www.workbuddy.cn/openapi/v2/redemptions"
++	maxResponseBody = 1 << 20
++	defaultTimeout  = 30 * time.Second
++)
++
++// Client calls the official redemption endpoint. The access token is supplied
++// to Redeem and is never retained by the client.
++type Client struct {
++	HTTP    *http.Client
++	Timeout time.Duration
++}
++
++// NewClient returns a client with the official timeout and transport defaults.
++func NewClient() *Client { return &Client{Timeout: defaultTimeout} }
++
++// RedemptionRequest is either a single code or a gift-key/gift-code pair.
++type RedemptionRequest struct {
++	Code      string `json:"code,omitempty"`
++	GiftKey   string `json:"gift_key,omitempty"`
++	GiftCode  string `json:"gift_code,omitempty"`
++	RequestID string `json:"request_id"`
++}
++
++// RedemptionResponse is returned after the API confirms redemption.
++type RedemptionResponse struct {
++	Status  string `json:"status"`
++	FlowNo  string `json:"flow_no"`
++	Credits int64  `json:"credits"`
++	OpenID  string `json:"open_id"`
++}
++
++// Redeem submits one redemption request. It performs no automatic retries.
++func (c *Client) Redeem(ctx context.Context, accessToken string, input RedemptionRequest) (*RedemptionResponse, error) {
++	if strings.TrimSpace(accessToken) == "" {
++		return nil, errors.New("redemption: access token is required")
++	}
++	if err := validateRequest(input); err != nil {
++		return nil, err
++	}
++	body, err := json.Marshal(input)
++	if err != nil {
++		return nil, fmt.Errorf("redemption: encode request: %w", err)
++	}
++	timeout := c.Timeout
++	if timeout <= 0 {
++		timeout = defaultTimeout
++	}
++	requestCtx, cancel := context.WithTimeout(ctx, timeout)
++	defer cancel()
++	req, err := http.NewRequestWithContext(requestCtx, http.MethodPost, RedemptionsURL, bytes.NewReader(body))
++	if err != nil {
++		return nil, fmt.Errorf("redemption: create request: %w", err)
++	}
++	req.Header.Set("Authorization", "Bearer "+accessToken)
++	req.Header.Set("Content-Type", "application/json")
++	req.Header.Set("Accept", "application/json")
++	httpClient := c.HTTP
++	if httpClient == nil {
++		httpClient = http.DefaultClient
++	}
++	clientCopy := *httpClient
++	clientCopy.CheckRedirect = func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }
++	resp, err := clientCopy.Do(req)
++	if err != nil {
++		if requestErr := requestCtx.Err(); requestErr != nil {
++			return nil, requestErr
++		}
++		return nil, errors.New("redemption: request failed")
++	}
++	if resp.Body == nil {
++		return nil, errors.New("redemption: response body is missing")
++	}
++	defer resp.Body.Close()
++	if resp.StatusCode != http.StatusOK {
++		return nil, fmt.Errorf("redemption: upstream returned HTTP %d", resp.StatusCode)
++	}
++	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBody+1))
++	if err != nil {
++		if requestErr := requestCtx.Err(); requestErr != nil {
++			return nil, requestErr
++		}
++		return nil, errors.New("redemption: response unreadable")
++	}
++	if len(raw) > maxResponseBody {
++		return nil, errors.New("redemption: response body exceeds 1 MiB")
++	}
++	var wire struct {
++		Status  string `json:"status"`
++		FlowNo  string `json:"flow_no"`
++		Credits *int64 `json:"credits"`
++		OpenID  string `json:"open_id"`
++	}
++	if err := json.Unmarshal(raw, &wire); err != nil {
++		return nil, errors.New("redemption: malformed response")
++	}
++	if wire.Status != "success" || strings.TrimSpace(wire.FlowNo) == "" || strings.TrimSpace(wire.OpenID) == "" || wire.Credits == nil || *wire.Credits < 0 {
++		return nil, errors.New("redemption: response does not confirm success")
++	}
++	out := &RedemptionResponse{Status: wire.Status, FlowNo: wire.FlowNo, Credits: *wire.Credits, OpenID: wire.OpenID}
++	return out, nil
++}
++
++func validateRequest(in RedemptionRequest) error {
++	if strings.TrimSpace(in.RequestID) == "" || !validLen(in.RequestID, 8, 64) {
++		return errors.New("redemption: request_id must be 8-64 characters")
++	}
++	single := in.Code != ""
++	dual := in.GiftKey != "" || in.GiftCode != ""
++	if single == dual {
++		return errors.New("redemption: specify code or gift_key and gift_code")
++	}
++	if single && !validLen(in.Code, 1, 64) {
++		return errors.New("redemption: code must be 1-64 characters")
++	}
++	if dual && (!validLen(in.GiftKey, 6, 64) || !validLen(in.GiftCode, 8, 64)) {
++		return errors.New("redemption: gift_key/gift_code length is invalid")
++	}
++	if dual && (in.GiftKey == "" || in.GiftCode == "") {
++		return errors.New("redemption: gift_key and gift_code are required together")
++	}
++	return nil
++}
++
++func validLen(s string, min, max int) bool {
++	n := utf8.RuneCountInString(s)
++	return n >= min && n <= max
++}
+diff --git a/internal/workbuddyopen/redemptions_test.go b/internal/workbuddyopen/redemptions_test.go
+new file mode 100644
+index 0000000..e51158c
+--- /dev/null
++++ b/internal/workbuddyopen/redemptions_test.go
+@@ -0,0 +1,246 @@
++package workbuddyopen
++
++import (
++	"context"
++	"encoding/json"
++	"errors"
++	"fmt"
++	"io"
++	"net/http"
++	"strings"
++	"testing"
++	"time"
++)
++
++type roundTripFunc func(*http.Request) (*http.Response, error)
++
++func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
++
++func response(status int, body string, headers http.Header) *http.Response {
++	return &http.Response{StatusCode: status, Status: http.StatusText(status), Header: headers, Body: io.NopCloser(strings.NewReader(body))}
++}
++
++func validSingle() RedemptionRequest {
++	return RedemptionRequest{Code: "code", RequestID: "request-1"}
++}
++
++func validDual() RedemptionRequest {
++	return RedemptionRequest{GiftKey: "giftkey", GiftCode: "giftcode", RequestID: "request-2"}
++}
++
++func TestRedeemSingleAndDual(t *testing.T) {
++	calls := 0
++	c := &Client{HTTP: &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
++		calls++
++		if r.URL.String() != RedemptionsURL || r.Method != http.MethodPost || r.Header.Get("Authorization") != "Bearer test-token" {
++			t.Errorf("request=%s %s auth=%q", r.Method, r.URL, r.Header.Get("Authorization"))
++		}
++		if r.Header.Get("Content-Type") != "application/json" || r.Header.Get("Accept") != "application/json" {
++			t.Errorf("content-type=%q accept=%q", r.Header.Get("Content-Type"), r.Header.Get("Accept"))
++		}
++		var sent map[string]string
++		if err := json.NewDecoder(r.Body).Decode(&sent); err != nil {
++			t.Errorf("request body: %v", err)
++		}
++		if calls == 1 {
++			if sent["code"] != "code" || sent["request_id"] != "request-1" || len(sent) != 2 {
++				t.Errorf("single body=%v", sent)
++			}
++			return response(200, `{"status":"success","flow_no":"flow-1","credits":12,"open_id":"open-1"}`, nil), nil
++		}
++		if sent["gift_key"] != "giftkey" || sent["gift_code"] != "giftcode" || sent["request_id"] != "request-2" || len(sent) != 3 {
++			t.Errorf("dual body=%v", sent)
++		}
++		return response(200, `{"status":"success","flow_no":"flow-2","credits":0,"open_id":"open-2"}`, nil), nil
++	})}}
++	for _, in := range []RedemptionRequest{validSingle(), validDual()} {
++		out, err := c.Redeem(context.Background(), "test-token", in)
++		if err != nil || out == nil || out.Status != "success" || out.FlowNo == "" || out.OpenID == "" {
++			t.Fatalf("out=%+v err=%v", out, err)
++		}
++	}
++	if calls != 2 {
++		t.Fatalf("calls=%d want 2", calls)
++	}
++}
++
++func TestRedeemRejectsInvalidRequestsWithoutTransport(t *testing.T) {
++	calls := 0
++	c := &Client{HTTP: &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) { calls++; return nil, errors.New("unexpected") })}}
++	cases := []RedemptionRequest{
++		{Code: "", RequestID: "request-1"},
++		{Code: strings.Repeat("x", 65), RequestID: "request-1"},
++		{Code: "code", RequestID: "short"},
++		{Code: "code", RequestID: "        "},
++		{Code: "code", GiftKey: "giftkey", RequestID: "request-1"},
++		{GiftKey: "giftkey", RequestID: "request-1"},
++		{GiftCode: "giftcode", RequestID: "request-1"},
++		{GiftKey: "short", GiftCode: "giftcode", RequestID: "request-1"},
++	}
++	for _, in := range cases {
++		if _, err := c.Redeem(context.Background(), "test-token", in); err == nil {
++			t.Errorf("input=%+v accepted", in)
++		}
++	}
++	if calls != 0 {
++		t.Fatalf("transport calls=%d want 0", calls)
++	}
++}
++
++func TestRedeemStatusesAreRedactedAndNotRetried(t *testing.T) {
++	for _, status := range []int{400, 401, 403, 429, 500} {
++		t.Run(http.StatusText(status), func(t *testing.T) {
++			calls := 0
++			c := &Client{HTTP: &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
++				calls++
++				return response(status, `{"token":"secret","code":"private"}`, nil), nil
++			})}}
++			_, err := c.Redeem(context.Background(), "test-token", validSingle())
++			if err == nil || !strings.Contains(err.Error(), fmt.Sprint(status)) || strings.Contains(err.Error(), "secret") || strings.Contains(err.Error(), "private") || strings.Contains(err.Error(), "test-token") {
++				t.Fatalf("err=%v", err)
++			}
++			if calls != 1 {
++				t.Fatalf("calls=%d want 1", calls)
++			}
++		})
++	}
++}
++
++type closeTrackingBody struct {
++	io.Reader
++	closed bool
++}
++
++func (b *closeTrackingBody) Close() error {
++	b.closed = true
++	return nil
++}
++
++func TestRedeemClosesResponseBodyOnEveryResponseShape(t *testing.T) {
++	cases := []struct {
++		name   string
++		status int
++		body   string
++	}{
++		{name: "400", status: http.StatusBadRequest, body: `{"error":"bad request"}`},
++		{name: "401", status: http.StatusUnauthorized, body: `{"error":"unauthorized"}`},
++		{name: "403", status: http.StatusForbidden, body: `{"error":"forbidden"}`},
++		{name: "429", status: http.StatusTooManyRequests, body: `{"error":"rate limited"}`},
++		{name: "500", status: http.StatusInternalServerError, body: `{"error":"server error"}`},
++		{name: "307", status: http.StatusTemporaryRedirect, body: `{"error":"redirect"}`},
++		{name: "success", status: http.StatusOK, body: `{"status":"success","flow_no":"flow","credits":1,"open_id":"open"}`},
++		{name: "malformed", status: http.StatusOK, body: `{`},
++	}
++	for _, tc := range cases {
++		t.Run(tc.name, func(t *testing.T) {
++			body := &closeTrackingBody{Reader: strings.NewReader(tc.body)}
++			c := &Client{HTTP: &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
++				return &http.Response{
++					StatusCode: tc.status,
++					Status:     http.StatusText(tc.status),
++					Header:     make(http.Header),
++					Body:       body,
++				}, nil
++			})}}
++			_, _ = c.Redeem(context.Background(), "test-token", validSingle())
++			if !body.closed {
++				t.Fatalf("response body was not closed for status=%d", tc.status)
++			}
++		})
++	}
++}
++
++func TestRedeemRejectsMalformedTruncatedOversizeAndUnconfirmed(t *testing.T) {
++	for name, body := range map[string]string{
++		"malformed":       `{`,
++		"truncated":       `{"status":"success","flow_no":"flow"`,
++		"wrong status":    `{"status":"pending","flow_no":"flow","credits":1,"open_id":"open"}`,
++		"missing ids":     `{"status":"success","flow_no":"","credits":1,"open_id":"open"}`,
++		"missing credits": `{"status":"success","flow_no":"flow","open_id":"open"}`,
++		"null credits":    `{"status":"success","flow_no":"flow","credits":null,"open_id":"open"}`,
++		"whitespace ids":  `{"status":"success","flow_no":"  ","credits":1,"open_id":"open"}`,
++		"negative":        `{"status":"success","flow_no":"flow","credits":-1,"open_id":"open"}`,
++	} {
++		t.Run(name, func(t *testing.T) {
++			c := &Client{HTTP: &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) { return response(200, body, nil), nil })}}
++			if out, err := c.Redeem(context.Background(), "test-token", validSingle()); err == nil || out != nil {
++				t.Fatalf("out=%+v err=%v", out, err)
++			}
++		})
++	}
++	t.Run("oversize", func(t *testing.T) {
++		c := &Client{HTTP: &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
++			return response(200, strings.Repeat("x", maxResponseBody+1), nil), nil
++		})}}
++		if _, err := c.Redeem(context.Background(), "test-token", validSingle()); err == nil {
++			t.Fatal("oversize response accepted")
++		}
++	})
++}
++
++func TestRedeemDoesNotLeakTransportOrBodyErrors(t *testing.T) {
++	for name, transportErr := range map[string]error{
++		"transport": errors.New("token=secret code=private"),
++	} {
++		t.Run(name, func(t *testing.T) {
++			c := &Client{HTTP: &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) { return nil, transportErr })}}
++			_, err := c.Redeem(context.Background(), "test-token", validSingle())
++			if err == nil || strings.Contains(err.Error(), "secret") || strings.Contains(err.Error(), "private") || strings.Contains(err.Error(), "test-token") {
++				t.Fatalf("err=%v", err)
++			}
++		})
++	}
++	t.Run("body", func(t *testing.T) {
++		body := &failingBody{}
++		c := &Client{HTTP: &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
++			return &http.Response{StatusCode: 200, Body: body}, nil
++		})}}
++		_, err := c.Redeem(context.Background(), "test-token", validSingle())
++		if err == nil || strings.Contains(err.Error(), "secret") || strings.Contains(err.Error(), "private") {
++			t.Fatalf("err=%v", err)
++		}
++	})
++}
++
++type failingBody struct{}
++
++func (*failingBody) Read([]byte) (int, error) { return 0, errors.New("body token=secret code=private") }
++func (*failingBody) Close() error             { return nil }
++
++func TestRedeemTimeoutPreservesDeadline(t *testing.T) {
++	c := &Client{Timeout: time.Nanosecond, HTTP: &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
++		<-r.Context().Done()
++		return nil, r.Context().Err()
++	})}}
++	_, err := c.Redeem(context.Background(), "test-token", validSingle())
++	if !errors.Is(err, context.DeadlineExceeded) {
++		t.Fatalf("err=%v want deadline exceeded", err)
++	}
++}
++
++func TestRedeemCancellationAndRedirect(t *testing.T) {
++	t.Run("cancellation", func(t *testing.T) {
++		ctx, cancel := context.WithCancel(context.Background())
++		cancel()
++		c := &Client{HTTP: &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) { return nil, r.Context().Err() })}}
++		if _, err := c.Redeem(ctx, "test-token", validSingle()); err == nil {
++			t.Fatal("cancelled request succeeded")
++		}
++	})
++	t.Run("redirect is not followed", func(t *testing.T) {
++		calls := 0
++		c := &Client{HTTP: &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
++			calls++
++			if calls == 1 {
++				return response(307, "", http.Header{"Location": []string{RedemptionsURL}}), nil
++			}
++			return response(200, `{"status":"success","flow_no":"flow","credits":1,"open_id":"open"}`, nil), nil
++		})}, Timeout: time.Second}
++		if _, err := c.Redeem(context.Background(), "test-token", validSingle()); err == nil {
++			t.Fatal("redirect response accepted")
++		}
++		if calls != 1 {
++			t.Fatalf("calls=%d want 1", calls)
++		}
++	})
++}
+diff --git a/scripts/verify.sh b/scripts/verify.sh
+new file mode 100755
+index 0000000..c7a73ba
+--- /dev/null
++++ b/scripts/verify.sh
+@@ -0,0 +1,12 @@
++#!/usr/bin/env bash
++# Deterministic local/CI acceptance gate; no real credentials or account calls.
++set -euo pipefail
++cd "$(dirname "$0")/.."
++command -v node >/dev/null || { echo 'Node is required for frontend smoke tests' >&2; exit 1; }
++node --check internal/panel/app.js
++node --check internal/panel/mobile.js
++bash -n login.sh signin.sh credit.sh scripts/verify.sh
++go vet ./...
++go test -race ./...
++go build ./...
++echo 'ACCEPTANCE PASS'

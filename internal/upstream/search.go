@@ -169,7 +169,11 @@ func (c *Client) doSearch(req *http.Request) (*SearchOutcome, error) {
 	}
 	if resp.StatusCode >= 400 {
 		kind := Classify(resp.StatusCode, string(raw))
-		return nil, &Error{Kind: kind, Status: resp.StatusCode, Msg: truncate(string(raw), 200)}
+		ue := &Error{Kind: kind, Status: resp.StatusCode, Msg: truncate(string(raw), 200)}
+		if d, ok := ParseRetryAfter(resp.Header); ok {
+			ue.RetryAfter = d
+		}
+		return nil, ue
 	}
 	// 成功响应没有 data 包裹：code/msg 与结果字段同级，用嵌入结构一次性解出。
 	var parsed struct {
@@ -185,8 +189,12 @@ func (c *Client) doSearch(req *http.Request) (*SearchOutcome, error) {
 		if kind == ErrNone {
 			kind = ErrClient
 		}
-		return nil, &Error{Kind: kind, Status: resp.StatusCode,
+		ue := &Error{Kind: kind, Status: resp.StatusCode,
 			Msg: fmt.Sprintf("code=%d msg=%s", parsed.Code, truncate(parsed.Msg, 160))}
+		if d, ok := ParseRetryAfter(resp.Header); ok {
+			ue.RetryAfter = d
+		}
+		return nil, ue
 	}
 	out := parsed.SearchOutcome
 	// results 恒输出为数组（nil 会让 JSON 变成 null，调用方还要判空）。

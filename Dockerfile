@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
-FROM golang:1.23-alpine AS build
+FROM golang:1.27.3-alpine AS build
 WORKDIR /src
-COPY go.mod ./
+COPY go.mod go.sum ./
 # 防止因为直接使用官方源导致下载失败
 RUN go env -w GOPROXY=https://goproxy.cn,direct && \
     go env GOPROXY && \

@@ -1,0 +1,39 @@
+Phase 1 maintenance audit — 2026-11-02 Asia/Shanghai
+Baseline: 0486572604977142d000e75bfe4af7c00d0219c9 (clean working tree before changes).
+Scope: source/config/CI audit, dependency inventory, offline compatibility tests, first defensive fixes and an official-API connector foundation. No production account login, redemption, or synthetic activity was executed.
+
+Architecture
+- cmd/server: config and service composition. internal/server: OpenAI chat/models and a search-specific Anthropic-shaped endpoint; not a full Responses/Messages implementation.
+- internal/upstream: legacy client-observed chat/search/billing/tasks and token refresh. auth/pool/session/scheduler own credentials, routing, persistence and scheduled operations.
+- internal/panel embeds JS/HTML; frontend smoke tests require Node.
+- Inventory at baseline: 20 Go packages, 97 Go test files, 845 test functions, 5 benchmarks. These counts are source inventory, not a claim of all tests running.
+
+Verified findings and first fixes
+P0: Missing config plus failed default generation silently selected empty-key, all-interface defaults. Startup now fails closed; malformed existing files are not overwritten; explicit env-only mode remains supported.
+P1: Generated admin key was printed during bootstrap. Removed secret logging.
+P1: WB2A_DEBUG_CHAT printed Authorization and response chunks. Removed raw header/body logging; mock credential regression test added.
+P1: Search error envelopes dropped Retry-After. Preserve HTTP and business-error header metadata so existing account cooldown respects it. No new identity spoofing or enforcement bypass.
+P2: TestModelsEndpoint depended on the live model catalogue. Use a deterministic in-process fixture and reset cache.
+P2: Docker publication had no test prerequisite and binary CI relied on preinstalled Node. Both now run an explicit acceptance gate with Node 22, vet, race tests and build.
+
+Dependency inventory
+Baseline go.mod declares Go 1.22.5; host Go was 1.27.1. Locked dependencies: go-redis/v9 v9.18.0 (directly imported but labelled indirect), xxhash/v2 v2.3.0, go-rendezvous 9f7001d12a5f, atomic v1.11.0, x/sys v0.30.0. go.sum also has unused go-redis v9.22.0 entries. No opportunistic dependency bump: tidy and upgrades need separate compatibility tests.
+govulncheck v1.9.0 initially reported 10 reachable standard-library advisories on Go1.27.1, including GO-2026-6809 requiring Go1.27.3. Project toolchain, both CI workflows and Docker builder now select Go1.27.3; Docker copies go.sum before download. Full tests and re-scan passed ("No vulnerabilities found."). The system Go installation was not modified. The old alpine3.20 runtime remains a separate container-image audit item; the source scanner does not scan OS packages or prove absence of vulnerabilities.
+
+Official integration evidence (retrieved 2026-11-02)
+https://open.workbuddy.cn/docs/openapi
+https://open.workbuddy.cn/docs/third-party-app
+Official platform documents registered third-party apps, user-authorized OAuth and scoped APIs, including credit redemption. It does not establish that the existing legacy /v2/chat/completions, daily-checkin or private reward-task endpoints are supported third-party APIs.
+New internal/workbuddyopen connector follows the documented redemptions contract only: mutually exclusive single/dual code request with stable request_id, fixed HTTPS endpoint, per-call OAuth token, no persistence/automatic retry/redirect, bounded responses and redacted errors. This is a library foundation, not yet wired into UI/scheduler or end-to-end account verified. App registration, approved scope and user authorization remain prerequisites.
+OAuth expiry examples differ between the official pages; future token management must use actual expires_in rather than hardcode documentation prose.
+
+Reward inventory and unresolved boundaries
+- Check-in/balance/gift/compensation/travel/growth calls remain legacy/private contracts; existing source comments are not proof of official support.
+- panel/tasksweep.go accepts and claims reached progress; eligibility remains upstream. Claims are distinct from creating progress.
+- scheduler activity and panel/autotask.go include manufactured telemetry; travel may adopt and accept agreements. These paths are not ordinary reward-only collection. This patch neither expands nor executes them. Follow-up must separate explicit eligibility-based claims from synthetic progress and gate legacy automation.
+- tasks.go Accept All has an early return before mini-program-only pending tasks; record for later contract review, not an immediate private-task expansion.
+- Invalid explicit realm normalization, global base override and body-read error propagation are follow-up local robustness items.
+
+Acceptance limitations
+Network/module and local-port restrictions initially blocked tests; with approved dependency download and test execution, baseline and updated suites ran. Unit/mock results do not prove current real account API availability, official app approval, earned credit receipt or account status. Docker image build and remote GitHub Actions were not executed locally.
+Independent review caught and corrected a non-200 redemption response-body close leak. A mistaken reviewer claim that OAuth scope belongs in the redemption JSON was rejected against the official contract; scope remains attached to authorization. Final review found no concrete blockers in this patch.
