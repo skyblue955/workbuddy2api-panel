@@ -7,7 +7,7 @@ let remarksCache = null;
 let theme = localStorage.getItem(LS_THEME) || 'auto';   // auto | light | dark
 let view = 'accounts';
 let overviewData = null, cfgLoaded = null;
-let logPin = true, loginState = null, loginTimer = null;
+let logPin = true, loginState = null, loginTimer = null, reauthUID = null;
 let refTimer = null;
 /* 视图级筛选状态（模块级声明放在文件顶部，避免顶层 go() 早于声明执行时踩 TDZ）。 */
 let mdFilter = { q: '', realm: '', cap: '', effort: '', promo: '', sort: 'default' };
@@ -435,7 +435,7 @@ function renderAccounts(list) {
     const usageTitle = '最近一次：' + req + ' 次 / ' + totalTok + ' / 延迟 ' + latency + ' / ' + rate;
     return '<tr class="' + cls + '" title="uid: ' + esc(s.uid) + '">' +
       '<td class="mark" aria-hidden="true"><i></i></td>' +
-      '<td class="who"><div class="nm">' + remarkName(s.uid, s.nickname ? esc(s.nickname) : '<span style="color:var(--ink-3)">未命名</span>') + (s.realm === 'global' ? ' <span class="realm-tag">国际版</span>' : '') + (s.enterprise ? ' <span class="realm-tag">企业版</span>' : '') + '</div><div class="id">' + esc(short) + '</div></td>' +
+      '<td class="who"><div class="nm">' + remarkName(s.uid, s.nickname ? esc(s.nickname) : '<span style="color:var(--ink-3)">未命名</span>') + (s.realm === 'global' ? ' <span class="realm-tag">国际版</span>' : '') + (s.enterprise ? ' <span class="realm-tag">企业版</span>' : (s.enterprise_session ? ' <span class="realm-tag">企业会话·需个人授权</span>' : '')) + '</div><div class="id">' + esc(short) + '</div></td>' +
       '<td>' + tag + note + rateLimits + '</td>' +
       '<td class="cred" title="' + esc(credTip) + '"><div class="n">' + cred + '</div><div class="bar"><i style="width:' + pct + '%"></i></div></td>' +
       '<td class="num">' + (s.success_count || 0) + ' <span style="color:var(--ink-3)">/</span> <span style="color:var(--bad)">' + (s.err_total || 0) + '</span></td>' +
@@ -448,6 +448,7 @@ function renderAccounts(list) {
       '</span></td>' +
       '<td class="num" style="color:var(--ink-3)">' + ago(s.last_success) + '</td>' +
       '<td class="acts">' +
+        (s.enterprise_session && !s.enterprise ? '<button class="xs primary" data-a="reauthorize" data-u="' + esc(s.uid) + '" data-r="' + esc(s.realm || 'cn') + '" title="浏览器退出企业会话后，以个人身份重新授权">个人身份重新授权</button>' : '') +
         // 企业版无个人成长体系（签到 400「企业账号不支持该操作」/ 成长任务 403）：
         // 不渲染「签到」「任务」按钮，只留「额度」——点它走 /balance，企业额度由
         // upstream 的 get-enterprise-user-usage 口径填充。
@@ -455,7 +456,7 @@ function renderAccounts(list) {
           '<button class="xs ghost" data-a="checkin" data-u="' + esc(s.uid) + '"' + (s.checkin_done ? ' title="今日已签到；点击可重新签到并刷新余额"' : '') + '>' + (s.checkin_done ? '已签' : '签到') + '</button>') +
         '<button class="xs ghost" data-a="balance" data-u="' + esc(s.uid) + '"' + (s.enterprise ? ' title="刷新企业版已分配额度（上游 get-enterprise-user-usage）"' : '') + '>' + (s.enterprise ? '额度' : '余额') + '</button>' +
         (s.enterprise ? '' :
-          '<button class="xs ghost" data-a="tasks" data-u="' + esc(s.uid) + '">任务</button>') +
+          '<button class="xs ghost" data-a="tasks" data-u="' + esc(s.uid) + '">' + (s.enterprise_session ? '任务（只读）' : '任务') + '</button>') +
         (frozen ? '<button class="xs primary" data-a="revive" data-u="' + esc(s.uid) + '">解冻</button>'
                 : (s.paused ? '<button class="xs primary" data-a="resume" data-u="' + esc(s.uid) + '">恢复选号</button>'
                             : '<button class="xs ghost" data-a="pause" data-u="' + esc(s.uid) + '" title="' + (s.enterprise ? '退出选号，但照常保活 / 刷新额度' : '退出选号，但照常签到 / 活跃上报 / 保活 / 刷新余额') + '">暂停选号</button>')) +
@@ -562,6 +563,8 @@ $('accBody').addEventListener('click', async ev => {
       toast('已恢复选号', 'ok');
     } else if (a === 'tasks') {
       openTasks(u);
+    } else if (a === 'reauthorize') {
+      openAdd(u, b.dataset.r);
     } else if (a === 'remove') {
       const r = await api('accounts/' + encodeURIComponent(u) + '/remove', { method: 'POST' });
       toast(r.file_error ? '已移除（凭证文件删除失败：' + r.file_error + '）' : '已移除', 'ok');
@@ -1274,7 +1277,8 @@ $('cfgForm').onsubmit = async ev => {
 };
 
 /* ── 添加账号 ─────────────────────────────────────────────────────── */
-function openAdd() {
+function openAdd(targetUID, targetRealm) {
+  reauthUID = targetUID || null;
   $('addVeil').classList.add('on');
   // 重置到登录标签
   switchAddTab('login');
@@ -1285,8 +1289,18 @@ function openAdd() {
   $('btnCopyUrl').hidden = true; $('btnOpenUrl').hidden = true;
   $('btnStartLogin').hidden = false; $('btnStartLogin').disabled = false;
   stopPoll();
+  loginState = null;
+  document.querySelectorAll('input[name="addRealm"]').forEach(x => {
+    x.disabled = !!reauthUID;
+    x.checked = x.value === (reauthUID ? (targetRealm || 'cn') : 'cn');
+  });
+  document.querySelectorAll('#addTabs .tab').forEach(x => { x.disabled = !!reauthUID && x.dataset.tab === 'import'; });
+  $('addReauthNote').hidden = !reauthUID;
+  $('addReauthNote').textContent = reauthUID ? '请在官方授权页面选择同一账号的个人身份；若仍自动进入企业身份，请先退出官方网页的企业会话再授权。原账号无需移除；本次仅更新凭证，不签到、不领取奖励，不保证任务资格。' : '';
+  $('addPoll').textContent = '等待授权完成，自动检测中';
 }
 function switchAddTab(tab) {
+  if (reauthUID && tab === 'import') tab = 'login';
   document.querySelectorAll('#addTabs .tab').forEach(b => b.classList.toggle('on', b.dataset.tab === tab));
   $('addTabLogin').hidden = tab !== 'login';
   $('addTabImport').hidden = tab !== 'import';
@@ -1298,7 +1312,9 @@ function startAddLogin() {
   const realm = (document.querySelector('input[name="addRealm"]:checked') || {}).value || 'cn';
   $('btnStartLogin').disabled = true;
   $('addLoad').hidden = false; $('addErr').hidden = true;
-  api('login/start', { method: 'POST', body: JSON.stringify({ realm }) }).then(r => {
+  const payload = { realm };
+  if (reauthUID) payload.reauthorize_uid = reauthUID;
+  api('login/start', { method: 'POST', body: JSON.stringify(payload) }).then(r => {
     loginState = r.state;
     $('addUrl').textContent = r.url;
     $('addPick').hidden = true; // 选域锁定（会话已按该域发起）
@@ -1322,7 +1338,7 @@ async function pollLogin() {
       stopPoll();
       $('addReady').hidden = true;
       $('addDone').hidden = false;
-      $('addDone').textContent = '已添加 ' + (r.nickname || r.uid) + (r.realm === 'global' ? '（国际版）' : '') + (r.credits >= 0 ? ' · 积分 ' + r.credits + (r.credits_total > 0 ? '/' + r.credits_total : '') : '') + '，账号已载入池中';
+      $('addDone').textContent = (r.session_kind === 'personal_reauthorization' ? '个人身份重新授权完成：' : '已添加 ') + (r.nickname || r.uid) + (r.session_kind === 'personal_reauthorization' ? '（未执行签到或奖励操作）' : (r.realm === 'global' ? '（国际版）' : '') + (r.credits >= 0 ? ' · 积分 ' + r.credits + (r.credits_total > 0 ? '/' + r.credits_total : '') : '') + '，账号已载入池中');
       setTimeout(() => { closeAdd(); loadOverview(true); }, 1600);
     }
   } catch (e) {
@@ -1365,7 +1381,7 @@ $('importFile').onchange = async () => {
 };
 
 /* ── 顶部动作 ─────────────────────────────────────────────────────── */
-$('btnAdd').onclick = openAdd;
+$('btnAdd').onclick = () => openAdd();
 $('btnRefresh').onclick = async () => {
   const b = $('btnRefresh');
   b.disabled = true; b.textContent = '刷新中…';
@@ -1604,11 +1620,16 @@ const AUTO_TASKS = {
   'Sequential_Tasks_7': '体验灵感功能（预留，疑 PC 口径）：accept → 灵感事件组（PC+mp 双形态）→ 领奖（判据待解锁验证）'
 };
 
+function taskSessionBlocked() {
+  return !!(((overviewData || {}).accounts || []).find(s => s.uid === taskUID) || {}).enterprise_session;
+}
 function openTasks(uid) {
   taskUID = uid;
   $('taskWho').textContent = uid.slice(0, 16);
   $('taskVeil').classList.add('on');
   $('btnTaskReload').hidden = false;
+  $('btnTaskAcceptAll').hidden = taskSessionBlocked();
+  $('btnTaskAutoAll').hidden = taskSessionBlocked();
   loadTasks();
 }
 function closeTasks() { $('taskVeil').classList.remove('on'); taskUID = null; }
@@ -1617,7 +1638,7 @@ $('btnTaskReload').onclick = loadTasks;
 
 // 全部接受：把该账号未接受的任务一次性报名（幂等，跳过已接受/已领取）。
 $('btnTaskAcceptAll').onclick = async () => {
-  if (!taskUID) return;
+  if (!taskUID || taskSessionBlocked()) return;
   const btn = $('btnTaskAcceptAll');
   btn.disabled = true; btn.textContent = '接受中…';
   try {
@@ -1634,7 +1655,7 @@ $('btnTaskAcceptAll').onclick = async () => {
 
 // 一键完成全部可自动任务（耗时较长：含真实对话，逐项回读验证）。
 $('btnTaskAutoAll').onclick = async () => {
-  if (!taskUID) return;
+  if (!taskUID || taskSessionBlocked()) return;
   const btn = $('btnTaskAutoAll');
   if (!confirm('将依次执行：补报对话事件、领取 Buddy、glm-5.2 对话、尝试上报。\n过程约 1-2 分钟（含真实对话），确认继续？')) return;
   btn.disabled = true; btn.textContent = '执行中…';
@@ -1680,7 +1701,7 @@ async function loadTasks() {
         : t.locked ? '<span class="tag mute">未解锁</span>'
         : t.accept_status === 'accepted' ? '<span class="tag mute">进行中</span>'
         : '<span class="tag mute">未接受</span>';
-      const acted = t.claimed || t.locked ? ''
+      const acted = taskSessionBlocked() ? '<span class="hint">需个人身份重新授权</span>' : t.claimed || t.locked ? ''
         : t.claimable ? '<button class="xs primary" data-t="claim" data-c="' + esc(t.task_code) + '">领取</button>'
         : AUTO_TASKS[t.task_code] ? '<button class="xs primary" data-t="auto" data-c="' + esc(t.task_code) + '" title="' + esc(AUTO_TASKS[t.task_code]) + '">一键完成</button>'
         : t.accept_status === 'accepted' ? ''
@@ -1694,7 +1715,8 @@ async function loadTasks() {
         '<td>' + badge + '</td>' +
         '<td class="acts">' + acted + '</td></tr>';
     }).join('');
-    st.hidden = true;
+    st.hidden = !taskSessionBlocked();
+    if (taskSessionBlocked()) st.textContent = '当前为企业上下文，仅展示官方任务记录；请返回账号列表完成个人身份重新授权。';
     tb.hidden = false;
   } catch (e) {
     st.className = 'state err';
@@ -1703,6 +1725,7 @@ async function loadTasks() {
 }
 
 $('taskBody').addEventListener('click', async ev => {
+  if (taskSessionBlocked()) return;
   const b = ev.target.closest('button[data-t]');
   if (!b || !taskUID) return;
   const kind = b.dataset.t, code = b.dataset.c;
@@ -2026,6 +2049,7 @@ function groupItems(d) {
   const groups = [];
   for (const a of (d.accounts || [])) {
     const rows = [];
+    if (a.growth_error) rows.push({ kind: 'growth', code: 'session_status', status: 'skipped', message: a.growth_error });
     for (const t of (a.growth || [])) {
       GROWTH_TITLES[t.task_code] = t.title || t.task_code;
       rows.push({ kind: 'growth', code: t.task_code, prog: t.target ? t.current + '/' + t.target : '—', status: 'scan' });

@@ -82,6 +82,10 @@ func (p *Panel) tasksScanAll(w http.ResponseWriter, r *http.Request) {
 			if a.IsEnterprise() {
 				return
 			}
+			if a.IsEnterpriseSession() {
+				it.GrowthErr = "当前凭证处于企业上下文，成长任务已跳过；无需移除账号，请在账号列表点击「个人身份重新授权」"
+				return
+			}
 			if tasks, err := p.cfg.Upstream.ListTasks(a); err != nil {
 				it.GrowthErr = err.Error()
 			} else {
@@ -231,7 +235,7 @@ func (p *Panel) startGrowthQueue(concurrency int, growth bool) (started bool, to
 				return
 			}
 			if a.IsEnterpriseSession() {
-				log.Printf("panel: WARN 队列跳过 uid=%s nickname=%q：凭证为企业切换会话（token_source=enterprise_switch），成长任务行为事件会被上游静默丢弃；请移除该账号，在浏览器退出企业切换（个人身份）后重新登录", a.UID, a.Nickname)
+				log.Printf("panel: WARN 队列跳过 uid=%s nickname=%q：凭证为企业切换会话（token_source=enterprise_switch），成长任务已跳过；无需移除账号，请从账号列表发起「个人身份重新授权」，在官方授权页选择同一账号的个人身份", a.UID, a.Nickname)
 				return
 			}
 			if growth {

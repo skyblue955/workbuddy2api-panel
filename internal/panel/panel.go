@@ -127,8 +127,10 @@ const loginTTL = 15 * time.Minute
 
 // loginSession 进行中的 OAuth 会话：创建时刻 + realm（cn/global，用于落盘与端点切换）。
 type loginSession struct {
-	created time.Time
-	realm   string // "cn" / "global"，缺省 cn
+	created        time.Time
+	realm          string // "cn" / "global"，缺省 cn
+	reauthorizeUID string
+	processing     bool
 }
 
 // New 构建面板。
@@ -261,6 +263,15 @@ func (p *Panel) overview(w http.ResponseWriter, r *http.Request) {
 	if p.cfg.StickyCount != nil {
 		sticky = p.cfg.StickyCount()
 	}
+	type accountView struct {
+		pool.Status
+		EnterpriseSession bool `json:"enterprise_session"`
+	}
+	accountViews := make([]accountView, 0)
+	for _, account := range p.cfg.Pool.List() {
+		a := p.cfg.Pool.AuthByUID(account.UID)
+		accountViews = append(accountViews, accountView{Status: account, EnterpriseSession: a != nil && a.IsEnterpriseSession()})
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"version":         p.cfg.Version,
 		"uptime_sec":      int(time.Since(p.started).Seconds()),
@@ -273,14 +284,14 @@ func (p *Panel) overview(w http.ResponseWriter, r *http.Request) {
 		"disabled":        disabled,
 		"paused":          paused,
 		"in_flight_full":  inFlightFull,
-		"accounts":        p.cfg.Pool.List(),
+		"accounts":        accountViews,
 		// model_locks 模型级限流全清单（哪些模型不能用、锁了几个号、还要锁多久）：
 		// 与 accounts 的账号池视图互补，前端「模型锁池」表直接渲染。无锁时为 null。
 		"model_locks": p.cfg.Pool.ModelLockView(),
 		// 到期提醒快照的节奏与年龄：界面轮询是 5 秒级，但卡片数据只随余额后台刷新
 		// 更新（默认每 5 分钟）——把这两个数透出，前端才能如实标注「x 分钟前更新」。
-		"balance_refresh_sec":    p.balanceRefreshSec(),
-		"balance_refreshed_at":   p.balanceRefreshedAt(),
+		"balance_refresh_sec":  p.balanceRefreshSec(),
+		"balance_refreshed_at": p.balanceRefreshedAt(),
 	})
 }
 

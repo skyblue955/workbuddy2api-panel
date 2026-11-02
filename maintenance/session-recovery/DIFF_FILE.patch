@@ -1,0 +1,927 @@
+diff --git a/internal/panel/app.js b/internal/panel/app.js
+index 77ae884..e007d6f 100644
+--- a/internal/panel/app.js
++++ b/internal/panel/app.js
+@@ -7,7 +7,7 @@ let remarksCache = null;
+ let theme = localStorage.getItem(LS_THEME) || 'auto';   // auto | light | dark
+ let view = 'accounts';
+ let overviewData = null, cfgLoaded = null;
+-let logPin = true, loginState = null, loginTimer = null;
++let logPin = true, loginState = null, loginTimer = null, reauthUID = null;
+ let refTimer = null;
+ /* 视图级筛选状态（模块级声明放在文件顶部，避免顶层 go() 早于声明执行时踩 TDZ）。 */
+ let mdFilter = { q: '', realm: '', cap: '', effort: '', promo: '', sort: 'default' };
+@@ -435,7 +435,7 @@ function renderAccounts(list) {
+     const usageTitle = '最近一次：' + req + ' 次 / ' + totalTok + ' / 延迟 ' + latency + ' / ' + rate;
+     return '<tr class="' + cls + '" title="uid: ' + esc(s.uid) + '">' +
+       '<td class="mark" aria-hidden="true"><i></i></td>' +
+-      '<td class="who"><div class="nm">' + remarkName(s.uid, s.nickname ? esc(s.nickname) : '<span style="color:var(--ink-3)">未命名</span>') + (s.realm === 'global' ? ' <span class="realm-tag">国际版</span>' : '') + (s.enterprise ? ' <span class="realm-tag">企业版</span>' : '') + '</div><div class="id">' + esc(short) + '</div></td>' +
++      '<td class="who"><div class="nm">' + remarkName(s.uid, s.nickname ? esc(s.nickname) : '<span style="color:var(--ink-3)">未命名</span>') + (s.realm === 'global' ? ' <span class="realm-tag">国际版</span>' : '') + (s.enterprise ? ' <span class="realm-tag">企业版</span>' : (s.enterprise_session ? ' <span class="realm-tag">企业会话·需个人授权</span>' : '')) + '</div><div class="id">' + esc(short) + '</div></td>' +
+       '<td>' + tag + note + rateLimits + '</td>' +
+       '<td class="cred" title="' + esc(credTip) + '"><div class="n">' + cred + '</div><div class="bar"><i style="width:' + pct + '%"></i></div></td>' +
+       '<td class="num">' + (s.success_count || 0) + ' <span style="color:var(--ink-3)">/</span> <span style="color:var(--bad)">' + (s.err_total || 0) + '</span></td>' +
+@@ -448,6 +448,7 @@ function renderAccounts(list) {
+       '</span></td>' +
+       '<td class="num" style="color:var(--ink-3)">' + ago(s.last_success) + '</td>' +
+       '<td class="acts">' +
++        (s.enterprise_session && !s.enterprise ? '<button class="xs primary" data-a="reauthorize" data-u="' + esc(s.uid) + '" data-r="' + esc(s.realm || 'cn') + '" title="浏览器退出企业会话后，以个人身份重新授权">个人身份重新授权</button>' : '') +
+         // 企业版无个人成长体系（签到 400「企业账号不支持该操作」/ 成长任务 403）：
+         // 不渲染「签到」「任务」按钮，只留「额度」——点它走 /balance，企业额度由
+         // upstream 的 get-enterprise-user-usage 口径填充。
+@@ -455,7 +456,7 @@ function renderAccounts(list) {
+           '<button class="xs ghost" data-a="checkin" data-u="' + esc(s.uid) + '"' + (s.checkin_done ? ' title="今日已签到；点击可重新签到并刷新余额"' : '') + '>' + (s.checkin_done ? '已签' : '签到') + '</button>') +
+         '<button class="xs ghost" data-a="balance" data-u="' + esc(s.uid) + '"' + (s.enterprise ? ' title="刷新企业版已分配额度（上游 get-enterprise-user-usage）"' : '') + '>' + (s.enterprise ? '额度' : '余额') + '</button>' +
+         (s.enterprise ? '' :
+-          '<button class="xs ghost" data-a="tasks" data-u="' + esc(s.uid) + '">任务</button>') +
++          '<button class="xs ghost" data-a="tasks" data-u="' + esc(s.uid) + '">' + (s.enterprise_session ? '任务（只读）' : '任务') + '</button>') +
+         (frozen ? '<button class="xs primary" data-a="revive" data-u="' + esc(s.uid) + '">解冻</button>'
+                 : (s.paused ? '<button class="xs primary" data-a="resume" data-u="' + esc(s.uid) + '">恢复选号</button>'
+                             : '<button class="xs ghost" data-a="pause" data-u="' + esc(s.uid) + '" title="' + (s.enterprise ? '退出选号，但照常保活 / 刷新额度' : '退出选号，但照常签到 / 活跃上报 / 保活 / 刷新余额') + '">暂停选号</button>')) +
+@@ -562,6 +563,8 @@ $('accBody').addEventListener('click', async ev => {
+       toast('已恢复选号', 'ok');
+     } else if (a === 'tasks') {
+       openTasks(u);
++    } else if (a === 'reauthorize') {
++      openAdd(u, b.dataset.r);
+     } else if (a === 'remove') {
+       const r = await api('accounts/' + encodeURIComponent(u) + '/remove', { method: 'POST' });
+       toast(r.file_error ? '已移除（凭证文件删除失败：' + r.file_error + '）' : '已移除', 'ok');
+@@ -1274,7 +1277,8 @@ $('cfgForm').onsubmit = async ev => {
+ };
+ 
+ /* ── 添加账号 ─────────────────────────────────────────────────────── */
+-function openAdd() {
++function openAdd(targetUID, targetRealm) {
++  reauthUID = targetUID || null;
+   $('addVeil').classList.add('on');
+   // 重置到登录标签
+   switchAddTab('login');
+@@ -1285,8 +1289,18 @@ function openAdd() {
+   $('btnCopyUrl').hidden = true; $('btnOpenUrl').hidden = true;
+   $('btnStartLogin').hidden = false; $('btnStartLogin').disabled = false;
+   stopPoll();
++  loginState = null;
++  document.querySelectorAll('input[name="addRealm"]').forEach(x => {
++    x.disabled = !!reauthUID;
++    x.checked = x.value === (reauthUID ? (targetRealm || 'cn') : 'cn');
++  });
++  document.querySelectorAll('#addTabs .tab').forEach(x => { x.disabled = !!reauthUID && x.dataset.tab === 'import'; });
++  $('addReauthNote').hidden = !reauthUID;
++  $('addReauthNote').textContent = reauthUID ? '请在官方授权页面选择同一账号的个人身份；若仍自动进入企业身份，请先退出官方网页的企业会话再授权。原账号无需移除；本次仅更新凭证，不签到、不领取奖励，不保证任务资格。' : '';
++  $('addPoll').textContent = '等待授权完成，自动检测中';
+ }
+ function switchAddTab(tab) {
++  if (reauthUID && tab === 'import') tab = 'login';
+   document.querySelectorAll('#addTabs .tab').forEach(b => b.classList.toggle('on', b.dataset.tab === tab));
+   $('addTabLogin').hidden = tab !== 'login';
+   $('addTabImport').hidden = tab !== 'import';
+@@ -1298,7 +1312,9 @@ function startAddLogin() {
+   const realm = (document.querySelector('input[name="addRealm"]:checked') || {}).value || 'cn';
+   $('btnStartLogin').disabled = true;
+   $('addLoad').hidden = false; $('addErr').hidden = true;
+-  api('login/start', { method: 'POST', body: JSON.stringify({ realm }) }).then(r => {
++  const payload = { realm };
++  if (reauthUID) payload.reauthorize_uid = reauthUID;
++  api('login/start', { method: 'POST', body: JSON.stringify(payload) }).then(r => {
+     loginState = r.state;
+     $('addUrl').textContent = r.url;
+     $('addPick').hidden = true; // 选域锁定（会话已按该域发起）
+@@ -1322,7 +1338,7 @@ async function pollLogin() {
+       stopPoll();
+       $('addReady').hidden = true;
+       $('addDone').hidden = false;
+-      $('addDone').textContent = '已添加 ' + (r.nickname || r.uid) + (r.realm === 'global' ? '（国际版）' : '') + (r.credits >= 0 ? ' · 积分 ' + r.credits + (r.credits_total > 0 ? '/' + r.credits_total : '') : '') + '，账号已载入池中';
++      $('addDone').textContent = (r.session_kind === 'personal_reauthorization' ? '个人身份重新授权完成：' : '已添加 ') + (r.nickname || r.uid) + (r.session_kind === 'personal_reauthorization' ? '（未执行签到或奖励操作）' : (r.realm === 'global' ? '（国际版）' : '') + (r.credits >= 0 ? ' · 积分 ' + r.credits + (r.credits_total > 0 ? '/' + r.credits_total : '') : '') + '，账号已载入池中');
+       setTimeout(() => { closeAdd(); loadOverview(true); }, 1600);
+     }
+   } catch (e) {
+@@ -1365,7 +1381,7 @@ $('importFile').onchange = async () => {
+ };
+ 
+ /* ── 顶部动作 ─────────────────────────────────────────────────────── */
+-$('btnAdd').onclick = openAdd;
++$('btnAdd').onclick = () => openAdd();
+ $('btnRefresh').onclick = async () => {
+   const b = $('btnRefresh');
+   b.disabled = true; b.textContent = '刷新中…';
+@@ -1604,11 +1620,16 @@ const AUTO_TASKS = {
+   'Sequential_Tasks_7': '体验灵感功能（预留，疑 PC 口径）：accept → 灵感事件组（PC+mp 双形态）→ 领奖（判据待解锁验证）'
+ };
+ 
++function taskSessionBlocked() {
++  return !!(((overviewData || {}).accounts || []).find(s => s.uid === taskUID) || {}).enterprise_session;
++}
+ function openTasks(uid) {
+   taskUID = uid;
+   $('taskWho').textContent = uid.slice(0, 16);
+   $('taskVeil').classList.add('on');
+   $('btnTaskReload').hidden = false;
++  $('btnTaskAcceptAll').hidden = taskSessionBlocked();
++  $('btnTaskAutoAll').hidden = taskSessionBlocked();
+   loadTasks();
+ }
+ function closeTasks() { $('taskVeil').classList.remove('on'); taskUID = null; }
+@@ -1617,7 +1638,7 @@ $('btnTaskReload').onclick = loadTasks;
+ 
+ // 全部接受：把该账号未接受的任务一次性报名（幂等，跳过已接受/已领取）。
+ $('btnTaskAcceptAll').onclick = async () => {
+-  if (!taskUID) return;
++  if (!taskUID || taskSessionBlocked()) return;
+   const btn = $('btnTaskAcceptAll');
+   btn.disabled = true; btn.textContent = '接受中…';
+   try {
+@@ -1634,7 +1655,7 @@ $('btnTaskAcceptAll').onclick = async () => {
+ 
+ // 一键完成全部可自动任务（耗时较长：含真实对话，逐项回读验证）。
+ $('btnTaskAutoAll').onclick = async () => {
+-  if (!taskUID) return;
++  if (!taskUID || taskSessionBlocked()) return;
+   const btn = $('btnTaskAutoAll');
+   if (!confirm('将依次执行：补报对话事件、领取 Buddy、glm-5.2 对话、尝试上报。\n过程约 1-2 分钟（含真实对话），确认继续？')) return;
+   btn.disabled = true; btn.textContent = '执行中…';
+@@ -1680,7 +1701,7 @@ async function loadTasks() {
+         : t.locked ? '<span class="tag mute">未解锁</span>'
+         : t.accept_status === 'accepted' ? '<span class="tag mute">进行中</span>'
+         : '<span class="tag mute">未接受</span>';
+-      const acted = t.claimed || t.locked ? ''
++      const acted = taskSessionBlocked() ? '<span class="hint">需个人身份重新授权</span>' : t.claimed || t.locked ? ''
+         : t.claimable ? '<button class="xs primary" data-t="claim" data-c="' + esc(t.task_code) + '">领取</button>'
+         : AUTO_TASKS[t.task_code] ? '<button class="xs primary" data-t="auto" data-c="' + esc(t.task_code) + '" title="' + esc(AUTO_TASKS[t.task_code]) + '">一键完成</button>'
+         : t.accept_status === 'accepted' ? ''
+@@ -1694,7 +1715,8 @@ async function loadTasks() {
+         '<td>' + badge + '</td>' +
+         '<td class="acts">' + acted + '</td></tr>';
+     }).join('');
+-    st.hidden = true;
++    st.hidden = !taskSessionBlocked();
++    if (taskSessionBlocked()) st.textContent = '当前为企业上下文，仅展示官方任务记录；请返回账号列表完成个人身份重新授权。';
+     tb.hidden = false;
+   } catch (e) {
+     st.className = 'state err';
+@@ -1703,6 +1725,7 @@ async function loadTasks() {
+ }
+ 
+ $('taskBody').addEventListener('click', async ev => {
++  if (taskSessionBlocked()) return;
+   const b = ev.target.closest('button[data-t]');
+   if (!b || !taskUID) return;
+   const kind = b.dataset.t, code = b.dataset.c;
+@@ -2026,6 +2049,7 @@ function groupItems(d) {
+   const groups = [];
+   for (const a of (d.accounts || [])) {
+     const rows = [];
++    if (a.growth_error) rows.push({ kind: 'growth', code: 'session_status', status: 'skipped', message: a.growth_error });
+     for (const t of (a.growth || [])) {
+       GROWTH_TITLES[t.task_code] = t.title || t.task_code;
+       rows.push({ kind: 'growth', code: t.task_code, prog: t.target ? t.current + '/' + t.target : '—', status: 'scan' });
+diff --git a/internal/panel/autotask.go b/internal/panel/autotask.go
+index 99c9893..cfbf722 100644
+--- a/internal/panel/autotask.go
++++ b/internal/panel/autotask.go
+@@ -637,7 +637,7 @@ func (p *Panel) accountTaskAuto(w http.ResponseWriter, r *http.Request) {
+ 	// （见 auth.IsEnterpriseSession）。
+ 	if a.IsEnterpriseSession() {
+ 		writeErr(w, http.StatusUnprocessableEntity,
+-			"该账号为企业版/企业切换会话（token_source=enterprise_switch），无个人成长体系，成长任务行为事件会被上游忽略；请移除账号后以个人身份重新登录")
++			"当前凭证处于企业上下文，成长任务执行已暂停；无需移除账号，请返回账号列表点击「个人身份重新授权」，在官方授权页选择同一账号的个人身份。重新授权不保证任务资格，任务进度以官方记录为准")
+ 		return
+ 	}
+ 	var body struct {
+@@ -1279,7 +1279,7 @@ func (p *Panel) accountTaskAutoAll(w http.ResponseWriter, r *http.Request) {
+ 	// 单任务入口共用同一套动作，必须一并挡上（下游 fork 吸收本 PR 时发现的缺口）。
+ 	if a.IsEnterpriseSession() {
+ 		writeErr(w, http.StatusUnprocessableEntity,
+-			"该账号为企业版/企业切换会话（token_source=enterprise_switch），无个人成长体系，成长任务行为事件会被上游忽略；请移除账号后以个人身份重新登录")
++			"当前凭证处于企业上下文，成长任务执行已暂停；无需移除账号，请返回账号列表点击「个人身份重新授权」，在官方授权页选择同一账号的个人身份。重新授权不保证任务资格，任务进度以官方记录为准")
+ 		return
+ 	}
+ 	// per-account 互斥（与单任务动作共用一把锁）：重复点击 409。
+diff --git a/internal/panel/index.html b/internal/panel/index.html
+index d26173e..d6e9500 100644
+--- a/internal/panel/index.html
++++ b/internal/panel/index.html
+@@ -1301,6 +1301,7 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
+     <div class="body">
+       <!-- 浏览器登录 -->
+       <div id="addTabLogin" class="tab-panel">
++        <div id="addReauthNote" class="state" hidden></div>
+         <div id="addPick">
+           <div class="realm-row">
+             <span class="hint" style="font-size:12px">版本：</span>
+diff --git a/internal/panel/login.go b/internal/panel/login.go
+index 72cf538..3fc2d3a 100644
+--- a/internal/panel/login.go
++++ b/internal/panel/login.go
+@@ -18,6 +18,7 @@ import (
+ 	"net/http"
+ 	"os"
+ 	"path/filepath"
++	"strings"
+ 	"time"
+ 
+ 	"github.com/linguo2625469/workbuddy2api-panel/internal/auth"
+@@ -117,14 +118,31 @@ func doJSON(method, fullURL, bearer string, body io.Reader, origin string) (json
+ // body 可带 {"realm":"global"}（缺省 cn）；state 会话记 realm，poll 同 realm 落盘。
+ func (p *Panel) loginStart(w http.ResponseWriter, r *http.Request) {
+ 	realm := "cn"
++	reauthorizeUID := ""
+ 	if r.Body != nil {
+ 		var reqBody struct {
+-			Realm string `json:"realm"`
++			Realm          string `json:"realm"`
++			ReauthorizeUID string `json:"reauthorize_uid"`
+ 		}
+ 		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<12)).Decode(&reqBody); err == nil {
+ 			if reqBody.Realm == "global" {
+ 				realm = "global"
+ 			}
++			reauthorizeUID = reqBody.ReauthorizeUID
++		} else if err != io.EOF {
++			writeErr(w, http.StatusBadRequest, "登录参数 JSON 无效")
++			return
++		}
++	}
++	if reauthorizeUID != "" {
++		if !validUID(reauthorizeUID) {
++			writeErr(w, http.StatusBadRequest, "invalid reauthorization uid")
++			return
++		}
++		found := p.cfg.Pool.AuthByUID(reauthorizeUID)
++		if found == nil || found.Realm() != realm || !found.IsEnterpriseSession() || found.IsEnterprise() {
++			writeErr(w, http.StatusBadRequest, "该账号当前不是可重新授权的企业切换会话，请先保持同一账号与版本")
++			return
+ 		}
+ 	}
+ 	epState, _, _, origin := loginEndpoints(realm)
+@@ -148,7 +166,7 @@ func (p *Panel) loginStart(w http.ResponseWriter, r *http.Request) {
+ 			delete(p.logins, s)
+ 		}
+ 	}
+-	p.logins[st.State] = loginSession{created: time.Now(), realm: realm}
++	p.logins[st.State] = loginSession{created: time.Now(), realm: realm, reauthorizeUID: reauthorizeUID}
+ 	p.loginMu.Unlock()
+ 	log.Printf("panel: 发起 OAuth 添加账号 realm=%s（state=%s...）", realm, st.State[:min(8, len(st.State))])
+ 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "url": st.AuthURL, "state": st.State, "realm": realm})
+@@ -163,11 +181,45 @@ func (p *Panel) loginPoll(w http.ResponseWriter, r *http.Request) {
+ 	}
+ 	p.loginMu.Lock()
+ 	sess, known := p.logins[state]
++	if known && time.Since(sess.created) > loginTTL {
++		delete(p.logins, state)
++		known = false
++	}
++	if known && sess.processing {
++		p.loginMu.Unlock()
++		writeErr(w, http.StatusConflict, "授权处理中，请等待本次请求完成")
++		return
++	}
++	if known {
++		sess.processing = true
++		p.logins[state] = sess
++	}
+ 	p.loginMu.Unlock()
++	if known {
++		defer func() {
++			p.loginMu.Lock()
++			defer p.loginMu.Unlock()
++			if pending, ok := p.logins[state]; ok {
++				pending.processing = false
++				p.logins[state] = pending
++			}
++		}()
++	}
+ 	if !known {
+ 		writeErr(w, http.StatusNotFound, "unknown or expired state（请重新发起添加账号）")
+ 		return
+ 	}
++	var reauthCurrent *auth.Auth
++	if sess.reauthorizeUID != "" {
++		reauthCurrent = p.cfg.Pool.AuthByUID(sess.reauthorizeUID)
++		if reauthCurrent == nil || reauthCurrent.FilePath == "" || reauthCurrent.Realm() != sess.realm || !reauthCurrent.IsEnterpriseSession() || reauthCurrent.IsEnterprise() {
++			p.loginMu.Lock()
++			delete(p.logins, state)
++			p.loginMu.Unlock()
++			writeErr(w, http.StatusBadRequest, "原账号已移除、版本不匹配或身份已更新，请刷新账号列表后重新授权")
++			return
++		}
++	}
+ 	_, epToken, epAcct, origin := loginEndpoints(sess.realm)
+ 
+ 	// auth/token 是权威登录状态端点：pending 时业务 code 非 0（"login ing"）。
+@@ -208,6 +260,32 @@ func (p *Panel) loginPoll(w http.ResponseWriter, r *http.Request) {
+ 		writeErr(w, http.StatusBadGateway, "上游返回的 uid 含非法字符，拒绝落盘（防路径穿越）")
+ 		return
+ 	}
++	if sess.reauthorizeUID != "" {
++		if reauthCurrent == nil || acct.UID != sess.reauthorizeUID || acct.EnterpriseID != "" || (&auth.Auth{AccessToken: tok.AccessToken}).IsEnterpriseSession() {
++			p.loginMu.Lock()
++			delete(p.logins, state)
++			p.loginMu.Unlock()
++			writeErr(w, http.StatusBadRequest, "此次授权仍是企业身份或不是原账号，原凭证已保留；请在官方页面选择同一账号的个人身份后重新授权")
++			return
++		}
++	}
++
++	if sess.reauthorizeUID != "" {
++		if strings.TrimSpace(tok.RefreshToken) == "" || tok.ExpiresIn <= 0 || tok.ExpiresIn > int64((1<<63-1)/int64(time.Second)) || auth.ResolveRealm("", tok.Domain) != sess.realm {
++			p.loginMu.Lock()
++			delete(p.logins, state)
++			p.loginMu.Unlock()
++			writeErr(w, http.StatusBadGateway, "授权凭证有效期、刷新凭证或版本异常，原凭证已保留；请重新授权")
++			return
++		}
++		if p.cfg.Pool.AuthByUID(sess.reauthorizeUID) != reauthCurrent {
++			p.loginMu.Lock()
++			delete(p.logins, state)
++			p.loginMu.Unlock()
++			writeErr(w, http.StatusConflict, "原账号在授权期间已变更，原凭证未被覆盖；请刷新后重新授权")
++			return
++		}
++	}
+ 
+ 	// 凭证落盘（嵌套形，与 auths/ 目录既有格式一致）→ 热加载进池。
+ 	if err := os.MkdirAll(p.cfg.AuthDir, 0o755); err != nil {
+@@ -224,6 +302,10 @@ func (p *Panel) loginPoll(w http.ResponseWriter, r *http.Request) {
+ 		Nickname:     acct.Nickname,
+ 		FilePath:     filepath.Join(p.cfg.AuthDir, fmt.Sprintf("workbuddy-%s.json", acct.UID)),
+ 	}
++	if sess.reauthorizeUID != "" {
++		a.FilePath = reauthCurrent.FilePath
++		a.DeviceToken = reauthCurrent.DeviceToken
++	}
+ 	// global 登录：落盘 auth.realm=global（Realm() 按此判域；不写则依赖 domain 后缀回落）。
+ 	if sess.realm == "global" {
+ 		if _, err := auth.BackfillRealmFor(a, "global"); err != nil {
+@@ -239,7 +321,9 @@ func (p *Panel) loginPoll(w http.ResponseWriter, r *http.Request) {
+ 		return
+ 	}
+ 	p.cfg.Pool.Add(a)
+-	p.cfg.Pool.Revive(acct.UID) // 全新登录 = 人工恢复口径：清掉旧号遗留的禁用/冷却/熔断
++	if sess.reauthorizeUID == "" {
++		p.cfg.Pool.Revive(acct.UID) // 全新登录 = 人工恢复口径：清掉旧号遗留的禁用/冷却/熔断
++	}
+ 
+ 	// 顺带签到 + 余额刷新（幂等；失败不影响登录结果，只体现在返回字段里）。
+ 	// realm 分支：CN 走 DailyCheckin；global 无 CN 签到体系，改为注册激活 + trial 领取
+@@ -247,7 +331,9 @@ func (p *Panel) loginPoll(w http.ResponseWriter, r *http.Request) {
+ 	checkinMsg := ""
+ 	remain := int64(-1)
+ 	total := int64(0)
+-	if sess.realm == "global" {
++	if sess.reauthorizeUID != "" {
++		checkinMsg = "个人身份重新授权完成；未执行奖励或签到操作"
++	} else if sess.realm == "global" {
+ 		// 注册激活（幂等）：region required 时自动补地区（白名单首个，HK）后重新激活。
+ 		// 失败不阻断登录结果（auth 已落盘），只在返回字段里体现。
+ 		if activated, err := p.cfg.Upstream.GlobalCompleteRegistration(a); err != nil {
+@@ -271,9 +357,11 @@ func (p *Panel) loginPoll(w http.ResponseWriter, r *http.Request) {
+ 			checkinMsg = err.Error()
+ 		}
+ 	}
+-	if rm, tt, err := p.cfg.Upstream.UserResource(a); err == nil {
+-		remain, total = rm, tt
+-		p.cfg.Pool.ReenableIfCredits(acct.UID, rm, tt)
++	if sess.reauthorizeUID == "" {
++		if rm, tt, err := p.cfg.Upstream.UserResource(a); err == nil {
++			remain, total = rm, tt
++			p.cfg.Pool.ReenableIfCredits(acct.UID, rm, tt)
++		}
+ 	}
+ 
+ 	p.loginMu.Lock()
+@@ -284,7 +372,7 @@ func (p *Panel) loginPoll(w http.ResponseWriter, r *http.Request) {
+ 	// 成长任务全部无法点亮（签到/列表/额度/领养照常）。当场给出修复路径，
+ 	// 避免用户事后对着「已上报但进度 0/x」排查（见 auth.IsEnterpriseSession）。
+ 	if a.IsEnterpriseSession() && !a.IsEnterprise() {
+-		log.Printf("panel: WARN uid=%s 的凭证为企业切换会话（token_source=enterprise_switch）：成长任务行为事件会被上游静默丢弃；建议移除该账号，在浏览器退出企业切换（个人身份）后重新登录", acct.UID)
++		log.Printf("panel: WARN uid=%s 的凭证为企业切换会话（token_source=enterprise_switch）：成长任务行为事件会被上游静默丢弃；请在浏览器退出企业会话后使用个人身份重新授权", acct.UID)
+ 	}
+ 	writeJSON(w, http.StatusOK, map[string]any{
+ 		"done":            true,
+@@ -294,6 +382,12 @@ func (p *Panel) loginPoll(w http.ResponseWriter, r *http.Request) {
+ 		"credits":         remain,
+ 		"credits_total":   total,
+ 		"checkin_message": checkinMsg,
++		"session_kind": func() string {
++			if sess.reauthorizeUID != "" {
++				return "personal_reauthorization"
++			}
++			return "new_login"
++		}(),
+ 	})
+ }
+ 
+diff --git a/internal/panel/panel.go b/internal/panel/panel.go
+index 90c7696..95c2377 100644
+--- a/internal/panel/panel.go
++++ b/internal/panel/panel.go
+@@ -127,8 +127,10 @@ const loginTTL = 15 * time.Minute
+ 
+ // loginSession 进行中的 OAuth 会话：创建时刻 + realm（cn/global，用于落盘与端点切换）。
+ type loginSession struct {
+-	created time.Time
+-	realm   string // "cn" / "global"，缺省 cn
++	created        time.Time
++	realm          string // "cn" / "global"，缺省 cn
++	reauthorizeUID string
++	processing     bool
+ }
+ 
+ // New 构建面板。
+@@ -261,6 +263,15 @@ func (p *Panel) overview(w http.ResponseWriter, r *http.Request) {
+ 	if p.cfg.StickyCount != nil {
+ 		sticky = p.cfg.StickyCount()
+ 	}
++	type accountView struct {
++		pool.Status
++		EnterpriseSession bool `json:"enterprise_session"`
++	}
++	accountViews := make([]accountView, 0)
++	for _, account := range p.cfg.Pool.List() {
++		a := p.cfg.Pool.AuthByUID(account.UID)
++		accountViews = append(accountViews, accountView{Status: account, EnterpriseSession: a != nil && a.IsEnterpriseSession()})
++	}
+ 	writeJSON(w, http.StatusOK, map[string]any{
+ 		"version":         p.cfg.Version,
+ 		"uptime_sec":      int(time.Since(p.started).Seconds()),
+@@ -273,14 +284,14 @@ func (p *Panel) overview(w http.ResponseWriter, r *http.Request) {
+ 		"disabled":        disabled,
+ 		"paused":          paused,
+ 		"in_flight_full":  inFlightFull,
+-		"accounts":        p.cfg.Pool.List(),
++		"accounts":        accountViews,
+ 		// model_locks 模型级限流全清单（哪些模型不能用、锁了几个号、还要锁多久）：
+ 		// 与 accounts 的账号池视图互补，前端「模型锁池」表直接渲染。无锁时为 null。
+ 		"model_locks": p.cfg.Pool.ModelLockView(),
+ 		// 到期提醒快照的节奏与年龄：界面轮询是 5 秒级，但卡片数据只随余额后台刷新
+ 		// 更新（默认每 5 分钟）——把这两个数透出，前端才能如实标注「x 分钟前更新」。
+-		"balance_refresh_sec":    p.balanceRefreshSec(),
+-		"balance_refreshed_at":   p.balanceRefreshedAt(),
++		"balance_refresh_sec":  p.balanceRefreshSec(),
++		"balance_refreshed_at": p.balanceRefreshedAt(),
+ 	})
+ }
+ 
+diff --git a/internal/panel/taskcenter.go b/internal/panel/taskcenter.go
+index f63ac68..2ca21ea 100644
+--- a/internal/panel/taskcenter.go
++++ b/internal/panel/taskcenter.go
+@@ -82,6 +82,10 @@ func (p *Panel) tasksScanAll(w http.ResponseWriter, r *http.Request) {
+ 			if a.IsEnterprise() {
+ 				return
+ 			}
++			if a.IsEnterpriseSession() {
++				it.GrowthErr = "当前凭证处于企业上下文，成长任务已跳过；无需移除账号，请在账号列表点击「个人身份重新授权」"
++				return
++			}
+ 			if tasks, err := p.cfg.Upstream.ListTasks(a); err != nil {
+ 				it.GrowthErr = err.Error()
+ 			} else {
+@@ -231,7 +235,7 @@ func (p *Panel) startGrowthQueue(concurrency int, growth bool) (started bool, to
+ 				return
+ 			}
+ 			if a.IsEnterpriseSession() {
+-				log.Printf("panel: WARN 队列跳过 uid=%s nickname=%q：凭证为企业切换会话（token_source=enterprise_switch），成长任务行为事件会被上游静默丢弃；请移除该账号，在浏览器退出企业切换（个人身份）后重新登录", a.UID, a.Nickname)
++				log.Printf("panel: WARN 队列跳过 uid=%s nickname=%q：凭证为企业切换会话（token_source=enterprise_switch），成长任务已跳过；无需移除账号，请从账号列表发起「个人身份重新授权」，在官方授权页选择同一账号的个人身份", a.UID, a.Nickname)
+ 				return
+ 			}
+ 			if growth {
+diff --git a/internal/panel/login_reauthorization_test.go b/internal/panel/login_reauthorization_test.go
+new file mode 100644
+index 0000000..2b5a146
+--- /dev/null
++++ b/internal/panel/login_reauthorization_test.go
+@@ -0,0 +1,334 @@
++package panel
++
++import (
++	"bytes"
++	"encoding/base64"
++	"encoding/json"
++	"fmt"
++	"io"
++	"net/http"
++	"net/http/httptest"
++	"os"
++	"path/filepath"
++	"strings"
++	"testing"
++	"time"
++
++	"github.com/linguo2625469/workbuddy2api-panel/internal/auth"
++	"github.com/linguo2625469/workbuddy2api-panel/internal/pool"
++)
++
++type loginRoundTripFunc func(*http.Request) (*http.Response, error)
++
++func (f loginRoundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
++
++func enterpriseSwitchToken() string {
++	payload := base64.RawURLEncoding.EncodeToString([]byte(`{"token_source":"enterprise_switch"}`))
++	return "x." + payload + ".x"
++}
++
++func reauthPanel(t *testing.T, accountUID, tokenUID string) (*Panel, *auth.Auth) {
++	t.Helper()
++	p := pool.New("")
++	old := &auth.Auth{UID: accountUID, AccessToken: enterpriseSwitchToken(), Domain: "copilot.tencent.com", FilePath: filepath.Join(t.TempDir(), "old.json")}
++	p.Add(old)
++	return New(Config{Pool: p, AuthDir: t.TempDir()}), old
++}
++
++func withLoginTransport(t *testing.T, uid string, token string) {
++	t.Helper()
++	previous := loginHTTP
++	loginHTTP = &http.Client{Transport: loginRoundTripFunc(func(r *http.Request) (*http.Response, error) {
++		var body string
++		switch {
++		case strings.Contains(r.URL.Path, "/auth/state"):
++			body = `{"code":0,"data":{"state":"state-reauth","authUrl":"https://example.invalid/login"}}`
++		case strings.Contains(r.URL.Path, "/auth/token"):
++			body = `{"code":0,"data":{"accessToken":"` + token + `","refreshToken":"refresh","expiresIn":3600,"domain":"copilot.tencent.com"}}`
++		default:
++			body = `{"code":0,"data":{"uid":"` + uid + `","nickname":"personal"}}`
++		}
++		return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(body))}, nil
++	})}
++	t.Cleanup(func() { loginHTTP = previous })
++}
++
++func TestReauthorizationSuccessPreservesPathAndSkipsRewards(t *testing.T) {
++	p, old := reauthPanel(t, "uid-1", "uid-1")
++	withLoginTransport(t, "uid-1", "personal-token")
++	start := httptest.NewRecorder()
++	p.loginStart(start, httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"reauthorize_uid":"uid-1"}`)))
++	if start.Code != http.StatusOK {
++		t.Fatalf("start status=%d body=%s", start.Code, start.Body)
++	}
++	var started struct {
++		State string `json:"state"`
++	}
++	_ = json.Unmarshal(start.Body.Bytes(), &started)
++	poll := httptest.NewRecorder()
++	p.loginPoll(poll, httptest.NewRequest(http.MethodGet, "/?state="+started.State, nil))
++	if poll.Code != http.StatusOK {
++		t.Fatalf("poll status=%d body=%s", poll.Code, poll.Body)
++	}
++	if got := p.cfg.Pool.AuthByUID("uid-1"); got == nil || got.FilePath != old.FilePath || got.AccessToken != "personal-token" {
++		t.Fatalf("reauth did not preserve account path/state: %#v", got)
++	}
++	if strings.Contains(poll.Body.String(), "reward") || !strings.Contains(poll.Body.String(), "personal_reauthorization") {
++		t.Fatalf("unexpected reauth response: %s", poll.Body)
++	}
++}
++
++func TestReauthorizationRejectsMismatchAndExpiredWithoutNetwork(t *testing.T) {
++	p, _ := reauthPanel(t, "uid-1", "uid-1")
++	called := false
++	oldHTTP := loginHTTP
++	loginHTTP = &http.Client{Transport: loginRoundTripFunc(func(*http.Request) (*http.Response, error) { called = true; return nil, nil })}
++	t.Cleanup(func() { loginHTTP = oldHTTP })
++	p.loginMu.Lock()
++	p.logins["expired"] = loginSession{created: time.Now().Add(-loginTTL - time.Second), realm: "cn", reauthorizeUID: "uid-1"}
++	p.loginMu.Unlock()
++	rec := httptest.NewRecorder()
++	p.loginPoll(rec, httptest.NewRequest(http.MethodGet, "/?state=expired", nil))
++	if rec.Code != http.StatusNotFound || called {
++		t.Fatalf("expired poll code=%d called=%v", rec.Code, called)
++	}
++	p.loginMu.Lock()
++	p.logins["missing"] = loginSession{created: time.Now(), realm: "cn", reauthorizeUID: "missing"}
++	p.loginMu.Unlock()
++	rec = httptest.NewRecorder()
++	p.loginPoll(rec, httptest.NewRequest(http.MethodGet, "/?state=missing", nil))
++	if rec.Code != http.StatusBadRequest || called {
++		t.Fatalf("missing account code=%d called=%v", rec.Code, called)
++	}
++}
++
++// Candidate validation must precede persistence: every failure preserves exact bytes.
++func TestReauthorizationRejectsInvalidCandidateWithoutOverwrite(t *testing.T) {
++	cases := []struct {
++		name, uid, token, enterprise, domain, refresh string
++		expires                                       int64
++	}{
++		{"wrong_uid", "other", "personal", "", "copilot.tencent.com", "refresh", 3600},
++		{"enterprise_switch", "uid-1", enterpriseSwitchToken(), "", "copilot.tencent.com", "refresh", 3600},
++		{"enterprise_id", "uid-1", "personal", "organization", "copilot.tencent.com", "refresh", 3600},
++		{"wrong_realm", "uid-1", "personal", "", "www.workbuddy.ai", "refresh", 3600},
++		{"zero_expiry", "uid-1", "personal", "", "copilot.tencent.com", "refresh", 0},
++		{"negative_expiry", "uid-1", "personal", "", "copilot.tencent.com", "refresh", -1},
++		{"overflow_expiry", "uid-1", "personal", "", "copilot.tencent.com", "refresh", 1<<63 - 1},
++		{"no_refresh", "uid-1", "personal", "", "copilot.tencent.com", "", 3600},
++	}
++	for _, tc := range cases {
++		t.Run(tc.name, func(t *testing.T) {
++			p, old := reauthPanel(t, "uid-1", "uid-1")
++			if err := old.SaveAtomic(); err != nil {
++				t.Fatal(err)
++			}
++			before, err := os.ReadFile(old.FilePath)
++			if err != nil {
++				t.Fatal(err)
++			}
++			previous := loginHTTP
++			calls := 0
++			loginHTTP = &http.Client{Transport: loginRoundTripFunc(func(r *http.Request) (*http.Response, error) {
++				calls++
++				var data any
++				switch r.URL.Path {
++				case "/v2/plugin/auth/token":
++					data = map[string]any{"accessToken": tc.token, "refreshToken": tc.refresh, "expiresIn": tc.expires, "domain": tc.domain}
++				case "/v2/plugin/login/account":
++					data = map[string]any{"uid": tc.uid, "enterpriseId": tc.enterprise}
++				default:
++					t.Errorf("unexpected upstream operation %s", r.URL.Path)
++				}
++				b, _ := json.Marshal(map[string]any{"code": 0, "data": data})
++				return &http.Response{StatusCode: 200, Body: io.NopCloser(bytes.NewReader(b)), Header: http.Header{}}, nil
++			})}
++			t.Cleanup(func() { loginHTTP = previous })
++			p.logins["candidate"] = loginSession{created: time.Now(), realm: "cn", reauthorizeUID: old.UID}
++			rec := httptest.NewRecorder()
++			p.loginPoll(rec, httptest.NewRequest("GET", "/?state=candidate", nil))
++			if rec.Code < 400 {
++				t.Fatalf("invalid candidate accepted: %d", rec.Code)
++			}
++			after, err := os.ReadFile(old.FilePath)
++			if err != nil || !bytes.Equal(before, after) || p.cfg.Pool.AuthByUID(old.UID) != old {
++				t.Fatal("invalid candidate changed credential")
++			}
++			if calls != 2 {
++				t.Fatalf("unexpected network calls: %d", calls)
++			}
++			if _, ok := p.logins["candidate"]; ok {
++				t.Fatal("rejected authorization should be discarded")
++			}
++		})
++	}
++}
++
++func TestReauthorizationPreservesDisabledPausedAndDeviceState(t *testing.T) {
++	p, old := reauthPanel(t, "uid-1", "uid-1")
++	old.DeviceToken = "fixture-device"
++	if err := old.SaveAtomic(); err != nil {
++		t.Fatal(err)
++	}
++	p.cfg.Pool.Disable(old.UID, "fixture disabled")
++	p.cfg.Pool.Pause(old.UID)
++	p.cfg.Pool.SetCredits(old.UID, 100, 200)
++	before, _ := p.cfg.Pool.Status(old.UID)
++	withLoginTransport(t, old.UID, "new-personal")
++	p.logins["preserve"] = loginSession{created: time.Now(), realm: "cn", reauthorizeUID: old.UID}
++	rec := httptest.NewRecorder()
++	p.loginPoll(rec, httptest.NewRequest("GET", "/?state=preserve", nil))
++	if rec.Code != 200 {
++		t.Fatalf("status=%d body=%s", rec.Code, rec.Body)
++	}
++	after, _ := p.cfg.Pool.Status(old.UID)
++	got := p.cfg.Pool.AuthByUID(old.UID)
++	if !after.Disabled || !after.Paused || after.Reason != before.Reason || after.Credits != before.Credits || got.DeviceToken != old.DeviceToken {
++		t.Fatal("reauthorization reset runtime/device state")
++	}
++	if _, ok := p.logins["preserve"]; ok {
++		t.Fatal("completed state not consumed")
++	}
++	rec = httptest.NewRecorder()
++	p.loginPoll(rec, httptest.NewRequest("GET", "/?state=preserve", nil))
++	if rec.Code != 404 {
++		t.Fatalf("replay status=%d", rec.Code)
++	}
++}
++
++func TestReauthorizationSaveFailurePreservesAccountAndReleasesLease(t *testing.T) {
++	p, old := reauthPanel(t, "uid-1", "uid-1")
++	// An existing directory as the atomic temp-file path makes saving fail deterministically.
++	if err := os.Mkdir(old.FilePath+".tmp", 0700); err != nil {
++		t.Fatal(err)
++	}
++	withLoginTransport(t, old.UID, "personal")
++	p.logins["failure"] = loginSession{created: time.Now(), realm: "cn", reauthorizeUID: old.UID}
++	rec := httptest.NewRecorder()
++	p.loginPoll(rec, httptest.NewRequest("GET", "/?state=failure", nil))
++	if rec.Code != 500 || p.cfg.Pool.AuthByUID(old.UID) != old {
++		t.Fatalf("failed save altered account: status=%d", rec.Code)
++	}
++	if s, ok := p.logins["failure"]; !ok || s.processing {
++		t.Fatal("save failure lost state or retained processing lease")
++	}
++	if err := os.Remove(old.FilePath + ".tmp"); err != nil {
++		t.Fatal(err)
++	}
++	rec = httptest.NewRecorder()
++	p.loginPoll(rec, httptest.NewRequest("GET", "/?state=failure", nil))
++	if rec.Code != 200 {
++		t.Fatalf("retry status=%d body=%s", rec.Code, rec.Body)
++	}
++}
++
++func TestReauthorizationConcurrentPollUsesOneCompletion(t *testing.T) {
++	p, old := reauthPanel(t, "uid-1", "uid-1")
++	started, release := make(chan struct{}), make(chan struct{})
++	previous := loginHTTP
++	loginHTTP = &http.Client{Transport: loginRoundTripFunc(func(r *http.Request) (*http.Response, error) {
++		var body string
++		if r.URL.Path == "/v2/plugin/auth/token" {
++			close(started)
++			<-release
++			body = `{"code":0,"data":{"accessToken":"personal","refreshToken":"fixture","expiresIn":3600,"domain":"copilot.tencent.com"}}`
++		} else if r.URL.Path == "/v2/plugin/login/account" {
++			body = `{"code":0,"data":{"uid":"uid-1"}}`
++		} else {
++			t.Errorf("unexpected endpoint: %s", r.URL.Path)
++		}
++		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(body)), Header: http.Header{}}, nil
++	})}
++	t.Cleanup(func() { loginHTTP = previous })
++	p.logins["concurrent"] = loginSession{created: time.Now(), realm: "cn", reauthorizeUID: old.UID}
++	first := httptest.NewRecorder()
++	done := make(chan struct{})
++	go func() { defer close(done); p.loginPoll(first, httptest.NewRequest("GET", "/?state=concurrent", nil)) }()
++	<-started
++	second := httptest.NewRecorder()
++	p.loginPoll(second, httptest.NewRequest("GET", "/?state=concurrent", nil))
++	close(release)
++	<-done
++	if first.Code != 200 || second.Code != 409 {
++		t.Fatalf("statuses first=%d second=%d", first.Code, second.Code)
++	}
++}
++
++func TestReauthorizationStartRejectsInvalidInputBeforeNetwork(t *testing.T) {
++	p, _ := reauthPanel(t, "uid-1", "uid-1")
++	previous := loginHTTP
++	loginHTTP = &http.Client{Transport: loginRoundTripFunc(func(*http.Request) (*http.Response, error) {
++		t.Error("invalid input triggered network")
++		return nil, fmt.Errorf("unexpected network")
++	})}
++	t.Cleanup(func() { loginHTTP = previous })
++	for _, body := range []string{`{"reauthorize_uid":`, `{"reauthorize_uid":"missing"}`, `{"reauthorize_uid":"uid-1","realm":"global"}`} {
++		rec := httptest.NewRecorder()
++		p.loginStart(rec, httptest.NewRequest("POST", "/", strings.NewReader(body)))
++		if rec.Code != 400 {
++			t.Fatalf("input %s: status=%d", body, rec.Code)
++		}
++	}
++}
++
++func TestReauthorizationOverviewReportsContextWithoutCredentials(t *testing.T) {
++	p, old := reauthPanel(t, "uid-1", "uid-1")
++	rec := httptest.NewRecorder()
++	p.overview(rec, httptest.NewRequest("GET", "/", nil))
++	var data struct {
++		Accounts []struct {
++			Enterprise bool `json:"enterprise"`
++			Session    bool `json:"enterprise_session"`
++		}
++	}
++	if err := json.Unmarshal(rec.Body.Bytes(), &data); err != nil {
++		t.Fatal(err)
++	}
++	if len(data.Accounts) != 1 || data.Accounts[0].Enterprise || !data.Accounts[0].Session {
++		t.Fatalf("incorrect context: %s", rec.Body)
++	}
++	if strings.Contains(rec.Body.String(), old.AccessToken) {
++		t.Fatal("overview leaked credential")
++	}
++}
++
++func TestReauthorizationGlobalUsesMatchingEndpointsAndDomain(t *testing.T) {
++	auth.SetGlobalEnabled(true)
++	t.Cleanup(func() { auth.SetGlobalEnabled(true) })
++	p, old := reauthPanel(t, "uid-1", "uid-1")
++	old.Domain = "www.workbuddy.ai"
++	if _, err := auth.BackfillRealmFor(old, "global"); err != nil {
++		t.Fatal(err)
++	}
++	previous := loginHTTP
++	calls := 0
++	loginHTTP = &http.Client{Transport: loginRoundTripFunc(func(r *http.Request) (*http.Response, error) {
++		calls++
++		if r.URL.Host != "www.workbuddy.ai" {
++			t.Errorf("wrong realm host: %s", r.URL.Host)
++		}
++		var body string
++		switch r.URL.Path {
++		case "/v2/plugin/auth/state":
++			body = `{"code":0,"data":{"state":"global-state","authUrl":"https://www.workbuddy.ai/login"}}`
++		case "/v2/plugin/auth/token":
++			body = `{"code":0,"data":{"accessToken":"personal","refreshToken":"fixture","expiresIn":3600,"domain":"www.workbuddy.ai"}}`
++		case "/v2/plugin/login/account":
++			body = `{"code":0,"data":{"uid":"uid-1"}}`
++		default:
++			t.Errorf("unexpected request: %s", r.URL.Path)
++		}
++		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(body)), Header: http.Header{}}, nil
++	})}
++	t.Cleanup(func() { loginHTTP = previous })
++	rec := httptest.NewRecorder()
++	p.loginStart(rec, httptest.NewRequest("POST", "/", strings.NewReader(`{"realm":"global","reauthorize_uid":"uid-1"}`)))
++	if rec.Code != 200 {
++		t.Fatalf("start status=%d body=%s", rec.Code, rec.Body)
++	}
++	rec = httptest.NewRecorder()
++	p.loginPoll(rec, httptest.NewRequest("GET", "/?state=global-state", nil))
++	if rec.Code != 200 || calls != 3 || p.cfg.Pool.AuthByUID(old.UID).Realm() != "global" {
++		t.Fatalf("global recovery failed status=%d calls=%d", rec.Code, calls)
++	}
++}
+diff --git a/internal/panel/session_recovery_ui_test.go b/internal/panel/session_recovery_ui_test.go
+new file mode 100644
+index 0000000..6ea6032
+--- /dev/null
++++ b/internal/panel/session_recovery_ui_test.go
+@@ -0,0 +1,93 @@
++package panel
++
++import (
++	"encoding/base64"
++	"encoding/json"
++	"net/http/httptest"
++	"os"
++	"os/exec"
++	"strings"
++	"testing"
++
++	"github.com/linguo2625469/workbuddy2api-panel/internal/auth"
++	"github.com/linguo2625469/workbuddy2api-panel/internal/pool"
++)
++
++func TestEnterpriseSessionTaskRoutesRejectBeforeMutation(t *testing.T) {
++	// token_source is deliberately a fixture-only JWT payload; no upstream call is made.
++	payload, _ := json.Marshal(map[string]string{"token_source": "enterprise_switch"})
++	token := "e30." + base64.RawURLEncoding.EncodeToString(payload) + ".fixture"
++	a := &auth.Auth{UID: "enterprise-switch", AccessToken: token}
++	accounts := pool.New("")
++	accounts.Add(a)
++	p := New(Config{APIKey: "fixture-key", Pool: accounts})
++	for _, path := range []string{
++		"/panel/api/accounts/enterprise-switch/tasks/auto",
++		"/panel/api/accounts/enterprise-switch/tasks/auto_all",
++	} {
++		req := httptest.NewRequest("POST", path, strings.NewReader(`{"task_code":"fixture"}`))
++		req.Header.Set("Authorization", "Bearer fixture-key")
++		rec := httptest.NewRecorder()
++		p.ServeHTTP(rec, req)
++		if rec.Code != 422 {
++			t.Fatalf("%s status=%d body=%s", path, rec.Code, rec.Body.String())
++		}
++		body := rec.Body.String()
++		if !strings.Contains(body, "无需移除账号") || !strings.Contains(body, "个人身份重新授权") {
++			t.Fatalf("%s recovery guidance missing: %s", path, body)
++		}
++	}
++}
++
++func TestEnterpriseSessionTaskScanRejectsBeforeUpstream(t *testing.T) {
++	payload, _ := json.Marshal(map[string]string{"token_source": "enterprise_switch"})
++	token := "e30." + base64.RawURLEncoding.EncodeToString(payload) + ".fixture"
++	accounts := pool.New("")
++	accounts.Add(&auth.Auth{UID: "enterprise-scan", AccessToken: token})
++	p := New(Config{APIKey: "fixture-key", Pool: accounts})
++	req := httptest.NewRequest("POST", "/panel/api/tasks/scan_all", strings.NewReader(`{}`))
++	req.Header.Set("Authorization", "Bearer fixture-key")
++	rec := httptest.NewRecorder()
++	p.ServeHTTP(rec, req)
++	if rec.Code != 200 || !strings.Contains(rec.Body.String(), "growth_error") || !strings.Contains(rec.Body.String(), "个人身份重新授权") {
++		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
++	}
++}
++
++func TestAddAccountButtonDoesNotReuseReauthorizationUID(t *testing.T) {
++	node, err := exec.LookPath("node")
++	if err != nil {
++		t.Skip("node not installed")
++	}
++	script := `const fs=require('fs'),vm=require('vm');
++const src=fs.readFileSync(process.argv[2],'utf8');
++const start=src.indexOf('function openAdd('), end=src.indexOf("$('btnRefresh').onclick");
++if(start<0||end<start) throw Error('add-account region missing');
++const ids=['addVeil','addPick','addLoad','addReady','addDone','addErr','importDone','importErr','btnCopyUrl','btnOpenUrl','btnStartLogin','btnCloseAdd','btnAdd','addTabLogin','addTabImport','importFile','addUrl','addPoll','addReauthNote'];
++const els={}; for(const id of ids) els[id]={hidden:false,disabled:false,textContent:'',dataset:{},classList:{on:false,add(){this.on=true},remove(){this.on=false}}};
++const realms=[{value:'cn',checked:true,disabled:false},{value:'global',checked:false,disabled:false}];
++const tabs=[{dataset:{tab:'login'},classList:{on:false,toggle(v){this.on=v}}},{dataset:{tab:'import'},classList:{on:false,toggle(v){this.on=v}}}];
++const doc={querySelectorAll:(q)=>q==='input[name="addRealm"]'?realms:q==='#addTabs .tab'?tabs:[],querySelector:(q)=>q==='input[name="addRealm"]:checked'?realms.find(x=>x.checked):null};
++const ctx={console,Array,Object,JSON,encodeURIComponent,setInterval,clearInterval,document:doc,$:id=>els[id],api:()=>Promise.reject(Error('unexpected network')),toast:()=>{}};
++ vm.createContext(ctx); vm.runInContext('let loginTimer=null,loginState=null,reauthUID=null;'+src.slice(start,end),ctx); vm.runInContext('this.getReauth=()=>reauthUID',ctx);
++ctx.openAdd('enterprise-switch','global');
++if(ctx.getReauth()!=='enterprise-switch') throw Error('reauthorization UID not set');
++if(!realms[0].disabled||!realms[1].disabled||!realms[1].checked||realms[0].checked) throw Error('reauthorization realm was not locked');
++if(els.addReauthNote.hidden||!els.addReauthNote.textContent) throw Error('reauthorization notice missing');
++ctx.switchAddTab('import'); if(els.addTabLogin.hidden||!els.addTabImport.hidden) throw Error('import tab was not blocked');
++ctx.openAdd('enterprise-switch'); els.btnAdd.onclick();
++if(ctx.getReauth()!==null) throw Error('normal add retained reauthorization UID');
++if(realms[0].disabled||realms[1].disabled||!realms[0].checked||realms[1].checked||!els.addReauthNote.hidden) throw Error('normal add mode retained reauthorization state');
++if(!els.addVeil.classList.on || els.addPick.hidden || !els.addLoad.hidden || !els.addErr.hidden) throw Error('normal add mode was not reset');
++process.stdout.write('ok');`
++	tmp := t.TempDir() + "/ui.cjs"
++	if err := os.WriteFile(tmp, []byte(script), 0600); err != nil {
++		t.Fatal(err)
++	}
++	cmd := exec.Command(node, tmp, "app.js")
++	cmd.Dir = "."
++	out, err := cmd.CombinedOutput()
++	if err != nil || strings.TrimSpace(string(out)) != "ok" {
++		t.Fatalf("UI harness failed: %v output=%s", err, out)
++	}
++}

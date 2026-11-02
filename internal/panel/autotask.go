@@ -637,7 +637,7 @@ func (p *Panel) accountTaskAuto(w http.ResponseWriter, r *http.Request) {
 	// （见 auth.IsEnterpriseSession）。
 	if a.IsEnterpriseSession() {
 		writeErr(w, http.StatusUnprocessableEntity,
-			"该账号为企业版/企业切换会话（token_source=enterprise_switch），无个人成长体系，成长任务行为事件会被上游忽略；请移除账号后以个人身份重新登录")
+			"当前凭证处于企业上下文，成长任务执行已暂停；无需移除账号，请返回账号列表点击「个人身份重新授权」，在官方授权页选择同一账号的个人身份。重新授权不保证任务资格，任务进度以官方记录为准")
 		return
 	}
 	var body struct {
@@ -1279,7 +1279,7 @@ func (p *Panel) accountTaskAutoAll(w http.ResponseWriter, r *http.Request) {
 	// 单任务入口共用同一套动作，必须一并挡上（下游 fork 吸收本 PR 时发现的缺口）。
 	if a.IsEnterpriseSession() {
 		writeErr(w, http.StatusUnprocessableEntity,
-			"该账号为企业版/企业切换会话（token_source=enterprise_switch），无个人成长体系，成长任务行为事件会被上游忽略；请移除账号后以个人身份重新登录")
+			"当前凭证处于企业上下文，成长任务执行已暂停；无需移除账号，请返回账号列表点击「个人身份重新授权」，在官方授权页选择同一账号的个人身份。重新授权不保证任务资格，任务进度以官方记录为准")
 		return
 	}
 	// per-account 互斥（与单任务动作共用一把锁）：重复点击 409。

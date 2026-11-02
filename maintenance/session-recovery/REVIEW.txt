@@ -1,0 +1,6 @@
+Independent review: /root/api_audit (project repo_explorer used read-only; no source writes).
+Initial findings: realm/domain mismatch, invalid lifetime/refresh, concurrent completion/save failure recovery, misleading task scan/UI and global realm button wiring.
+Remediation: bounded positive token lifetime and nonblank refresh; same identity/current account/original path checks; token-domain realm check; mutex processing lease with deferred release and successful-state consumption; explicit per-account scan skip reason and readonly task UI; data-r passed to personal reauthorization modal.
+Reviewer final status: no additional release-blocking defect in reviewed diff after global wiring fix. Actual deterministic tests executed by coordinator; report-only agent claims were not accepted as test evidence.
+Checkin remains visible for enterprise-switch sessions because this is not equivalent to enterpriseId, and prior real authorized checkin returned success/100 credit delta. This fix does not invoke checkin automatically on reauthorization.
+Residual: token_source is a local context heuristic, not an official entitlement contract. A non-enterprise credential does not guarantee task qualification/progress/reward. Manual same-account personal OAuth remains pending. No synthetic completion event, live task action, reward, or chat was sent during this repair.
