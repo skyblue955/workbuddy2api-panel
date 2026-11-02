@@ -12,5 +12,17 @@ PASS: unauthenticated gateway model/capability requests rejected401.
 
 Isolation: used CLI url/poll only, not login.sh or panel login completion. No server scheduler started. HTTP transport strictly allowed only model catalogue/capabilities and resource-query endpoints; redirects denied; other upstream paths blocked. Gateway tested through its actual in-memory HTTP handler; prior Docker smoke separately covered real HTTP listener/transport. Credential bundle0600 under Git-ignored data/live-acceptance/, directory0700. Logs suppressed; no account identifiers, balances or credentials in Git evidence.
 
-NOT EXECUTED: model inference (including streaming), token refresh, sign-in, task completion, reward claims, redemption, adoption, region registration or agreement acceptance. Counts: inference0, reward mutations0, refresh0.
-These results prove current ordinary-account login/model discovery/resource querying only. They do not prove chat inference or credit receipt. Next inference validation may consume credits and requires explicit user approval of bounded requests; any reward state change requires separate account/action/effect approval.
+NOT EXECUTED DURING THIS READ-ONLY PHASE: model inference (including streaming), token refresh, sign-in, task completion, reward claims, redemption, adoption, region registration or agreement acceptance. Counts for that phase: inference0, reward mutations0, refresh0.
+The read-only phase by itself proves ordinary-account login/model discovery/resource querying only.
+
+Subsequent separately authorized chat acceptance — 2026-11-02T21:10:13+08:00
+User explicitly approved two short requests, one non-streaming and one streaming, output budget16, thinking disabled and no automatic retries. Execution: GOCACHE=/private/tmp/workbuddy-gocache go run ./data/live-acceptance/chat ; exit0.
+Model deepseek-v4-flash selected from the actual model catalogue (eligible non-only-reasoning candidate; output budget checked at transport). Actual model HTTP requests2, both upstream and gateway200; responses matched OK, schema valid, reasoning output absent. Non-stream elapsed1835ms; stream elapsed2112ms with terminal[DONE]. Reward mutations0. See live-chat-result.json. This tested max_completion_tokens alias through the real gateway, not a mock response.
+
+Subsequent separately authorized daily sign-in — 2026-11-02T21:41:16+08:00
+User explicitly approved exactly one daily sign-in for the current ordinary account. The first attempted launch before this time was NOT executed: automatic approval review hit a usage limit; no check-in file/result existed. After user continuation, the same escalated path was approved. No approval check was bypassed.
+Execution: GOCACHE=/private/tmp/workbuddy-gocache go run ./data/live-acceptance/checkin ; exit0.
+Actual sign-in HTTP requests1; additional sign-in requests0; HTTP200/business_code0, accepted=true, already_checked_in=false. Two authorized read-only balance queries succeeded. Observed balance delta+100 credits across sign-in; absolute balances and account identity redacted. This is an observed interval delta, not proof excluding unrelated concurrent account changes. No other reward mutations. See live-checkin-result.json.
+
+Current scope/limits
+The two-request chat budget and one-sign-in budget are now fully consumed; do not repeat these live actions without renewed authorization. No duplicate real sign-in test, token-refresh live test, tool-calling live test, other models/accounts, new-campaign claim, redemption, adoption, region registration, drawing/lottery or agreement acceptance was performed. Those behaviors remain mock-tested or unverified as stated elsewhere. Normal/streaming chat and one daily sign-in are verified for this account at the recorded time, not guaranteed for all accounts or future upstream policy changes.

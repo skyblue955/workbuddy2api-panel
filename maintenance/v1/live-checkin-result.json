@@ -1,0 +1,22 @@
+{
+  "account_and_balances_redacted": true,
+  "actual_checkin_requests": 1,
+  "additional_checkin_attempts_blocked": 0,
+  "authorization": "user explicitly approved one daily check-in",
+  "balance_after_valid": true,
+  "balance_before_valid": true,
+  "balance_queries": 2,
+  "checkin": {
+    "accepted": true,
+    "already_checked_in": false,
+    "business_code": 0,
+    "http_status": 200,
+    "outcome_uncertain": false,
+    "passed": true
+  },
+  "credential_values_redacted": true,
+  "credit_increase_observed": true,
+  "observed_credit_delta": 100,
+  "other_reward_mutations": 0,
+  "time": "2026-11-02T21:41:16+08:00"
+}
