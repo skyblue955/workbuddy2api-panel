@@ -18,7 +18,8 @@ Persist /app/auths and /app/data, mount a private config file; do not expose por
 Client contract
 Authenticated GET /v1/capabilities explains supported surfaces. Use /v1/chat/completions for supported chat clients; Responses and full Anthropic Messages are explicitly501, not translated by guesswork. /v1/search/messages remains search-only. Malformed/missing route fields return400 before account selection. Body limit64MiB returns413 before upstream. /panel/api/activities is authenticated, read-only and does not discover or claim account rewards.
 
-Official account prerequisites (must be completed locally by user)
+Optional third-party Open API connector prerequisites (NOT required for existing ordinary-account gateway login)
+The original project still uses personal-account plugin/device authorization (panel Add Account or login.sh); no developer registration is required for that route. Its upstream-supplied authUrl carries session context, so simply visiting the generic /login/ page is not equivalent. Original login completion also triggers check-in/global registration/trial actions; these must be separated or explicitly approved before read-only account acceptance. The following steps apply ONLY when opting into the new Open API redemption channel:
 1. https://open.workbuddy.cn/ : create/enable a third-party credits app, register exact redirect URI and request user.credit.exchange scope. Reference https://open.workbuddy.cn/docs/third-party-app and /docs/openapi.
 2. Keep client secret in a local process environment WORKBUDDY_OPEN_CLIENT_SECRET or inject from a password manager; never paste into chat, command arguments, source or logs. Ensure separate private directory exists (mode0700).
 3. Generate authorization URL and one-use state file:
