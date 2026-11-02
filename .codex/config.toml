@@ -1,0 +1,30 @@
+# Project-local Codex agent defaults. These settings apply only to this repository.
+[agents]
+enabled = true
+max_concurrent_threads_per_session = 3
+default_subagent_model = "gpt-5.6-luna"
+default_subagent_reasoning_effort = "medium"
+
+[agents.repo_explorer]
+description = "Read-only repository investigator; maps modules, call paths, tests, and evidence."
+config_file = "agents/repo_explorer.toml"
+
+[agents.implementer]
+description = "Implements one narrowly scoped task, adds relevant tests, and reports actual results."
+config_file = "agents/implementer.toml"
+
+[agents.test_engineer]
+description = "Designs and runs targeted tests, diagnoses failures, and avoids overlapping implementation edits."
+config_file = "agents/test_engineer.toml"
+
+[agents.reviewer]
+description = "Independently reviews diffs for correctness, regressions, edge cases, and test gaps."
+config_file = "agents/reviewer.toml"
+
+[agents.security_reviewer]
+description = "Reviews high-risk changes involving credentials, authentication, logs, paths, concurrency, and input validation."
+config_file = "agents/security_reviewer.toml"
+
+[agents.docs_release]
+description = "Updates user/developer documentation and prepares release notes after behavior is settled."
+config_file = "agents/docs_release.toml"
