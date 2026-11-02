@@ -971,7 +971,26 @@ func TestChatModelForbiddenByAccountTypeReturns400(t *testing.T) {
 }
 
 func TestModelsEndpoint(t *testing.T) {
-	h := NewHandler(Config{Pool: testPoolWith(&auth.Auth{UID: "u1", AccessToken: "at", ExpiresAt: 9999999999}), Upstream: upstream.New()})
+	// Keep this endpoint test deterministic: /v1/models must not contact the
+	// live CN service just to discover the model list.  The existing model
+	// failure tests below cover the empty/failed fetch response shape.
+	dynamicModelsCache.Lock()
+	dynamicModelsCache.ids = nil
+	dynamicModelsCache.fetched = time.Time{}
+	dynamicModelsCache.lastFail = time.Time{}
+	dynamicModelsCache.Unlock()
+	t.Cleanup(func() {
+		dynamicModelsCache.Lock()
+		dynamicModelsCache.ids = nil
+		dynamicModelsCache.fetched = time.Time{}
+		dynamicModelsCache.lastFail = time.Time{}
+		dynamicModelsCache.Unlock()
+	})
+	const modelsFixture = `{"code":0,"data":{"models":[{"id":"glm-5.2","maxInputTokens":131072,"maxOutputTokens":32768},{"id":"deepseek-v3","maxInputTokens":131072,"maxOutputTokens":16384},{"id":"qwen-3","maxInputTokens":65536,"maxOutputTokens":8192},{"id":"gpt-5","maxInputTokens":131072,"maxOutputTokens":16384},{"id":"kimi-k2","maxInputTokens":131072,"maxOutputTokens":16384}],"agents":[{"name":"cli","models":["glm-5.2","deepseek-v3","qwen-3","gpt-5","kimi-k2"]}]}}`
+	up := newFakeUpstream(t, func(authz string) (int, string, bool) {
+		return http.StatusOK, modelsFixture, false
+	})
+	h := NewHandler(Config{Pool: testPoolWith(&auth.Auth{UID: "u1", AccessToken: "at", ExpiresAt: 9999999999}), Upstream: up})
 	req := httptest.NewRequest("GET", "/v1/models", nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
@@ -979,18 +998,30 @@ func TestModelsEndpoint(t *testing.T) {
 		t.Fatalf("code=%d", rec.Code)
 	}
 	var resp map[string]any
-	json.Unmarshal(rec.Body.Bytes(), &resp)
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v body=%s", err, rec.Body)
+	}
 	if resp["object"] != "list" {
 		t.Errorf("object=%v", resp["object"])
 	}
-	data := resp["data"].([]any)
-	if len(data) < 5 {
-		t.Errorf("models count=%d", len(data))
+	data, ok := resp["data"].([]any)
+	if !ok {
+		t.Fatalf("data has unexpected type: %T", resp["data"])
+	}
+	if len(data) != 5 {
+		t.Errorf("models count=%d want 5 fixture models", len(data))
 	}
 	found := false
 	for _, m := range data {
-		if m.(map[string]any)["id"] == "cn:glm-5.2" {
+		mm, ok := m.(map[string]any)
+		if !ok {
+			t.Fatalf("model has unexpected type: %T", m)
+		}
+		if mm["id"] == "cn:glm-5.2" {
 			found = true
+			if mm["context_length"] != float64(131072) || mm["max_output_tokens"] != float64(32768) {
+				t.Errorf("glm-5.2 schema=%v", mm)
+			}
 		}
 	}
 	if !found {

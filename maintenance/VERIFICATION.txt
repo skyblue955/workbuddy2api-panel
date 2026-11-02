@@ -1,0 +1,52 @@
+Maintenance acceptance — 2026-11-02 Asia/Shanghai
+Branch: maintenance/phase1-foundation
+Baseline: 0486572604977142d000e75bfe4af7c00d0219c9
+Changed fields/branches: secure startup failure branch; secret-bearing debug output removed; Search Error.RetryAfter retained; project toolchain go1.27.3; mandatory CI test/vulnerability gates; official OAuth credit-redemption connector (library only).
+
+Four artifact paths (absolute)
+MODIFIED_FILE: /Users/jinyanya/Code/Codex/workbuddy/cmd/server/main.go
+DIFF_FILE: /Users/jinyanya/Code/Codex/workbuddy/maintenance/DIFF_FILE.patch
+VERIFICATION.txt: /Users/jinyanya/Code/Codex/workbuddy/maintenance/VERIFICATION.txt
+ROLLBACK.sh (executable): /Users/jinyanya/Code/Codex/workbuddy/maintenance/ROLLBACK.sh
+Full modification set: DIFF_FILE.patch (code/config/test/CI/AGENTS changes; audit evidence files are not recursively included).
+Original tracked hashes: maintenance/source-hashes.sha256.
+
+BASELINE
+Input: clean archive of baseline 0486572 in /private/tmp/workbuddy-maintenance-baseline.
+Exact command: GOCACHE=/private/tmp/workbuddy-gocache go test ./... > /private/tmp/workbuddy-baseline-tests.log 2>&1; rc=$?; tail -4 /private/tmp/workbuddy-baseline-tests.log; echo BASELINE_EXIT=$rc; exit $rc
+Literal result: BASELINE_EXIT=0
+Exit status: 0. Complete package output: baseline-tests.txt.
+Baseline model test included a live catalogue dependency; it is replaced with a local fixture in the modified suite.
+
+MODIFIED
+Input: maintenance working tree, project toolchain Go1.27.3, Node22.21.1.
+Exact command: GOCACHE=/private/tmp/workbuddy-gocache bash scripts/verify.sh > /private/tmp/workbuddy-final-tests.log 2>&1; rc=$?; tail -24 /private/tmp/workbuddy-final-tests.log; echo MODIFIED_EXIT=$rc; exit $rc
+Literal output/result: ACCEPTANCE PASS; MODIFIED_EXIT=0
+Exit status: 0. Complete output: modified-tests.txt.
+Gate: JS syntax, shell syntax, go vet ./..., go test -race ./..., go build ./....
+Exact command: GOCACHE=/private/tmp/workbuddy-gocache go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
+Literal output: No vulnerabilities found.
+Exit status: 0. Initial report: dependency-before.txt; final report: dependency-final.txt.
+
+ROLLBACK
+Input: independent baseline archive with DIFF_FILE.patch applied in /private/tmp/workbuddy-maintenance-rollback; actual working tree untouched.
+Exact command: bash maintenance/ROLLBACK.sh --copy /private/tmp/workbuddy-maintenance-rollback
+Literal output: ROLLBACK PASS: baseline source restored in copy
+Exit status: 0.
+Exact command (copy cwd): shasum -a 256 -c /Users/jinyanya/Code/Codex/workbuddy/maintenance/source-hashes.sha256
+Literal results: cmd/server/main.go: OK; internal/upstream/search.go: OK; internal/upstream/desktop.go: OK; go.mod: OK; go.sum: OK
+Exit status: 0.
+Exact command (copy cwd): GOCACHE=/private/tmp/workbuddy-gocache go test ./... > /private/tmp/workbuddy-rollback-tests.log 2>&1; rc=$?; tail -4 /private/tmp/workbuddy-rollback-tests.log; echo ROLLBACK_EXIT=$rc; exit $rc
+Literal result: ROLLBACK_EXIT=0
+Exit status: 0. Complete output: rollback-tests.txt.
+Restored behavior/status: copy matches baseline source hashes and passes original suite, including original startup/error/logging behavior; actual maintenance branch retains the fixes.
+For committed changes use: bash maintenance/ROLLBACK.sh --commit COMMIT (creates a revert commit; no reset/force push).
+
+Actual Git revert rehearsal (after code commit 1d9195b):
+Input: isolated local clone /private/tmp/workbuddy-git-rollback.2g5IyZ.
+Command: git -C /private/tmp/workbuddy-git-rollback.2g5IyZ revert --no-commit 1d9195b
+Command: compare git write-tree against git rev-parse 0486572^{tree}.
+Literal result: GIT_REVERT_COPY=PASS restored_tree=c3bd35b1631fdb640abb1d0d18032a8085756327
+Exit status: 0. Entire staged source tree matches the baseline; actual branch retains all changes. This evidence-only follow-up commit does not alter executable behavior.
+
+Limits: no registered official-app credentials or real-account reward mutation used. Connector is not yet panel-integrated. No upstream-account health or credit receipts are claimed. Container build, OS package scan and hosted CI still require separate validation.

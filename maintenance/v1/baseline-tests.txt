@@ -1,0 +1,21 @@
+?   	github.com/linguo2625469/workbuddy2api-panel/cmd/credit	[no test files]
+ok  	github.com/linguo2625469/workbuddy2api-panel/cmd/login	0.843s
+ok  	github.com/linguo2625469/workbuddy2api-panel/cmd/server	0.607s
+?   	github.com/linguo2625469/workbuddy2api-panel/cmd/signin	[no test files]
+?   	github.com/linguo2625469/workbuddy2api-panel/cmd/trial	[no test files]
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/auth	0.503s
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/credithist	2.477s
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/httpauth	0.485s
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/livecfg	0.601s
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/logfmt	0.572s
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/panel	11.857s
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/pool	0.628s
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/prompt	0.520s
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/redisstore	0.537s
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/reqlog	0.525s
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/scheduler	16.181s
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/server	10.575s
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/session	0.918s
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/upstream	1.258s
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/usage	0.491s
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/workbuddyopen	0.525s

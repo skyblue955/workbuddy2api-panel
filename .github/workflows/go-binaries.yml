@@ -16,6 +16,7 @@ on:
       - "cmd/**"
       - "internal/**"
       - "config.example.json"
+      - "scripts/verify.sh"
       - ".github/workflows/go-binaries.yml"
   workflow_dispatch:
 
@@ -33,9 +34,12 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version-file: go.mod
-      # ubuntu runner 自带 node → panel 包的 JS 运行时冒烟测试（TestAppJSTopLevelSmoke）会真实执行
-      - run: go test ./...
+          go-version: '1.27.3'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: bash scripts/verify.sh
+      - run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
 
   build:
     needs: test
@@ -53,7 +57,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version-file: go.mod
+          go-version: '1.27.3'
 
       - name: 取源码版本号
         id: ver
@@ -64,7 +68,9 @@ jobs:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: 0
-        run: go build -ldflags "-s -w" -o "wb2api${{ matrix.goos == 'windows' && '.exe' || '' }}" ./cmd/server
+        run: |
+          go build -ldflags "-s -w" -o "wb2api${{ matrix.goos == 'windows' && '.exe' || '' }}" ./cmd/server
+          go build -ldflags "-s -w" -o "wbopenapi${{ matrix.goos == 'windows' && '.exe' || '' }}" ./cmd/openapi
 
       # 版本串断言：二进制必须含源码 appVersion（防交叉编译矩阵里编错树/漏 ldflags）
       - name: 断言二进制版本串
@@ -83,11 +89,11 @@ jobs:
           case "${{ matrix.goos }}" in
             windows)
               NAME="wb2api-panel-v${V}-windows-amd64.zip"
-              zip -q "$NAME" wb2api.exe config.example.json README.md
+              zip -q "$NAME" wb2api.exe wbopenapi.exe config.example.json README.md
               ;;
             *)
               NAME="wb2api-panel-v${V}-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz"
-              tar czf "$NAME" wb2api config.example.json README.md
+              tar czf "$NAME" wb2api wbopenapi config.example.json README.md
               ;;
           esac
           echo "name=$NAME" >> "$GITHUB_ENV"

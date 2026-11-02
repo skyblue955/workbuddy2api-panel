@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/linguo2625469/workbuddy2api-panel/internal/auth"
 )
@@ -248,5 +249,39 @@ func TestSearchHTTPErrorClassified(t *testing.T) {
 		if ue.Kind != tc.want {
 			t.Errorf("status=%d kind=%v want %v", tc.status, ue.Kind, tc.want)
 		}
+	}
+}
+
+func TestSearchErrorsPreserveRetryAfter(t *testing.T) {
+	tests := []struct {
+		name   string
+		status int
+		header string
+		body   string
+		want   time.Duration
+	}{
+		{name: "http seconds", status: http.StatusTooManyRequests, header: "7", body: `{"code":429,"msg":"rate limit"}`, want: 7 * time.Second},
+		{name: "business seconds", status: http.StatusOK, header: "11", body: `{"code":15003,"msg":"unsupported search type"}`, want: 11 * time.Second},
+		{name: "invalid header", status: http.StatusTooManyRequests, header: "not-a-duration", body: `{"code":429,"msg":"rate limit"}`},
+		{name: "absent header", status: http.StatusTooManyRequests, body: `{"code":429,"msg":"rate limit"}`},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			c := searchTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+				if tc.header != "" {
+					w.Header().Set("Retry-After", tc.header)
+				}
+				w.WriteHeader(tc.status)
+				_, _ = w.Write([]byte(tc.body))
+			})
+			_, err := c.Search(context.Background(), &auth.Auth{AccessToken: "at", UID: "u"}, "xy", 5, ChatMeta{})
+			var ue *Error
+			if !errors.As(err, &ue) {
+				t.Fatalf("err=%v want *Error", err)
+			}
+			if ue.RetryAfter != tc.want {
+				t.Errorf("RetryAfter=%v want %v", ue.RetryAfter, tc.want)
+			}
+		})
 	}
 }

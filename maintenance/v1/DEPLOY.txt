@@ -1,0 +1,44 @@
+Version1 maintenance candidate — deployment and authorized validation
+
+Build (Go toolchain1.27.3, Node22 via fnm for tests)
+  bash scripts/verify.sh
+  go build -o /private/tmp/workbuddy-v1 ./cmd/server
+  go build -o /private/tmp/workbuddy-openapi ./cmd/openapi
+  go run ./cmd/openapi activities
+Source dependency scan:
+  go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
+
+Local service
+Run with no existing config to generate a random key in a0600 config file, or create config.json from example and replace test_key BEFORE binding any network interface. Prefer WB2A_LISTEN=127.0.0.1:7863 and a private auth/data directory. Example deployments are not credentials.
+  WB2A_LISTEN=127.0.0.1:7863 /private/tmp/workbuddy-v1 -config /PRIVATE/DIR/config.json
+First creation persists the API key to that config, not stdout. Empty explicit API keys still intentionally disable auth for existing local-only workflows.
+  docker build -t workbuddy-maintenance:v1-check .
+Persist /app/auths and /app/data, mount a private config file; do not expose port7863 without TLS/access controls. Image default generates a random key instead of installing sample test_key. Do not use production auth/data for validation. Container and server version string remains1.13.0-panel to avoid silently changing tag-release contracts; this is a branch candidate, not a published release.
+
+Client contract
+Authenticated GET /v1/capabilities explains supported surfaces. Use /v1/chat/completions for supported chat clients; Responses and full Anthropic Messages are explicitly501, not translated by guesswork. /v1/search/messages remains search-only. Malformed/missing route fields return400 before account selection. Body limit64MiB returns413 before upstream. /panel/api/activities is authenticated, read-only and does not discover or claim account rewards.
+
+Optional third-party Open API connector prerequisites (NOT required for existing ordinary-account gateway login)
+The original project still uses personal-account plugin/device authorization (panel Add Account or login.sh); no developer registration is required for that route. Its upstream-supplied authUrl carries session context, so simply visiting the generic /login/ page is not equivalent. Original login completion also triggers check-in/global registration/trial actions; these must be separated or explicitly approved before read-only account acceptance. The following steps apply ONLY when opting into the new Open API redemption channel:
+1. https://open.workbuddy.cn/ : create/enable a third-party credits app, register exact redirect URI and request user.credit.exchange scope. Reference https://open.workbuddy.cn/docs/third-party-app and /docs/openapi.
+2. Keep client secret in a local process environment WORKBUDDY_OPEN_CLIENT_SECRET or inject from a password manager; never paste into chat, command arguments, source or logs. Ensure separate private directory exists (mode0700).
+3. Generate authorization URL and one-use state file:
+  /private/tmp/workbuddy-openapi authorize -client-id APP_ID -redirect-uri REGISTERED_URI -state-file /PRIVATE/DIR/oauth-state.json
+Open printed official URL yourself and approve the grant. State/session expires locally after15minutes; no account login is automated. No local callback listener is provided: use a registered callback you control to collect code/state locally, not in this chat.
+4. Pipe one JSON object {"code":"AUTH_CODE","state":"RETURNED_STATE"} from a private file/stdin into:
+  /private/tmp/workbuddy-openapi exchange -state-file /PRIVATE/DIR/oauth-state.json -token-file /PRIVATE/DIR/openapi-token.json
+The command checks saved state before token exchange, refuses an existing token destination, writes OAuth token metadata0600 and consumes state. A .used marker prevents resubmitting the same session after an uncertain exchange/save failure; start a new authorization flow with a fresh state filename instead of replaying. If token is saved but state deletion fails, success output explicitly reports cleanup pending and the marker prevents reuse. Token is not printed. Token expiry uses actual expires_in+obtained_at, and scope must include user.credit.exchange. No automatic refresh daemon or panel credential migration in this candidate; refresh helper exists only as a library.
+
+Redemption (a separately approved, state-changing action)
+Prepare private request JSON containing either code or gift_key+gift_code plus a caller-created stable request_id (8–64chars). Never put codes in command arguments or chat.
+Dry-run (no network):
+  /private/tmp/workbuddy-openapi redeem < /PRIVATE/DIR/redemption-request.json
+Only after explicit user approval of this specific redemption:
+  /private/tmp/workbuddy-openapi redeem -execute -token-file /PRIVATE/DIR/openapi-token.json < /PRIVATE/DIR/redemption-request.json
+Output only confirmation flow_no/credits. Never generate a different request_id to retry an uncertain outcome. There is no local crash-safe redemption ledger: archive the request securely BEFORE execute and use upstream reconciliation. Duplicate success/idempotency is mock-tested, not live-verified. Application approval/token grant do not guarantee a valid code or earned credits.
+
+Legacy rewards
+Original sign-in/tasks/compensation remain present and regressions cover mock behavior only. Private-client APIs and synthetic task activity are not endorsed as official. No new telemetry, reward farming, automated agreements, account-region changes or policy evasion were added. An actual unsupported403/permission error is not grounds to claim restoration.
+
+Rollback
+Do not reset/force-push shared history. Revert v1 implementation commits in reverse chronological order. maintenance/v1/ROLLBACK.sh --copy DIR reverses this batch's patch on an isolated copy; preserve phase1 artifacts and baseline dab77f1. For running services restore previous binary/image and private config backup; stop process before replacing binaries. No account-side mutation is undone by Git rollback.

@@ -1,0 +1,1785 @@
+diff --git a/.dockerignore b/.dockerignore
+index 3d4e3f2..c167f6d 100644
+--- a/.dockerignore
++++ b/.dockerignore
+@@ -2,6 +2,9 @@ auths/
+ data/
+ *.tmp
+ .git/
++.codex/
++.agents/
++maintenance/
+ .gitignore
+ docs/
+ scripts/__pycache__/
+@@ -15,4 +18,4 @@ config.json
+ PLAN.md
+ SPEC.md
+ LOOP.md
+-README.md
+\ No newline at end of file
++README.md
+diff --git a/.github/workflows/go-binaries.yml b/.github/workflows/go-binaries.yml
+index 953a6da..39594fc 100644
+--- a/.github/workflows/go-binaries.yml
++++ b/.github/workflows/go-binaries.yml
+@@ -68,7 +68,9 @@ jobs:
+           GOOS: ${{ matrix.goos }}
+           GOARCH: ${{ matrix.goarch }}
+           CGO_ENABLED: 0
+-        run: go build -ldflags "-s -w" -o "wb2api${{ matrix.goos == 'windows' && '.exe' || '' }}" ./cmd/server
++        run: |
++          go build -ldflags "-s -w" -o "wb2api${{ matrix.goos == 'windows' && '.exe' || '' }}" ./cmd/server
++          go build -ldflags "-s -w" -o "wbopenapi${{ matrix.goos == 'windows' && '.exe' || '' }}" ./cmd/openapi
+ 
+       # 版本串断言：二进制必须含源码 appVersion（防交叉编译矩阵里编错树/漏 ldflags）
+       - name: 断言二进制版本串
+@@ -87,11 +89,11 @@ jobs:
+           case "${{ matrix.goos }}" in
+             windows)
+               NAME="wb2api-panel-v${V}-windows-amd64.zip"
+-              zip -q "$NAME" wb2api.exe config.example.json README.md
++              zip -q "$NAME" wb2api.exe wbopenapi.exe config.example.json README.md
+               ;;
+             *)
+               NAME="wb2api-panel-v${V}-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz"
+-              tar czf "$NAME" wb2api config.example.json README.md
++              tar czf "$NAME" wb2api wbopenapi config.example.json README.md
+               ;;
+           esac
+           echo "name=$NAME" >> "$GITHUB_ENV"
+diff --git a/Dockerfile b/Dockerfile
+index ed01552..192e22a 100644
+--- a/Dockerfile
++++ b/Dockerfile
+@@ -11,7 +11,8 @@ COPY . .
+ RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/wb2api ./cmd/server \
+  && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/signin_bin ./cmd/signin \
+  && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/login ./cmd/login \
+- && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/credit ./cmd/credit
++ && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/credit ./cmd/credit \
++ && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/openapi ./cmd/openapi
+ 
+ FROM alpine:3.20
+ # python3：login.sh 的 JSON 解析 / 签到 / 落盘；bash：shell 脚本体。
+@@ -26,11 +27,12 @@ COPY --from=build /out/wb2api /app/wb2api
+ COPY --from=build /out/signin_bin /app/signin_bin
+ COPY --from=build /out/login /app/login
+ COPY --from=build /out/credit /app/credit
++COPY --from=build /out/openapi /app/openapi
+ COPY login.sh signin.sh credit.sh /app/
+ COPY scripts/probe_active.py /app/scripts/probe_active.py
+ RUN sed -i 's/\r$//' /app/login.sh /app/signin.sh /app/credit.sh && chmod 755 /app/login.sh /app/signin.sh /app/credit.sh
+ # 镜像不带真实配置：落 example 作为默认（生产由挂载卷 /app/config.json 覆盖）
+-COPY config.example.json /app/config.json
++COPY config.example.json /app/config.example.json
+ USER app
+ EXPOSE 7863
+ HEALTHCHECK --interval=30s --timeout=5s --start-period=5s \
+diff --git a/internal/panel/panel.go b/internal/panel/panel.go
+index baaa16e..90c7696 100644
+--- a/internal/panel/panel.go
++++ b/internal/panel/panel.go
+@@ -161,6 +161,7 @@ func (p *Panel) routes() {
+ 	p.mux.HandleFunc("GET /panel/api/request_logs", p.withAuth(p.requestLogs))
+ 	p.mux.HandleFunc("GET /panel/api/credit_history", p.withAuth(p.creditHistory))
+ 	p.mux.HandleFunc("GET /panel/api/models", p.withAuth(p.models))
++	p.mux.HandleFunc("GET /panel/api/activities", p.withAuth(p.activities))
+ 	p.mux.HandleFunc("POST /panel/api/login/start", p.withAuth(p.loginStart))
+ 	p.mux.HandleFunc("GET /panel/api/login/poll", p.withAuth(p.loginPoll))
+ 	p.mux.HandleFunc("GET /panel/api/login/regions", p.withAuth(p.loginRegions))
+diff --git a/internal/server/handler.go b/internal/server/handler.go
+index 4707e79..28f444b 100644
+--- a/internal/server/handler.go
++++ b/internal/server/handler.go
+@@ -30,10 +30,11 @@ import (
+ 
+ // Config handler 依赖。
+ type Config struct {
+-	Pool      *pool.Pool
+-	Upstream  *upstream.Client
+-	APIKey    string // 空 = 不鉴权（静态值；与 Live 同时给出时 Live 优先）
+-	MaxRotate int    // 单请求最多换号次数，默认 3
++	Pool                *pool.Pool
++	Upstream            *upstream.Client
++	APIKey              string // 空 = 不鉴权（静态值；与 Live 同时给出时 Live 优先）
++	MaxRotate           int    // 单请求最多换号次数，默认 3
++	MaxRequestBodyBytes int64  // <=0 uses a 64 MiB inbound limit.
+ 	// Session 会话粘性路由器（可选；nil = 关闭粘性，纯 Pick 轮换）。
+ 	Session *session.Router
+ 	// StickyCount 返回当前粘性会话绑定数（供 /status）；nil 时报告 0。
+@@ -145,6 +146,9 @@ func NewHandler(cfg Config) *Handler {
+ 	// /v1/messages——那是 Anthropic 模型对话的标准路径，留给未来的 chat 转发。
+ 	h.mux.HandleFunc("POST /v1/search/messages", h.withAuth(h.messages))
+ 	h.mux.HandleFunc("GET /v1/models", h.withAuth(h.models))
++	h.mux.HandleFunc("GET /v1/capabilities", h.withAuth(h.capabilities))
++	h.mux.HandleFunc("POST /v1/responses", h.withAuth(h.unsupportedProtocol))
++	h.mux.HandleFunc("POST /v1/messages", h.withAuth(h.unsupportedProtocol))
+ 	h.mux.HandleFunc("GET /status", h.withAuth(h.status))
+ 	h.mux.HandleFunc("GET /healthz", h.healthz)
+ 	if cfg.Panel != nil {
+@@ -555,15 +559,25 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
+ 	// 客户端 IP 提取（按请求传递到 ChatStream，不透传时 upstream 侧忽略）；
+ 	// 消除早年共享字段方案的并发交叉污染（issue：ClientIP 竞态）。
+ 	clientIP := upstream.ExtractClientIP(r)
+-	// 请求体无大小上限（max_body_mb 已移除，对齐上游）：完整读入，超限类问题交由
+-	// 上游自然返回错误（其响应经既有错误分类链路透出，信息量更大）。#41 的截断
+-	// 防御语义保留在读错误路径——移除预拦截后，截断只可能来自客户端自己断流，
+-	// 读 body 出错就地 400，不把半截 JSON 喂上游 unmarshal 报 unexpected EOF 冤枉罚号。
++	limit := h.cfg.MaxRequestBodyBytes
++	if limit <= 0 {
++		limit = 64 << 20
++	}
++	r.Body = http.MaxBytesReader(w, r.Body, limit)
+ 	body, err := io.ReadAll(r.Body)
+ 	if err != nil {
++		var tooLarge *http.MaxBytesError
++		if errors.As(err, &tooLarge) {
++			writeOpenAIError(w, http.StatusRequestEntityTooLarge, "request_too_large", "request body exceeds gateway limit")
++			return
++		}
+ 		writeOpenAIError(w, http.StatusBadRequest, "invalid_request", "read body: "+err.Error())
+ 		return
+ 	}
++	if err := validateChatRequest(body); err != nil {
++		writeOpenAIError(w, http.StatusBadRequest, "invalid_request", err.Error())
++		return
++	}
+ 	var peek struct {
+ 		Stream bool   `json:"stream"`
+ 		Model  string `json:"model"`
+diff --git a/internal/server/messages_test.go b/internal/server/messages_test.go
+index 7f3a23b..209112c 100644
+--- a/internal/server/messages_test.go
++++ b/internal/server/messages_test.go
+@@ -283,8 +283,8 @@ func TestMessagesRouteDoesNotShadowV1Messages(t *testing.T) {
+ 	req := httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader([]byte(`{}`)))
+ 	rec := httptest.NewRecorder()
+ 	h.ServeHTTP(rec, req)
+-	if rec.Code != http.StatusNotFound {
+-		t.Errorf("POST /v1/messages code=%d want 404（该路径留给模型对话）", rec.Code)
++	if rec.Code != http.StatusNotImplemented || !strings.Contains(rec.Body.String(), "unsupported_protocol") {
++		t.Errorf("POST /v1/messages code=%d want explicit 501 unsupported_protocol, never a search response", rec.Code)
+ 	}
+ }
+ 
+diff --git a/internal/workbuddyopen/redemptions.go b/internal/workbuddyopen/redemptions.go
+index a321f36..1240b41 100644
+--- a/internal/workbuddyopen/redemptions.go
++++ b/internal/workbuddyopen/redemptions.go
+@@ -46,6 +46,9 @@ type RedemptionResponse struct {
+ 	OpenID  string `json:"open_id"`
+ }
+ 
++// Validate checks a redemption request without making a network call.
++func (in RedemptionRequest) Validate() error { return validateRequest(in) }
++
+ // Redeem submits one redemption request. It performs no automatic retries.
+ func (c *Client) Redeem(ctx context.Context, accessToken string, input RedemptionRequest) (*RedemptionResponse, error) {
+ 	if strings.TrimSpace(accessToken) == "" {
+@@ -129,12 +132,18 @@ func validateRequest(in RedemptionRequest) error {
+ 	if single && !validLen(in.Code, 1, 64) {
+ 		return errors.New("redemption: code must be 1-64 characters")
+ 	}
++	if single && strings.TrimSpace(in.Code) == "" {
++		return errors.New("redemption: code must not be blank")
++	}
+ 	if dual && (!validLen(in.GiftKey, 6, 64) || !validLen(in.GiftCode, 8, 64)) {
+ 		return errors.New("redemption: gift_key/gift_code length is invalid")
+ 	}
+ 	if dual && (in.GiftKey == "" || in.GiftCode == "") {
+ 		return errors.New("redemption: gift_key and gift_code are required together")
+ 	}
++	if dual && (strings.TrimSpace(in.GiftKey) == "" || strings.TrimSpace(in.GiftCode) == "") {
++		return errors.New("redemption: gift_key and gift_code must not be blank")
++	}
+ 	return nil
+ }
+ 
+diff --git a/internal/workbuddyopen/redemptions_test.go b/internal/workbuddyopen/redemptions_test.go
+index e51158c..cb43a59 100644
+--- a/internal/workbuddyopen/redemptions_test.go
++++ b/internal/workbuddyopen/redemptions_test.go
+@@ -24,6 +24,27 @@ func validSingle() RedemptionRequest {
+ 	return RedemptionRequest{Code: "code", RequestID: "request-1"}
+ }
+ 
++func TestRedeemKeepsIdempotencyKeyAcrossCallerRetries(t *testing.T) {
++	const body = `{"status":"success","flow_no":"same-flow","credits":1,"open_id":"fixture"}`
++	calls := 0
++	c := &Client{HTTP: &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
++		calls++
++		raw, _ := io.ReadAll(r.Body)
++		if !strings.Contains(string(raw), `"request_id":"request-1"`) {
++			t.Error("caller idempotency key changed")
++		}
++		return response(200, body, nil), nil
++	})}}
++	for i := 0; i < 2; i++ {
++		if _, err := c.Redeem(context.Background(), "fixture", validSingle()); err != nil {
++			t.Fatal(err)
++		}
++	}
++	if calls != 2 {
++		t.Fatalf("calls=%d; no implicit retry expected", calls)
++	}
++}
++
+ func validDual() RedemptionRequest {
+ 	return RedemptionRequest{GiftKey: "giftkey", GiftCode: "giftcode", RequestID: "request-2"}
+ }
+diff --git a/cmd/openapi/main.go b/cmd/openapi/main.go
+new file mode 100644
+index 0000000..06d3bb8
+--- /dev/null
++++ b/cmd/openapi/main.go
+@@ -0,0 +1,115 @@
++// Command openapi exposes only the official, explicitly opted-in API actions.
++package main
++
++import (
++	"context"
++	"encoding/json"
++	"errors"
++	"flag"
++	"fmt"
++	"io"
++	"os"
++	"strings"
++
++	"github.com/linguo2625469/workbuddy2api-panel/internal/activities"
++	"github.com/linguo2625469/workbuddy2api-panel/internal/workbuddyopen"
++)
++
++const maxInput = 64 << 10
++
++type redeemer interface {
++	Redeem(context.Context, string, workbuddyopen.RedemptionRequest) (*workbuddyopen.RedemptionResponse, error)
++}
++
++func main() {
++	if err := run(os.Args[1:], os.Stdin, os.Stdout, workbuddyopen.NewClient()); err != nil {
++		fmt.Fprintln(os.Stderr, err)
++		os.Exit(1)
++	}
++}
++
++func run(args []string, stdin io.Reader, out io.Writer, client redeemer) error {
++	if len(args) == 0 {
++		return errors.New("usage: openapi activities | authorize | exchange | redeem [-execute -token-file path]")
++	}
++	switch args[0] {
++	case "authorize", "exchange":
++		oauthClient, ok := client.(*workbuddyopen.Client)
++		if !ok {
++			return errors.New("oauth: client does not support authorization")
++		}
++		if args[0] == "authorize" {
++			return runAuthorize(args[1:], out, oauthClient)
++		}
++		return runExchange(args[1:], stdin, out, oauthClient)
++	case "activities":
++		fs := flag.NewFlagSet("activities", flag.ContinueOnError)
++		fs.SetOutput(io.Discard)
++		if err := fs.Parse(args[1:]); err != nil || fs.NArg() != 0 {
++			return errors.New("activities: unknown or trailing arguments")
++		}
++		return json.NewEncoder(out).Encode(activities.Registry())
++	case "redeem":
++		return runRedeem(args[1:], stdin, out, client)
++	default:
++		return fmt.Errorf("unknown subcommand %q", args[0])
++	}
++}
++
++func runRedeem(args []string, stdin io.Reader, out io.Writer, client redeemer) error {
++	fs := flag.NewFlagSet("redeem", flag.ContinueOnError)
++	fs.SetOutput(io.Discard)
++	execute := fs.Bool("execute", false, "submit the request")
++	tokenFile := fs.String("token-file", "", "official OAuth access-token JSON file")
++	if err := fs.Parse(args); err != nil || fs.NArg() != 0 {
++		return errors.New("redeem: unknown or trailing arguments")
++	}
++	input, err := decodeRequest(stdin)
++	if err != nil {
++		return err
++	}
++	if err := input.Validate(); err != nil {
++		return err
++	}
++	if !*execute {
++		if _, err := io.WriteString(out, "DRY_RUN: no network request\n"); err != nil {
++			return err
++		}
++		return nil
++	}
++	if strings.TrimSpace(*tokenFile) == "" {
++		return errors.New("redeem: -token-file is required with -execute")
++	}
++	token, err := readTokenFile(*tokenFile)
++	if err != nil {
++		return err
++	}
++	result, err := client.Redeem(context.Background(), token, input)
++	if err != nil {
++		return err
++	}
++	_, err = fmt.Fprintf(out, "{\"flow_no\":%q,\"credits\":%d}\n", result.FlowNo, result.Credits)
++	return err
++}
++
++func decodeRequest(r io.Reader) (workbuddyopen.RedemptionRequest, error) {
++	limited := io.LimitReader(r, maxInput+1)
++	data, err := io.ReadAll(limited)
++	if err != nil {
++		return workbuddyopen.RedemptionRequest{}, errors.New("redeem: input unreadable")
++	}
++	if len(data) > maxInput {
++		return workbuddyopen.RedemptionRequest{}, errors.New("redeem: input exceeds 64 KiB")
++	}
++	dec := json.NewDecoder(strings.NewReader(string(data)))
++	dec.DisallowUnknownFields()
++	var input workbuddyopen.RedemptionRequest
++	if err := dec.Decode(&input); err != nil {
++		return input, errors.New("redeem: input must be one JSON object")
++	}
++	var extra any
++	if err := dec.Decode(&extra); err != io.EOF {
++		return input, errors.New("redeem: trailing JSON is not allowed")
++	}
++	return input, nil
++}
+diff --git a/cmd/openapi/main_test.go b/cmd/openapi/main_test.go
+new file mode 100644
+index 0000000..b99d0ff
+--- /dev/null
++++ b/cmd/openapi/main_test.go
+@@ -0,0 +1,71 @@
++package main
++
++import (
++	"context"
++	"os"
++	"path/filepath"
++	"strings"
++	"testing"
++	"time"
++
++	"github.com/linguo2625469/workbuddy2api-panel/internal/workbuddyopen"
++)
++
++type fakeRedeemer struct {
++	calls int
++	token string
++	input workbuddyopen.RedemptionRequest
++}
++
++func (f *fakeRedeemer) Redeem(_ context.Context, token string, input workbuddyopen.RedemptionRequest) (*workbuddyopen.RedemptionResponse, error) {
++	f.calls++
++	f.token, f.input = token, input
++	return &workbuddyopen.RedemptionResponse{FlowNo: "flow", Credits: 7, OpenID: "secret-open-id"}, nil
++}
++
++func TestRedeemDryRunDoesNotCallClient(t *testing.T) {
++	f := &fakeRedeemer{}
++	var out strings.Builder
++	err := run([]string{"redeem"}, strings.NewReader(`{"code":"code","request_id":"stable-1"}`), &out, f)
++	if err != nil || out.String() != "DRY_RUN: no network request\n" || f.calls != 0 {
++		t.Fatalf("err=%v out=%q calls=%d", err, out.String(), f.calls)
++	}
++}
++
++func TestRedeemExecuteReadsTokenAndDoesNotPrintSecrets(t *testing.T) {
++	dir := t.TempDir()
++	path := filepath.Join(dir, "token.json")
++	tokenJSON := `{"access_token":"official-token","token_type":"Bearer","expires_in":3600,"scope":"user.credit.exchange","obtained_at":"` + time.Now().UTC().Format(time.RFC3339) + `"}`
++	if err := os.WriteFile(path, []byte(tokenJSON), 0600); err != nil {
++		t.Fatal(err)
++	}
++	f := &fakeRedeemer{}
++	var out strings.Builder
++	err := run([]string{"redeem", "-execute", "-token-file", path}, strings.NewReader(`{"gift_key":"giftkey","gift_code":"giftcode","request_id":"stable-2"}`), &out, f)
++	if err != nil || f.calls != 1 || f.token != "official-token" || !strings.Contains(out.String(), `"flow_no":"flow"`) || !strings.Contains(out.String(), `"credits":7`) || strings.Contains(out.String(), "official-token") || strings.Contains(out.String(), "secret-open-id") {
++		t.Fatalf("err=%v out=%q calls=%d token=%q", err, out.String(), f.calls, f.token)
++	}
++}
++
++func TestRedeemRejectsUnknownTrailingAndOversizedInput(t *testing.T) {
++	for _, input := range []string{`{"code":"code","request_id":"stable-1","extra":1}`, `{"code":"code","request_id":"stable-1"}{}`, strings.Repeat("x", maxInput+1)} {
++		f := &fakeRedeemer{}
++		if err := run([]string{"redeem"}, strings.NewReader(input), &strings.Builder{}, f); err == nil || f.calls != 0 {
++			t.Fatalf("input accepted or called client: err=%v calls=%d", err, f.calls)
++		}
++	}
++}
++
++func TestRedeemTokenFilePermissionsAndExecuteRequirement(t *testing.T) {
++	dir := t.TempDir()
++	path := filepath.Join(dir, "token.json")
++	if err := os.WriteFile(path, []byte(`{"access_token":"secret"}`), 0644); err != nil {
++		t.Fatal(err)
++	}
++	if err := run([]string{"redeem", "-execute", "-token-file", path}, strings.NewReader(`{"code":"code","request_id":"stable-1"}`), &strings.Builder{}, &fakeRedeemer{}); err == nil {
++		t.Fatal("permissive token file accepted")
++	}
++	if err := run([]string{"redeem", "-execute"}, strings.NewReader(`{"code":"code","request_id":"stable-1"}`), &strings.Builder{}, &fakeRedeemer{}); err == nil {
++		t.Fatal("missing token file accepted")
++	}
++}
+diff --git a/cmd/openapi/oauth_commands.go b/cmd/openapi/oauth_commands.go
+new file mode 100644
+index 0000000..b7d5b82
+--- /dev/null
++++ b/cmd/openapi/oauth_commands.go
+@@ -0,0 +1,197 @@
++package main
++
++import (
++	"context"
++	"encoding/json"
++	"errors"
++	"flag"
++	"io"
++	"os"
++	"strings"
++	"time"
++
++	"github.com/linguo2625469/workbuddy2api-panel/internal/workbuddyopen"
++)
++
++const (
++	oauthScope   = "user.credit.exchange"
++	maxOAuthFile = 64 << 10
++	oauthMaxAge  = 15 * time.Minute
++)
++
++type oauthSession struct {
++	ClientID    string    `json:"client_id"`
++	RedirectURI string    `json:"redirect_uri"`
++	State       string    `json:"state"`
++	CreatedAt   time.Time `json:"created_at"`
++}
++
++type oauthCallback struct {
++	Code  string `json:"code"`
++	State string `json:"state"`
++}
++
++func runAuthorize(args []string, out io.Writer, client *workbuddyopen.Client) error {
++	fs := newOAuthFlagSet("authorize")
++	clientID := fs.String("client-id", "", "official OAuth client id")
++	redirectURI := fs.String("redirect-uri", "", "registered redirect URI")
++	statePath := fs.String("state-file", "", "state session file")
++	if err := fs.Parse(args); err != nil || fs.NArg() != 0 {
++		return errors.New("authorize: invalid arguments")
++	}
++	if strings.TrimSpace(*clientID) == "" || strings.TrimSpace(*redirectURI) == "" || strings.TrimSpace(*statePath) == "" {
++		return errors.New("authorize: -client-id, -redirect-uri and -state-file are required")
++	}
++	state, err := workbuddyopen.NewState()
++	if err != nil {
++		return errors.New("authorize: could not create state")
++	}
++	url, err := client.AuthorizeURL(*clientID, *redirectURI, oauthScope, state)
++	if err != nil {
++		return errors.New("authorize: invalid OAuth parameters")
++	}
++	session := oauthSession{ClientID: *clientID, RedirectURI: *redirectURI, State: state, CreatedAt: time.Now().UTC()}
++	if err := createJSON0600(*statePath, session); err != nil {
++		return errors.New("authorize: state file unavailable")
++	}
++	_, err = io.WriteString(out, url+"\n")
++	return err
++}
++
++func runExchange(args []string, stdin io.Reader, out io.Writer, client *workbuddyopen.Client) error {
++	fs := newOAuthFlagSet("exchange")
++	statePath := fs.String("state-file", "", "state session file")
++	tokenPath := fs.String("token-file", "", "token output file")
++	if err := fs.Parse(args); err != nil || fs.NArg() != 0 {
++		return errors.New("exchange: invalid arguments")
++	}
++	if strings.TrimSpace(*statePath) == "" || strings.TrimSpace(*tokenPath) == "" {
++		return errors.New("exchange: -state-file and -token-file are required")
++	}
++	callback, err := decodeOAuthCallback(stdin)
++	if err != nil {
++		return err
++	}
++	session, err := readOAuthSession(*statePath)
++	if err != nil {
++		return errors.New("exchange: state file unavailable")
++	}
++	now := time.Now().UTC()
++	if session.CreatedAt.After(now) || now.Sub(session.CreatedAt) > oauthMaxAge {
++		return errors.New("exchange: state expired")
++	}
++	if !workbuddyopen.VerifyState(session.State, callback.State) {
++		return errors.New("exchange: state mismatch")
++	}
++	secret := os.Getenv("WORKBUDDY_OPEN_CLIENT_SECRET")
++	if strings.TrimSpace(secret) == "" {
++		return errors.New("exchange: client secret is required")
++	}
++	// Refuse an existing destination before consuming the one-use code.
++	if _, err := os.Lstat(*tokenPath); !os.IsNotExist(err) {
++		return errors.New("exchange: token destination already exists or is unavailable")
++	}
++	// Claim this session once before submitting the one-use authorization code.
++	// An uncertain network/save failure requires a new authorization flow, never
++	// an automatic replay with a different destination file.
++	if err := createJSON0600(*statePath+".used", map[string]bool{"submitted": true}); err != nil {
++		return errors.New("exchange: session already submitted; start a new authorization flow")
++	}
++	token, err := client.ExchangeCode(context.Background(), session.ClientID, secret, callback.Code, session.RedirectURI)
++	if err != nil {
++		return errors.New("exchange: token exchange failed")
++	}
++	if err := createJSON0600(*tokenPath, tokenDocument{OAuthToken: *token, ObtainedAt: time.Now().UTC()}); err != nil {
++		return errors.New("exchange: token file unavailable")
++	}
++	if err := os.Remove(*statePath); err != nil {
++		_, err = io.WriteString(out, "token saved; state cleanup pending; do not exchange again\n")
++		return err
++	}
++	_ = os.Remove(*statePath + ".used") // state no longer exists; marker cleanup is best effort.
++	_, err = io.WriteString(out, "token saved\n")
++	return err
++}
++
++func newOAuthFlagSet(name string) *flag.FlagSet {
++	fs := flag.NewFlagSet(name, flag.ContinueOnError)
++	fs.SetOutput(io.Discard)
++	return fs
++}
++
++func decodeOAuthCallback(r io.Reader) (oauthCallback, error) {
++	b, err := io.ReadAll(io.LimitReader(r, maxOAuthFile+1))
++	if err != nil || len(b) > maxOAuthFile {
++		return oauthCallback{}, errors.New("exchange: invalid callback input")
++	}
++	dec := json.NewDecoder(strings.NewReader(string(b)))
++	dec.DisallowUnknownFields()
++	var callback oauthCallback
++	if err := dec.Decode(&callback); err != nil {
++		return callback, errors.New("exchange: callback must be one JSON object")
++	}
++	var extra any
++	if err := dec.Decode(&extra); err != io.EOF {
++		return callback, errors.New("exchange: trailing JSON is not allowed")
++	}
++	if strings.TrimSpace(callback.Code) == "" || strings.TrimSpace(callback.State) == "" {
++		return callback, errors.New("exchange: code and state are required")
++	}
++	return callback, nil
++}
++
++func createJSON0600(path string, value any) error {
++	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
++	if err != nil {
++		return err
++	}
++	ok := false
++	defer func() {
++		if !ok {
++			_ = f.Close()
++			_ = os.Remove(path)
++		}
++	}()
++	if err := json.NewEncoder(f).Encode(value); err != nil {
++		return err
++	}
++	if err := f.Close(); err != nil {
++		return err
++	}
++	ok = true
++	return nil
++}
++
++func readOAuthSession(path string) (oauthSession, error) {
++	var session oauthSession
++	info, err := os.Lstat(path)
++	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || info.Mode().Perm() != 0600 {
++		return session, errors.New("invalid session file")
++	}
++	f, err := os.Open(path)
++	if err != nil {
++		return session, err
++	}
++	defer f.Close()
++	opened, err := f.Stat()
++	if err != nil || !os.SameFile(info, opened) {
++		return session, errors.New("session changed")
++	}
++	b, err := io.ReadAll(io.LimitReader(f, maxOAuthFile+1))
++	if err != nil || len(b) > maxOAuthFile {
++		return session, errors.New("session unreadable")
++	}
++	dec := json.NewDecoder(strings.NewReader(string(b)))
++	dec.DisallowUnknownFields()
++	if err := dec.Decode(&session); err != nil {
++		return session, err
++	}
++	var extra any
++	if err := dec.Decode(&extra); err != io.EOF {
++		return session, errors.New("trailing session JSON")
++	}
++	if session.ClientID == "" || session.RedirectURI == "" || session.State == "" || session.CreatedAt.IsZero() {
++		return session, errors.New("incomplete session")
++	}
++	return session, nil
++}
+diff --git a/cmd/openapi/oauth_commands_test.go b/cmd/openapi/oauth_commands_test.go
+new file mode 100644
+index 0000000..9cd5616
+--- /dev/null
++++ b/cmd/openapi/oauth_commands_test.go
+@@ -0,0 +1,177 @@
++package main
++
++import (
++	"encoding/json"
++	"io"
++	"net/http"
++	"net/url"
++	"os"
++	"path/filepath"
++	"strings"
++	"testing"
++	"time"
++
++	"github.com/linguo2625469/workbuddy2api-panel/internal/workbuddyopen"
++)
++
++type oauthTransport struct {
++	calls int
++	resp  string
++}
++
++func (t *oauthTransport) RoundTrip(r *http.Request) (*http.Response, error) {
++	t.calls++
++	return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(t.resp)), Header: make(http.Header), Request: r}, nil
++}
++
++func TestRunAuthorizePersistsStateAndOnlyPrintsURL(t *testing.T) {
++	statePath := filepath.Join(t.TempDir(), "state.json")
++	var out strings.Builder
++	if err := runAuthorize([]string{"-client-id", "app", "-redirect-uri", "http://127.0.0.1/cb", "-state-file", statePath}, &out, workbuddyopen.NewClient()); err != nil {
++		t.Fatal(err)
++	}
++	u, err := url.Parse(strings.TrimSpace(out.String()))
++	if err != nil || u.Query().Get("scope") != oauthScope || u.Query().Get("client_id") != "app" || u.Query().Get("state") == "" {
++		t.Fatalf("authorization URL=%q err=%v", out.String(), err)
++	}
++	info, _ := os.Stat(statePath)
++	if info.Mode().Perm() != 0600 {
++		t.Fatalf("state mode=%o", info.Mode().Perm())
++	}
++	if err := runAuthorize([]string{"-client-id", "app", "-redirect-uri", "http://127.0.0.1/cb", "-state-file", statePath}, &strings.Builder{}, workbuddyopen.NewClient()); err == nil {
++		t.Fatal("authorize overwrote existing state")
++	}
++}
++
++func TestRunExchangePersistsTokenAndRemovesState(t *testing.T) {
++	dir := t.TempDir()
++	statePath, tokenPath := filepath.Join(dir, "state.json"), filepath.Join(dir, "token.json")
++	var authOut strings.Builder
++	if err := runAuthorize([]string{"-client-id", "app", "-redirect-uri", "http://127.0.0.1/cb", "-state-file", statePath}, &authOut, workbuddyopen.NewClient()); err != nil {
++		t.Fatal(err)
++	}
++	var session oauthSession
++	b, _ := os.ReadFile(statePath)
++	if err := json.Unmarshal(b, &session); err != nil {
++		t.Fatal(err)
++	}
++	t.Setenv("WORKBUDDY_OPEN_CLIENT_SECRET", "fixture-secret")
++	transport := &oauthTransport{resp: `{"access_token":"fixture-token","token_type":"Bearer","expires_in":3600,"scope":"user.credit.exchange"}`}
++	client := &workbuddyopen.Client{HTTP: &http.Client{Transport: transport}}
++	var out strings.Builder
++	if err := runExchange([]string{"-state-file", statePath, "-token-file", tokenPath}, strings.NewReader(`{"code":"fixture-code","state":"`+session.State+`"}`), &out, client); err != nil {
++		t.Fatal(err)
++	}
++	if transport.calls != 1 || !strings.Contains(out.String(), "token saved") || strings.Contains(out.String(), "fixture-token") || strings.Contains(out.String(), "fixture-secret") {
++		t.Fatalf("calls=%d output=%q", transport.calls, out.String())
++	}
++	if _, err := os.Stat(statePath); !os.IsNotExist(err) {
++		t.Fatalf("state remains: %v", err)
++	}
++	if info, err := os.Stat(tokenPath); err != nil || info.Mode().Perm() != 0600 {
++		t.Fatalf("token file=%v info=%v", err, info)
++	}
++}
++
++func TestRunExchangeRejectsBeforeNetwork(t *testing.T) {
++	dir := t.TempDir()
++	statePath := filepath.Join(dir, "state.json")
++	session := oauthSession{ClientID: "app", RedirectURI: "http://127.0.0.1/cb", State: "expected", CreatedAt: time.Now().UTC().Add(-16 * time.Minute)}
++	b, _ := json.Marshal(session)
++	if err := os.WriteFile(statePath, b, 0600); err != nil {
++		t.Fatal(err)
++	}
++	transport := &oauthTransport{resp: `{}`}
++	client := &workbuddyopen.Client{HTTP: &http.Client{Transport: transport}}
++	t.Setenv("WORKBUDDY_OPEN_CLIENT_SECRET", "fixture-secret")
++	for _, input := range []string{`{"code":"c","state":"wrong"}`, `{"code":"c","state":"expected"}{}`, `{"code":"c","state":"expected","extra":1}`} {
++		if err := runExchange([]string{"-state-file", statePath, "-token-file", filepath.Join(dir, "token.json")}, strings.NewReader(input), &strings.Builder{}, client); err == nil {
++			t.Fatalf("accepted %s", input)
++		}
++	}
++	if transport.calls != 0 {
++		t.Fatalf("network calls=%d", transport.calls)
++	}
++}
++
++func newOAuthSessionFixture(t *testing.T) (dir, statePath string, session oauthSession) {
++	t.Helper()
++	dir = t.TempDir()
++	statePath = filepath.Join(dir, "state.json")
++	var out strings.Builder
++	if err := run([]string{"authorize", "-client-id", "app", "-redirect-uri", "http://127.0.0.1/cb", "-state-file", statePath}, strings.NewReader(""), &out, workbuddyopen.NewClient()); err != nil {
++		t.Fatal(err)
++	}
++	b, err := os.ReadFile(statePath)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if err := json.Unmarshal(b, &session); err != nil {
++		t.Fatal(err)
++	}
++	return dir, statePath, session
++}
++
++func TestRunDispatchesAuthorizeAndExchange(t *testing.T) {
++	dir := t.TempDir()
++	statePath := filepath.Join(dir, "state.json")
++	var out strings.Builder
++	if err := run([]string{"authorize", "-client-id", "app", "-redirect-uri", "http://127.0.0.1/cb", "-state-file", statePath}, strings.NewReader(""), &out, workbuddyopen.NewClient()); err != nil {
++		t.Fatal(err)
++	}
++	if !strings.HasPrefix(out.String(), workbuddyopen.OAuthAuthorizeURL+"?") {
++		t.Fatalf("dispatch output=%q", out.String())
++	}
++}
++
++func TestRunExchangeMissingSecretDoesNotCallNetwork(t *testing.T) {
++	dir, statePath, session := newOAuthSessionFixture(t)
++	t.Setenv("WORKBUDDY_OPEN_CLIENT_SECRET", "")
++	transport := &oauthTransport{resp: `{}`}
++	client := &workbuddyopen.Client{HTTP: &http.Client{Transport: transport}}
++	err := run([]string{"exchange", "-state-file", statePath, "-token-file", filepath.Join(dir, "token.json")}, strings.NewReader(`{"code":"c","state":"`+session.State+`"}`), &strings.Builder{}, client)
++	if err == nil || transport.calls != 0 {
++		t.Fatalf("err=%v calls=%d", err, transport.calls)
++	}
++}
++
++func TestRunExchangeFreshWrongStateDoesNotCallNetwork(t *testing.T) {
++	dir, statePath, _ := newOAuthSessionFixture(t)
++	t.Setenv("WORKBUDDY_OPEN_CLIENT_SECRET", "fixture-secret")
++	transport := &oauthTransport{resp: `{}`}
++	client := &workbuddyopen.Client{HTTP: &http.Client{Transport: transport}}
++	err := run([]string{"exchange", "-state-file", statePath, "-token-file", filepath.Join(dir, "token.json")}, strings.NewReader(`{"code":"c","state":"wrong"}`), &strings.Builder{}, client)
++	if err == nil || transport.calls != 0 {
++		t.Fatalf("err=%v calls=%d", err, transport.calls)
++	}
++}
++
++func TestRunExchangeUsedSessionAndExistingDestinationDoNotCallNetwork(t *testing.T) {
++	t.Run("used", func(t *testing.T) {
++		dir, statePath, session := newOAuthSessionFixture(t)
++		if err := os.WriteFile(statePath+".used", []byte(`{"submitted":true}`), 0600); err != nil {
++			t.Fatal(err)
++		}
++		t.Setenv("WORKBUDDY_OPEN_CLIENT_SECRET", "fixture-secret")
++		transport := &oauthTransport{resp: `{}`}
++		client := &workbuddyopen.Client{HTTP: &http.Client{Transport: transport}}
++		err := run([]string{"exchange", "-state-file", statePath, "-token-file", filepath.Join(dir, "token.json")}, strings.NewReader(`{"code":"c","state":"`+session.State+`"}`), &strings.Builder{}, client)
++		if err == nil || transport.calls != 0 {
++			t.Fatalf("err=%v calls=%d", err, transport.calls)
++		}
++	})
++	t.Run("existing destination", func(t *testing.T) {
++		dir, statePath, session := newOAuthSessionFixture(t)
++		t.Setenv("WORKBUDDY_OPEN_CLIENT_SECRET", "fixture-secret")
++		tokenPath := filepath.Join(dir, "token.json")
++		if err := os.WriteFile(tokenPath, []byte("fixture"), 0600); err != nil {
++			t.Fatal(err)
++		}
++		transport := &oauthTransport{resp: `{}`}
++		client := &workbuddyopen.Client{HTTP: &http.Client{Transport: transport}}
++		err := run([]string{"exchange", "-state-file", statePath, "-token-file", tokenPath}, strings.NewReader(`{"code":"c","state":"`+session.State+`"}`), &strings.Builder{}, client)
++		if err == nil || transport.calls != 0 {
++			t.Fatalf("err=%v calls=%d", err, transport.calls)
++		}
++	})
++}
+diff --git a/cmd/openapi/token_file.go b/cmd/openapi/token_file.go
+new file mode 100644
+index 0000000..5ed41f6
+--- /dev/null
++++ b/cmd/openapi/token_file.go
+@@ -0,0 +1,65 @@
++package main
++
++import (
++	"encoding/json"
++	"errors"
++	"io"
++	"math"
++	"os"
++	"strings"
++	"time"
++
++	"github.com/linguo2625469/workbuddy2api-panel/internal/workbuddyopen"
++)
++
++type tokenDocument struct {
++	workbuddyopen.OAuthToken
++	ObtainedAt time.Time `json:"obtained_at"`
++}
++
++func readTokenFile(path string) (string, error) {
++	initial, err := os.Lstat(path)
++	if err != nil || initial.Mode()&os.ModeSymlink != 0 || !initial.Mode().IsRegular() {
++		return "", errors.New("redeem: token file unavailable")
++	}
++	if initial.Mode().Perm()&0077 != 0 {
++		return "", errors.New("redeem: token file must not be group/world-readable")
++	}
++	f, err := os.Open(path)
++	if err != nil {
++		return "", errors.New("redeem: token file unavailable")
++	}
++	defer f.Close()
++	opened, err := f.Stat()
++	if err != nil || !os.SameFile(initial, opened) {
++		return "", errors.New("redeem: token file changed")
++	}
++	b, err := io.ReadAll(io.LimitReader(f, maxInput+1))
++	if err != nil || len(b) > maxInput {
++		return "", errors.New("redeem: token file unreadable")
++	}
++	var doc tokenDocument
++	if err := json.Unmarshal(b, &doc); err != nil || strings.TrimSpace(doc.AccessToken) == "" {
++		return "", errors.New("redeem: token file has no access_token")
++	}
++	if !strings.EqualFold(strings.TrimSpace(doc.TokenType), "bearer") || doc.ExpiresIn <= 0 || doc.ExpiresIn > math.MaxInt64/int64(time.Second) {
++		return "", errors.New("redeem: token metadata is invalid")
++	}
++	now := time.Now()
++	if doc.ObtainedAt.IsZero() || doc.ObtainedAt.After(now) || now.After(doc.ObtainedAt.Add(time.Duration(doc.ExpiresIn)*time.Second)) {
++		return "", errors.New("redeem: token is expired or obtained_at is invalid")
++	}
++	if !hasScope(doc.Scope, "user.credit.exchange") {
++		return "", errors.New("redeem: token scope is insufficient")
++	}
++	return doc.AccessToken, nil
++}
++
++func hasScope(scope, required string) bool {
++	for _, value := range strings.Fields(scope) {
++		if value == required {
++			return true
++		}
++	}
++	return false
++}
+diff --git a/cmd/openapi/token_file_test.go b/cmd/openapi/token_file_test.go
+new file mode 100644
+index 0000000..1b843c3
+--- /dev/null
++++ b/cmd/openapi/token_file_test.go
+@@ -0,0 +1,81 @@
++package main
++
++import (
++	"encoding/json"
++	"os"
++	"path/filepath"
++	"strings"
++	"testing"
++	"time"
++)
++
++func writeTokenFixture(t *testing.T, value map[string]any, mode os.FileMode) string {
++	t.Helper()
++	path := filepath.Join(t.TempDir(), "token.json")
++	b, err := json.Marshal(value)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if err := os.WriteFile(path, b, mode); err != nil {
++		t.Fatal(err)
++	}
++	return path
++}
++
++func validTokenFixture() map[string]any {
++	return map[string]any{
++		"access_token": "fixture-token",
++		"token_type":   "Bearer",
++		"expires_in":   3600,
++		"scope":        "openid user.credit.exchange",
++		"obtained_at":  time.Now().UTC().Add(-time.Minute).Format(time.RFC3339),
++	}
++}
++
++func TestReadTokenFileValidAndMetadataFailures(t *testing.T) {
++	valid := writeTokenFixture(t, validTokenFixture(), 0600)
++	if got, err := readTokenFile(valid); err != nil || got != "fixture-token" {
++		t.Fatalf("valid token got=%q err=%v", got, err)
++	}
++	cases := []struct {
++		name string
++		edit func(map[string]any)
++	}{
++		{"expired", func(v map[string]any) {
++			v["obtained_at"] = time.Now().UTC().Add(-2 * time.Hour).Format(time.RFC3339)
++			v["expires_in"] = 1
++		}},
++		{"future", func(v map[string]any) { v["obtained_at"] = time.Now().UTC().Add(time.Minute).Format(time.RFC3339) }},
++		{"missing-obtained-at", func(v map[string]any) { delete(v, "obtained_at") }},
++		{"wrong-type", func(v map[string]any) { v["token_type"] = "Basic" }},
++		{"missing-scope", func(v map[string]any) { v["scope"] = "openid" }},
++		{"missing-expiry", func(v map[string]any) { delete(v, "expires_in") }},
++		{"nonpositive-expiry", func(v map[string]any) { v["expires_in"] = 0 }},
++		{"overflow-expiry", func(v map[string]any) { v["expires_in"] = "9223372036854775808" }},
++	}
++	for _, tc := range cases {
++		t.Run(tc.name, func(t *testing.T) {
++			v := validTokenFixture()
++			tc.edit(v)
++			if _, err := readTokenFile(writeTokenFixture(t, v, 0600)); err == nil {
++				t.Fatal("invalid token metadata accepted")
++			}
++		})
++	}
++}
++
++func TestReadTokenFileRejectsSymlinkAndPermissiveFile(t *testing.T) {
++	dir := t.TempDir()
++	target := writeTokenFixture(t, validTokenFixture(), 0600)
++	link := filepath.Join(dir, "link.json")
++	if err := os.Symlink(target, link); err != nil {
++		t.Skipf("symlinks unavailable: %v", err)
++	}
++	if _, err := readTokenFile(link); err == nil {
++		t.Fatal("symlink accepted")
++	}
++	permissive := writeTokenFixture(t, validTokenFixture(), 0644)
++	if _, err := readTokenFile(permissive); err == nil || !strings.Contains(err.Error(), "group/world") {
++		t.Fatalf("permissive file err=%v", err)
++	}
++}
+diff --git a/internal/activities/activities.go b/internal/activities/activities.go
+new file mode 100644
+index 0000000..535a76d
+--- /dev/null
++++ b/internal/activities/activities.go
+@@ -0,0 +1,153 @@
++// Package activities contains a read-only registry and eligibility decisions for
++// activity surfaces. It deliberately does not perform upstream requests or
++// mutate claims.
++package activities
++
++import (
++	"errors"
++	"time"
++)
++
++const DocsURL = "https://open.workbuddy.cn/docs/openapi"
++
++type SupportStatus string
++
++const (
++	SupportOfficial         SupportStatus = "official"
++	SupportLegacyUnverified SupportStatus = "legacy_unverified"
++)
++
++type EligibilityState string
++
++const (
++	EligibilityKnown   EligibilityState = "known"
++	EligibilityUnknown EligibilityState = "unknown"
++	EligibilityError   EligibilityState = "error"
++)
++
++type Eligibility struct {
++	State    EligibilityState
++	Eligible bool
++	Err      error
++}
++
++func KnownEligibility(eligible bool) Eligibility {
++	return Eligibility{State: EligibilityKnown, Eligible: eligible}
++}
++
++func UnknownEligibility() Eligibility { return Eligibility{State: EligibilityUnknown} }
++
++func EligibilityFailure(err error) Eligibility {
++	if err == nil {
++		err = errors.New("eligibility lookup failed")
++	}
++	return Eligibility{State: EligibilityError, Err: err}
++}
++
++type Activity struct {
++	ID              string        `json:"id"`
++	Name            string        `json:"name"`
++	Enabled         bool          `json:"enabled"`
++	Support         SupportStatus `json:"support"`
++	DocsURL         string        `json:"docs_url"`
++	SupportReason   string        `json:"support_reason"`
++	Mode            string        `json:"mode"`
++	RewardAvailable bool          `json:"reward_available"`
++	StartsAt        *time.Time    `json:"starts_at,omitempty"`
++	ExpiresAt       *time.Time    `json:"expires_at,omitempty"`
++}
++
++// Registry returns the small, source-backed set currently exposed to callers.
++// Legacy entries describe status only; they are not an instruction to invoke
++// private endpoints or to claim anything.
++func Registry() []Activity {
++	sep30 := time.Date(2026, 10, 1, 0, 0, 0, 0, time.FixedZone("UTC+8", 8*3600)) // exclusive end
++	return []Activity{
++		{
++			ID: "credit_redemption", Name: "Credit redemption", Enabled: true,
++			Support: SupportOfficial, DocsURL: DocsURL,
++			SupportReason:   "official contract; requires approved app, user OAuth, and a valid code; eligibility is unknown until verified",
++			RewardAvailable: false,
++		},
++		{
++			ID: "checkin_status", Name: "Check-in status", Enabled: true,
++			Support: SupportLegacyUnverified, DocsURL: DocsURL,
++			SupportReason:   "legacy status surface; not verified by the current official contract",
++			RewardAvailable: false,
++		},
++		{
++			ID: "compensation_status", Name: "Compensation status", Enabled: true,
++			Support: SupportLegacyUnverified, DocsURL: DocsURL,
++			SupportReason:   "legacy status surface; not verified by the current official contract",
++			RewardAvailable: false,
++		},
++		{
++			ID: "referral_fission_rules", Name: "Referral fission rules", Enabled: true,
++			Support: SupportOfficial, DocsURL: "https://www.codebuddy.cn/fission/", Mode: "rules_only",
++			SupportReason:   "official informational referral rules only; implementation and reward entitlement are not verified",
++			RewardAvailable: false,
++		},
++		{
++			ID: "enterprise_doublecredits_2026", Name: "Enterprise double credits (historical)", Enabled: false,
++			Support: SupportLegacyUnverified, DocsURL: "https://www.codebuddy.cn/docs/workbuddy/Pricing",
++			SupportReason:   "historical record; expired 2026-09-30 and not an active entitlement",
++			RewardAvailable: false, ExpiresAt: &sep30,
++		},
++	}
++}
++
++type DecisionReason string
++
++const (
++	DecisionAllowed            DecisionReason = "allowed"
++	DecisionDisabled           DecisionReason = "disabled"
++	DecisionUnsupported        DecisionReason = "unsupported"
++	DecisionNotStarted         DecisionReason = "not_started"
++	DecisionExpired            DecisionReason = "expired"
++	DecisionAlreadyClaimed     DecisionReason = "already_claimed"
++	DecisionUnknownEligibility DecisionReason = "unknown_eligibility"
++	DecisionEligibilityError   DecisionReason = "eligibility_error"
++	DecisionNoReward           DecisionReason = "no_reward"
++)
++
++type Decision struct {
++	Allowed bool
++	Reason  DecisionReason
++	Err     error
++}
++
++// Decide evaluates a snapshot only. now is explicit so expiry boundaries are
++// deterministic; no network or claim mutation occurs.
++func Decide(activity Activity, now time.Time, eligibility Eligibility, claimed bool) Decision {
++	if !activity.Enabled {
++		return Decision{Reason: DecisionDisabled}
++	}
++	if activity.Support != SupportOfficial {
++		return Decision{Reason: DecisionUnsupported}
++	}
++	if activity.StartsAt != nil && now.Before(*activity.StartsAt) {
++		return Decision{Reason: DecisionNotStarted}
++	}
++	if activity.ExpiresAt != nil && !now.Before(*activity.ExpiresAt) {
++		return Decision{Reason: DecisionExpired}
++	}
++	if claimed {
++		return Decision{Reason: DecisionAlreadyClaimed}
++	}
++	switch eligibility.State {
++	case EligibilityUnknown:
++		return Decision{Reason: DecisionUnknownEligibility}
++	case EligibilityError:
++		return Decision{Reason: DecisionEligibilityError, Err: eligibility.Err}
++	case EligibilityKnown:
++		if !eligibility.Eligible {
++			return Decision{Reason: DecisionNoReward}
++		}
++		if !activity.RewardAvailable {
++			return Decision{Reason: DecisionNoReward}
++		}
++		return Decision{Allowed: true, Reason: DecisionAllowed}
++	default:
++		return Decision{Reason: DecisionUnknownEligibility}
++	}
++}
+diff --git a/internal/activities/activities_test.go b/internal/activities/activities_test.go
+new file mode 100644
+index 0000000..8ec6b7b
+--- /dev/null
++++ b/internal/activities/activities_test.go
+@@ -0,0 +1,86 @@
++package activities
++
++import (
++	"errors"
++	"testing"
++	"time"
++)
++
++func officialActivity() Activity {
++	return Activity{ID: "credit_redemption", Enabled: true, Support: SupportOfficial, RewardAvailable: true}
++}
++
++func TestRegistryIsSourceBackedAndStable(t *testing.T) {
++	got := Registry()
++	if len(got) != 5 || got[0].ID != "credit_redemption" || got[1].ID != "checkin_status" || got[2].ID != "compensation_status" || got[3].ID != "referral_fission_rules" || got[4].ID != "enterprise_doublecredits_2026" {
++		t.Fatalf("registry IDs = %#v", got)
++	}
++	if got[0].DocsURL != DocsURL || got[0].Support != SupportOfficial {
++		t.Fatalf("credit support metadata = %#v", got[0])
++	}
++	for _, activity := range got {
++		if activity.RewardAvailable {
++			t.Fatalf("legacy activity metadata = %#v", activity)
++		}
++	}
++	if got[3].Mode != "rules_only" || got[4].Enabled || got[4].ExpiresAt == nil {
++		t.Fatalf("informational metadata = %#v %#v", got[3], got[4])
++	}
++}
++
++func TestDecideActive(t *testing.T) {
++	got := Decide(officialActivity(), time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC), KnownEligibility(true), false)
++	if !got.Allowed || got.Reason != DecisionAllowed {
++		t.Fatalf("decision = %#v", got)
++	}
++}
++
++func TestDecideExpiryBoundary(t *testing.T) {
++	expires := time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC)
++	activity := officialActivity()
++	activity.ExpiresAt = &expires
++	if got := Decide(activity, expires.Add(-time.Nanosecond), KnownEligibility(true), false); !got.Allowed {
++		t.Fatalf("before expiry = %#v", got)
++	}
++	if got := Decide(activity, expires, KnownEligibility(true), false); got.Reason != DecisionExpired {
++		t.Fatalf("at expiry = %#v", got)
++	}
++}
++
++func TestDecideEligibilityStatesAndClaim(t *testing.T) {
++	cases := []struct {
++		name        string
++		eligibility Eligibility
++		claimed     bool
++		reason      DecisionReason
++	}{
++		{"unknown", UnknownEligibility(), false, DecisionUnknownEligibility},
++		{"error", EligibilityFailure(errors.New("fixture")), false, DecisionEligibilityError},
++		{"claimed", KnownEligibility(true), true, DecisionAlreadyClaimed},
++		{"ineligible", KnownEligibility(false), false, DecisionNoReward},
++	}
++	for _, tc := range cases {
++		t.Run(tc.name, func(t *testing.T) {
++			got := Decide(officialActivity(), time.Time{}, tc.eligibility, tc.claimed)
++			if got.Reason != tc.reason || got.Allowed {
++				t.Fatalf("decision = %#v", got)
++			}
++			if tc.name == "error" && got.Err == nil {
++				t.Fatal("eligibility error was not preserved")
++			}
++		})
++	}
++}
++
++func TestDecideDisabledAndUnsupported(t *testing.T) {
++	activity := officialActivity()
++	activity.Enabled = false
++	if got := Decide(activity, time.Time{}, KnownEligibility(true), false); got.Reason != DecisionDisabled {
++		t.Fatalf("disabled = %#v", got)
++	}
++	activity.Enabled = true
++	activity.Support = SupportLegacyUnverified
++	if got := Decide(activity, time.Time{}, KnownEligibility(true), false); got.Reason != DecisionUnsupported {
++		t.Fatalf("unsupported = %#v", got)
++	}
++}
+diff --git a/internal/panel/activities.go b/internal/panel/activities.go
+new file mode 100644
+index 0000000..f772294
+--- /dev/null
++++ b/internal/panel/activities.go
+@@ -0,0 +1,16 @@
++package panel
++
++import (
++	"net/http"
++
++	"github.com/linguo2625469/workbuddy2api-panel/internal/activities"
++)
++
++// activities is a read-only catalog. It intentionally does not inspect
++// accounts, call upstream services, or claim rewards.
++func (p *Panel) activities(w http.ResponseWriter, _ *http.Request) {
++	writeJSON(w, http.StatusOK, map[string]any{
++		"verified_at": "2026-11-02",
++		"activities":  activities.Registry(),
++	})
++}
+diff --git a/internal/panel/activities_test.go b/internal/panel/activities_test.go
+new file mode 100644
+index 0000000..d90088f
+--- /dev/null
++++ b/internal/panel/activities_test.go
+@@ -0,0 +1,42 @@
++package panel
++
++import (
++	"encoding/json"
++	"net/http/httptest"
++	"testing"
++)
++
++func TestActivitiesEndpointRequiresAuth(t *testing.T) {
++	p := newTestPanel()
++	r := httptest.NewRecorder()
++	p.ServeHTTP(r, httptest.NewRequest("GET", "/panel/api/activities", nil))
++	if r.Code != 401 {
++		t.Fatalf("status=%d body=%s", r.Code, r.Body.String())
++	}
++}
++
++func TestActivitiesEndpointIsReadOnlyCatalog(t *testing.T) {
++	p := newTestPanel()
++	req := httptest.NewRequest("GET", "/panel/api/activities", nil)
++	req.Header.Set("Authorization", "Bearer test-key")
++	r := httptest.NewRecorder()
++	p.ServeHTTP(r, req)
++	if r.Code != 200 {
++		t.Fatalf("status=%d body=%s", r.Code, r.Body.String())
++	}
++	var body struct {
++		VerifiedAt string           `json:"verified_at"`
++		Activities []map[string]any `json:"activities"`
++	}
++	if err := json.Unmarshal(r.Body.Bytes(), &body); err != nil {
++		t.Fatal(err)
++	}
++	if body.VerifiedAt != "2026-11-02" || len(body.Activities) != 5 {
++		t.Fatalf("body=%s", r.Body.String())
++	}
++	for _, activity := range body.Activities {
++		if activity["reward_available"] != false {
++			t.Fatalf("invented reward: %#v", activity)
++		}
++	}
++}
+diff --git a/internal/server/capabilities.go b/internal/server/capabilities.go
+new file mode 100644
+index 0000000..b16a921
+--- /dev/null
++++ b/internal/server/capabilities.go
+@@ -0,0 +1,17 @@
++package server
++
++import "net/http"
++
++func (h *Handler) capabilities(w http.ResponseWriter, r *http.Request) {
++	writeJSON(w, http.StatusOK, map[string]any{
++		"chat_completions": true, "streaming": true,
++		"responses": false, "anthropic_messages": false,
++		"search_messages_only":  "/v1/search/messages",
++		"upstream_support":      "legacy_unverified",
++		"real_account_verified": false,
++	})
++}
++
++func (h *Handler) unsupportedProtocol(w http.ResponseWriter, r *http.Request) {
++	writeOpenAIError(w, http.StatusNotImplemented, "unsupported_protocol", "this gateway supports /v1/chat/completions; this protocol is not implemented")
++}
+diff --git a/internal/server/capabilities_test.go b/internal/server/capabilities_test.go
+new file mode 100644
+index 0000000..108dc41
+--- /dev/null
++++ b/internal/server/capabilities_test.go
+@@ -0,0 +1,40 @@
++package server
++
++import (
++	"net/http/httptest"
++	"strings"
++	"testing"
++)
++
++func TestCapabilitiesAuthAndUnsupportedProtocols(t *testing.T) {
++	h := NewHandler(Config{APIKey: "fixture"})
++	for _, tc := range []struct {
++		method, path string
++		status       int
++	}{
++		{"GET", "/v1/capabilities", 200}, {"POST", "/v1/responses", 501}, {"POST", "/v1/messages", 501},
++	} {
++		r := httptest.NewRequest(tc.method, tc.path, nil)
++		w := httptest.NewRecorder()
++		h.ServeHTTP(w, r)
++		if w.Code != 401 {
++			t.Fatalf("unauthorized %s: %d", tc.path, w.Code)
++		}
++		r = httptest.NewRequest(tc.method, tc.path, nil)
++		r.Header.Set("Authorization", "Bearer fixture")
++		w = httptest.NewRecorder()
++		h.ServeHTTP(w, r)
++		if w.Code != tc.status || !strings.Contains(w.Header().Get("Content-Type"), "application/json") {
++			t.Fatalf("%s: %d %s", tc.path, w.Code, w.Body)
++		}
++	}
++}
++
++func TestOversizeChatRejectedBeforeAccountSelection(t *testing.T) {
++	h := NewHandler(Config{MaxRequestBodyBytes: 32}) // nil pool would panic if routing ran.
++	w := httptest.NewRecorder()
++	h.ServeHTTP(w, httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(strings.Repeat("x", 33))))
++	if w.Code != 413 || !strings.Contains(w.Body.String(), "request_too_large") {
++		t.Fatalf("%d %s", w.Code, w.Body)
++	}
++}
+diff --git a/internal/server/request_validation.go b/internal/server/request_validation.go
+new file mode 100644
+index 0000000..c414742
+--- /dev/null
++++ b/internal/server/request_validation.go
+@@ -0,0 +1,49 @@
++package server
++
++import (
++	"bytes"
++	"encoding/json"
++	"fmt"
++	"io"
++	"strings"
++)
++
++// validateChatRequest checks the fields required to route a chat request while
++// leaving the original JSON untouched for the upstream client. Unknown fields
++// and nested values are deliberately not decoded into a restrictive struct.
++func validateChatRequest(body []byte) error {
++	dec := json.NewDecoder(bytes.NewReader(body))
++	var request map[string]json.RawMessage
++	if err := dec.Decode(&request); err != nil {
++		return fmt.Errorf("invalid JSON: %w", err)
++	}
++	if request == nil {
++		return fmt.Errorf("request body must be a JSON object")
++	}
++	var extra any
++	if err := dec.Decode(&extra); err != io.EOF {
++		if err == nil {
++			return fmt.Errorf("request body must contain a single JSON value")
++		}
++		return fmt.Errorf("invalid trailing JSON: %w", err)
++	}
++
++	model, ok := request["model"]
++	if !ok {
++		return fmt.Errorf("model is required")
++	}
++	var modelValue string
++	if err := json.Unmarshal(model, &modelValue); err != nil || strings.TrimSpace(modelValue) == "" {
++		return fmt.Errorf("model must be a non-empty string")
++	}
++
++	messages, ok := request["messages"]
++	if !ok {
++		return fmt.Errorf("messages is required")
++	}
++	var messageItems []json.RawMessage
++	if err := json.Unmarshal(messages, &messageItems); err != nil || messageItems == nil {
++		return fmt.Errorf("messages must be an array")
++	}
++	return nil
++}
+diff --git a/internal/server/request_validation_test.go b/internal/server/request_validation_test.go
+new file mode 100644
+index 0000000..4108b5e
+--- /dev/null
++++ b/internal/server/request_validation_test.go
+@@ -0,0 +1,79 @@
++package server
++
++import (
++	"encoding/json"
++	"io"
++	"net/http"
++	"net/http/httptest"
++	"strings"
++	"sync/atomic"
++	"testing"
++
++	"github.com/linguo2625469/workbuddy2api-panel/internal/auth"
++	"github.com/linguo2625469/workbuddy2api-panel/internal/upstream"
++)
++
++func TestChatValidationRejectsInvalidBodiesBeforeUpstream(t *testing.T) {
++	var calls atomic.Int32
++	up := &upstream.Client{HTTP: &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
++		calls.Add(1)
++		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(sseOK))}, nil
++	})}, ChatBaseCN: "https://fake.example"}
++	p := testPoolWith(&auth.Auth{UID: "validation", AccessToken: "fixture", ExpiresAt: 9999999999})
++	h := NewHandler(Config{Pool: p, Upstream: up, PromptMode: "passthrough"})
++
++	for _, body := range []string{
++		`{"model":"m","messages":[]} trailing`,
++		`null`, `[]`,
++		`{"messages":[]}`, `{"model":"  ","messages":[]}`,
++		`{"model":7,"messages":[]}`, `{"model":"m"}`,
++		`{"model":"m","messages":null}`, `{"model":"m","messages":"text"}`,
++	} {
++		rec := httptest.NewRecorder()
++		h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body)))
++		if rec.Code != http.StatusBadRequest {
++			t.Errorf("body %q: status=%d, want 400", body, rec.Code)
++		}
++		if !strings.Contains(rec.Body.String(), `"code":"invalid_request"`) {
++			t.Errorf("body %q: response=%s, want invalid_request", body, rec.Body.String())
++		}
++	}
++	if got := calls.Load(); got != 0 {
++		t.Fatalf("invalid requests called upstream %d times", got)
++	}
++}
++
++func TestChatValidationPreservesValidUnknownToolAndMultimodalJSON(t *testing.T) {
++	requestBody := `{"model":"m","messages":[{"role":"user","content":[{"type":"text","text":"hello"},{"type":"image_url","image_url":{"url":"https://example.invalid/image"}}]}],"tools":[{"type":"function","function":{"name":"lookup","parameters":{"type":"object"}}}],"vendor_extension":{"keep":[1,true,null]}}`
++	var got []byte
++	up := &upstream.Client{HTTP: &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
++		got, _ = io.ReadAll(r.Body)
++		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(sseOK))}, nil
++	})}, ChatBaseCN: "https://fake.example"}
++	p := testPoolWith(&auth.Auth{UID: "validation", AccessToken: "fixture", ExpiresAt: 9999999999})
++	h := NewHandler(Config{Pool: p, Upstream: up, PromptMode: "passthrough"})
++	rec := httptest.NewRecorder()
++	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(requestBody)))
++	if rec.Code != http.StatusOK {
++		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
++	}
++	var forwarded map[string]any
++	if err := json.Unmarshal(got, &forwarded); err != nil {
++		t.Fatalf("upstream body is not JSON: %v", err)
++	}
++	var want map[string]any
++	if err := json.Unmarshal([]byte(requestBody), &want); err != nil {
++		t.Fatal(err)
++	}
++	for _, key := range []string{"model", "messages", "tools", "vendor_extension"} {
++		if !jsonEqual(forwarded[key], want[key]) {
++			t.Errorf("forwarded %s changed:\n got: %#v\nwant: %#v", key, forwarded[key], want[key])
++		}
++	}
++}
++
++func jsonEqual(a, b any) bool {
++	aa, _ := json.Marshal(a)
++	bb, _ := json.Marshal(b)
++	return string(aa) == string(bb)
++}
+diff --git a/internal/workbuddyopen/oauth.go b/internal/workbuddyopen/oauth.go
+new file mode 100644
+index 0000000..809e36b
+--- /dev/null
++++ b/internal/workbuddyopen/oauth.go
+@@ -0,0 +1,175 @@
++package workbuddyopen
++
++import (
++	"context"
++	"crypto/rand"
++	"crypto/subtle"
++	"encoding/hex"
++	"encoding/json"
++	"errors"
++	"fmt"
++	"io"
++	"net"
++	"net/http"
++	"net/url"
++	"strings"
++	"time"
++)
++
++const (
++	OAuthAuthorizeURL = "https://www.workbuddy.cn/openapi/v2/authorize"
++	OAuthTokenURL     = "https://www.workbuddy.cn/openapi/v2/token"
++)
++
++// OAuthToken is the token response returned by the official Open API.
++type OAuthToken struct {
++	AccessToken  string `json:"access_token"`
++	TokenType    string `json:"token_type"`
++	ExpiresIn    int64  `json:"expires_in"`
++	RefreshToken string `json:"refresh_token,omitempty"`
++	Scope        string `json:"scope,omitempty"`
++	OpenID       string `json:"open_id,omitempty"`
++}
++
++// NewState returns a cryptographically random OAuth state value.
++func NewState() (string, error) {
++	b := make([]byte, 32)
++	if _, err := io.ReadFull(rand.Reader, b); err != nil {
++		return "", errors.New("oauth: generate state")
++	}
++	return hex.EncodeToString(b), nil
++}
++
++// VerifyState compares OAuth state values without an ordinary early-exit
++// comparison. Callers should generate and retain the expected value per flow.
++func VerifyState(expected, actual string) bool {
++	if strings.TrimSpace(expected) == "" || strings.TrimSpace(actual) == "" {
++		return false
++	}
++	return subtle.ConstantTimeCompare([]byte(expected), []byte(actual)) == 1
++}
++
++// AuthorizeURL builds the fixed official authorization endpoint URL.
++func (c *Client) AuthorizeURL(clientID, redirectURI, scope, state string) (string, error) {
++	if err := validateOAuthInputs(clientID, redirectURI, state); err != nil {
++		return "", err
++	}
++	u, _ := url.Parse(OAuthAuthorizeURL)
++	q := u.Query()
++	q.Set("response_type", "code")
++	q.Set("client_id", clientID)
++	q.Set("redirect_uri", redirectURI)
++	q.Set("scope", scope)
++	q.Set("state", state)
++	u.RawQuery = q.Encode()
++	return u.String(), nil
++}
++
++// ExchangeCode exchanges one authorization code. Credentials are supplied per
++// call and are not retained by Client.
++func (c *Client) ExchangeCode(ctx context.Context, clientID, clientSecret, code, redirectURI string) (*OAuthToken, error) {
++	if err := validateOAuthInputs(clientID, redirectURI, "state-not-required"); err != nil {
++		return nil, err
++	}
++	if strings.TrimSpace(clientSecret) == "" || strings.TrimSpace(code) == "" {
++		return nil, errors.New("oauth: client secret and authorization code are required")
++	}
++	return c.tokenRequest(ctx, url.Values{"grant_type": {"authorization_code"}, "code": {code}, "redirect_uri": {redirectURI}, "client_id": {clientID}, "client_secret": {clientSecret}})
++}
++
++// RefreshToken exchanges one refresh token. The rotated refresh token is
++// optional in the response, as permitted by the official contract.
++func (c *Client) RefreshToken(ctx context.Context, clientID, clientSecret, refreshToken string) (*OAuthToken, error) {
++	if strings.TrimSpace(clientID) == "" || strings.TrimSpace(clientSecret) == "" || strings.TrimSpace(refreshToken) == "" {
++		return nil, errors.New("oauth: client id, client secret and refresh token are required")
++	}
++	return c.tokenRequest(ctx, url.Values{"grant_type": {"refresh_token"}, "refresh_token": {refreshToken}, "client_id": {clientID}, "client_secret": {clientSecret}})
++}
++
++func validateOAuthInputs(clientID, redirectURI, state string) error {
++	if strings.TrimSpace(clientID) == "" {
++		return errors.New("oauth: client id is required")
++	}
++	if strings.TrimSpace(state) == "" {
++		return errors.New("oauth: state is required")
++	}
++	u, err := url.Parse(redirectURI)
++	if err != nil || u.Host == "" || u.User != nil || u.Fragment != "" {
++		return errors.New("oauth: invalid redirect uri")
++	}
++	if strings.EqualFold(u.Scheme, "https") {
++		return nil
++	}
++	if strings.EqualFold(u.Scheme, "http") && isLoopback(u.Hostname()) {
++		return nil
++	}
++	return errors.New("oauth: redirect uri must use https or loopback http")
++}
++
++func isLoopback(host string) bool {
++	if strings.EqualFold(host, "localhost") {
++		return true
++	}
++	ip := net.ParseIP(host)
++	return ip != nil && ip.IsLoopback()
++}
++
++func (c *Client) tokenRequest(ctx context.Context, values url.Values) (*OAuthToken, error) {
++	requestCtx, cancel := context.WithTimeout(ctx, c.timeout())
++	defer cancel()
++	req, err := http.NewRequestWithContext(requestCtx, http.MethodPost, OAuthTokenURL, strings.NewReader(values.Encode()))
++	if err != nil {
++		return nil, errors.New("oauth: create token request")
++	}
++	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
++	req.Header.Set("Accept", "application/json")
++	httpClient := c.httpClient()
++	clientCopy := *httpClient
++	clientCopy.CheckRedirect = func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }
++	resp, err := clientCopy.Do(req)
++	if err != nil {
++		if requestErr := requestCtx.Err(); requestErr != nil {
++			return nil, requestErr
++		}
++		return nil, errors.New("oauth: token request failed")
++	}
++	if resp.Body == nil {
++		return nil, errors.New("oauth: token response body is missing")
++	}
++	defer resp.Body.Close()
++	raw, readErr := io.ReadAll(io.LimitReader(resp.Body, maxResponseBody+1))
++	if readErr != nil {
++		if requestErr := requestCtx.Err(); requestErr != nil {
++			return nil, requestErr
++		}
++		return nil, errors.New("oauth: token response unreadable")
++	}
++	if len(raw) > maxResponseBody {
++		return nil, errors.New("oauth: token response exceeds 1 MiB")
++	}
++	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
++		return nil, fmt.Errorf("oauth: token endpoint returned HTTP %d", resp.StatusCode)
++	}
++	var token OAuthToken
++	if err := json.Unmarshal(raw, &token); err != nil {
++		return nil, errors.New("oauth: malformed token response")
++	}
++	if strings.TrimSpace(token.AccessToken) == "" || !strings.EqualFold(strings.TrimSpace(token.TokenType), "bearer") || token.ExpiresIn <= 0 {
++		return nil, errors.New("oauth: token response is invalid")
++	}
++	return &token, nil
++}
++
++func (c *Client) timeout() time.Duration {
++	if c.Timeout > 0 {
++		return c.Timeout
++	}
++	return defaultTimeout
++}
++
++func (c *Client) httpClient() *http.Client {
++	if c.HTTP != nil {
++		return c.HTTP
++	}
++	return http.DefaultClient
++}
+diff --git a/internal/workbuddyopen/oauth_test.go b/internal/workbuddyopen/oauth_test.go
+new file mode 100644
+index 0000000..bb26533
+--- /dev/null
++++ b/internal/workbuddyopen/oauth_test.go
+@@ -0,0 +1,96 @@
++package workbuddyopen
++
++import (
++	"context"
++	"errors"
++	"io"
++	"net/http"
++	"net/url"
++	"strings"
++	"testing"
++	"time"
++)
++
++func TestAuthorizeURLAndState(t *testing.T) {
++	state, err := NewState()
++	if err != nil || len(state) != 64 || !VerifyState(state, state) || VerifyState(state, state+"x") || VerifyState("", "") || VerifyState(" ", state) || VerifyState(state, " ") {
++		t.Fatalf("state=%q err=%v", state, err)
++	}
++	c := NewClient()
++	got, err := c.AuthorizeURL("client id", "http://127.0.0.1:4312/cb", "openid profile", "a&b")
++	if err != nil {
++		t.Fatal(err)
++	}
++	u, _ := url.Parse(got)
++	q := u.Query()
++	if u.String() == "" || q.Get("response_type") != "code" || q.Get("client_id") != "client id" || q.Get("redirect_uri") != "http://127.0.0.1:4312/cb" || q.Get("scope") != "openid profile" || q.Get("state") != "a&b" {
++		t.Fatalf("authorize URL=%s", got)
++	}
++	if u.Scheme != "https" || u.Host != "www.workbuddy.cn" || u.Path != "/openapi/v2/authorize" {
++		t.Fatalf("unexpected authorize endpoint: %s", got)
++	}
++}
++
++func TestOAuthRejectsInvalidRedirectAndState(t *testing.T) {
++	c := NewClient()
++	for _, redirect := range []string{"", "http://example.com/cb", "javascript:alert(1)", "http://[::2]", "https://client.example/cb#fragment"} {
++		if _, err := c.AuthorizeURL("client", redirect, "openid", "state"); err == nil {
++			t.Errorf("redirect %q accepted", redirect)
++		}
++	}
++	for _, clientID := range []string{"", "  "} {
++		if _, err := c.AuthorizeURL(clientID, "https://client.example/cb", "openid", "state"); err == nil {
++			t.Errorf("client id %q accepted", clientID)
++		}
++	}
++	if _, err := c.AuthorizeURL("client", "https://client.example/cb", "openid", ""); err == nil {
++		t.Error("empty state accepted")
++	}
++}
++
++func TestOAuthTokenFormsAndValidation(t *testing.T) {
++	var forms []url.Values
++	c := &Client{HTTP: &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
++		if r.URL.String() != OAuthTokenURL || r.Method != http.MethodPost {
++			t.Errorf("request=%s %s", r.Method, r.URL)
++		}
++		b, _ := io.ReadAll(r.Body)
++		form, _ := url.ParseQuery(string(b))
++		forms = append(forms, form)
++		return response(200, `{"access_token":"access","token_type":"Bearer","expires_in":3600,"scope":"openid","open_id":"id"}`, nil), nil
++	})}}
++	first, err := c.ExchangeCode(context.Background(), "id", "secret", "code+value", "https://client.example/cb")
++	if err != nil || first.AccessToken != "access" || first.ExpiresIn != 3600 {
++		t.Fatalf("exchange=%+v err=%v", first, err)
++	}
++	second, err := c.RefreshToken(context.Background(), "id", "secret", "refresh")
++	if err != nil || second.RefreshToken != "" {
++		t.Fatalf("refresh=%+v err=%v", second, err)
++	}
++	if len(forms) != 2 || forms[0].Get("grant_type") != "authorization_code" || forms[0].Get("code") != "code+value" || forms[0].Get("redirect_uri") == "" || forms[1].Get("grant_type") != "refresh_token" || forms[1].Get("refresh_token") != "refresh" {
++		t.Fatalf("forms=%v", forms)
++	}
++}
++
++func TestOAuthErrorsRedactedAndNoRedirect(t *testing.T) {
++	for _, status := range []int{302, 400, 500} {
++		c := &Client{HTTP: &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
++			return response(status, `{"secret":"do-not-leak"}`, http.Header{"Location": []string{"https://other.example"}}), nil
++		})}}
++		_, err := c.ExchangeCode(context.Background(), "id", "secret", "code", "https://client.example/cb")
++		if err == nil || !strings.Contains(err.Error(), "HTTP "+http.StatusText(status)) && status != 302 && status != 400 && status != 500 || strings.Contains(err.Error(), "do-not-leak") || strings.Contains(err.Error(), "secret") {
++			t.Errorf("status=%d err=%v", status, err)
++		}
++	}
++}
++
++func TestOAuthTimeoutPreservesContextError(t *testing.T) {
++	c := &Client{Timeout: time.Millisecond, HTTP: &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
++		<-time.After(100 * time.Millisecond)
++		return nil, errors.New("late")
++	})}}
++	_, err := c.RefreshToken(context.Background(), "id", "secret", "refresh")
++	if !errors.Is(err, context.DeadlineExceeded) {
++		t.Fatalf("err=%v", err)
++	}
++}

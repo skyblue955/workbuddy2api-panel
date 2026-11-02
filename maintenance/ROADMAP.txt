@@ -1,0 +1,16 @@
+Maintenance milestone state
+Continuation v1: see maintenance/v1/TASKS.txt, DEPLOY.txt and VERIFICATION.txt. Version1 implementation work proceeds on maintenance/v1-compat-rewards; phase1 is preserved, not the overall completion boundary.
+M1 audit + acceptance harness: delivered in this change. Evidence: phase1-audit.txt and VERIFICATION.txt.
+M2 first defensive fixes: delivered (secure startup, secret redaction, Retry-After preservation, deterministic model test).
+M3 official credit connector: library and mock tests delivered; UI/OAuth integration and live validation NOT completed.
+
+Next work, dependency order
+1. Review govulncheck report, establish supported Go/Node/container versions, tidy locked modules without blind upgrades.
+2. Add explicit feature/capability gates separating legacy automation, actual eligible claims and documented Open API operations; preserve migration visibility and do not silently misrepresent support.
+3. Build official app OAuth setup/state validation/token lifecycle with separate credential store, using approved app client ID/scope; requires a registered app and actual user authorization for live testing. Do not reuse legacy OAuth identity.
+4. Expose redemption as an explicit user action through the authenticated panel; persist request_id before submission and reconcile uncertain outcomes without rotating identity or request IDs.
+5. Investigate official local-assistant/cloud-task contracts before claiming a chat-compatible provider. Do not equate task APIs with raw chat completions.
+6. Maintain a source-backed activity registry with eligibility/deadline/claim status and failure visibility. Add channels only when an official public contract is available; no fabricated completion events.
+7. End-to-end opt-in account validation, review, release candidate and integration PR. No release tag or container publication before live prerequisites and review are resolved.
+
+Continuation rule: read this file plus VERIFICATION.txt and Git history; continue unfinished items. Never mark ongoing maintenance or real-account compatibility complete based only on mock tests.

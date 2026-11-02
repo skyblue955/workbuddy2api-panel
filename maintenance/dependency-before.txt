@@ -1,0 +1,282 @@
+go: downloading golang.org/x/vuln v1.9.0
+go: downloading golang.org/x/telemetry v0.0.0-20261010193011-f71dc92da45e
+go: downloading golang.org/x/mod v0.42.0
+go: downloading golang.org/x/tools v0.52.0
+go: downloading golang.org/x/sync v0.24.0
+=== Symbol Results ===
+
+Vulnerability #1: GO-2026-6809
+    Distrust compromised intermediate certificates in crypto/x509
+  More info: https://pkg.go.dev/vuln/GO-2026-6809
+  Standard library
+    Found in: crypto/x509@go1.27.1
+    Fixed in: crypto/x509@go1.27.3
+    Example traces found:
+      #1: internal/upstream/desktop.go:477:28: upstream.Client.DesktopChatWithExpert calls http.readWriteCloserBody.Read, which eventually calls x509.Certificate.Verify
+
+Vulnerability #2: GO-2026-6617
+    HTTP/2 server crash due to HPACK encoder race in net/http
+  More info: https://pkg.go.dev/vuln/GO-2026-6617
+  Standard library
+    Found in: net/http/internal/http2@go1.27.1
+    Fixed in: net/http/internal/http2@go1.27.2
+    Example traces found:
+      #1: internal/upstream/transport.go:116:26: upstream.roundTripCloseIdle calls http.Transport.CloseIdleConnections, which eventually calls http2.NetHTTPClientConn.Close
+      #2: internal/upstream/transport.go:116:26: upstream.roundTripCloseIdle calls http.Transport.CloseIdleConnections, which eventually calls http2.NetHTTPClientConn.Close
+      #3: internal/upstream/client.go:1233:31: upstream.Client.ChatStreamContext calls http.Client.Do, which eventually calls http2.NetHTTPClientConn.RoundTrip
+      #4: internal/upstream/client.go:1233:31: upstream.Client.ChatStreamContext calls http.Client.Do, which eventually calls http2.NetHTTPClientConn.RoundTrip
+      #5: cmd/server/main.go:371:19: server.main calls http.Server.Shutdown, which calls http2.Server.GracefulShutdown
+      #6: cmd/server/main.go:371:19: server.main calls http.Server.Shutdown, which calls http2.Server.GracefulShutdown
+      #7: cmd/server/main.go:375:30: server.main calls http.Server.ListenAndServe, which eventually calls http2.Server.ServeConn
+      #8: cmd/server/main.go:375:30: server.main calls http.Server.ListenAndServe, which eventually calls http2.Server.ServeConn
+      #9: internal/upstream/transport.go:116:26: upstream.roundTripCloseIdle calls http.Transport.CloseIdleConnections, which eventually calls http2.Transport.AddConn
+      #10: internal/upstream/transport.go:116:26: upstream.roundTripCloseIdle calls http.Transport.CloseIdleConnections, which eventually calls http2.Transport.AddConn
+      #11: internal/upstream/transport.go:116:26: upstream.roundTripCloseIdle calls http.Transport.CloseIdleConnections, which calls http2.Transport.CloseIdleConnections
+      #12: internal/upstream/transport.go:116:26: upstream.roundTripCloseIdle calls http.Transport.CloseIdleConnections, which calls http2.Transport.CloseIdleConnections
+      #13: internal/upstream/transport.go:116:26: upstream.roundTripCloseIdle calls http.Transport.CloseIdleConnections, which eventually calls http2.Transport.NewClientConn
+      #14: internal/upstream/transport.go:116:26: upstream.roundTripCloseIdle calls http.Transport.CloseIdleConnections, which eventually calls http2.Transport.NewClientConn
+      #15: internal/upstream/client.go:1233:31: upstream.Client.ChatStreamContext calls http.Client.Do, which eventually calls http2.Transport.RoundTrip
+      #16: internal/upstream/client.go:1233:31: upstream.Client.ChatStreamContext calls http.Client.Do, which eventually calls http2.Transport.RoundTrip
+      #17: internal/upstream/sse.go:729:32: upstream.StreamHint calls io.WriteString, which eventually calls http2.bufferedWriterTimeoutWriter.Write
+      #18: internal/upstream/sse.go:729:32: upstream.StreamHint calls io.WriteString, which eventually calls http2.bufferedWriterTimeoutWriter.Write
+      #19: internal/upstream/sse.go:729:32: upstream.StreamHint calls io.WriteString, which eventually calls http2.chunkWriter.Write
+      #20: internal/upstream/sse.go:729:32: upstream.StreamHint calls io.WriteString, which eventually calls http2.chunkWriter.Write
+      #21: internal/upstream/client.go:1245:19: upstream.Client.ChatStreamContext calls http2.gzipReader.Close
+      #22: internal/upstream/client.go:1245:19: upstream.Client.ChatStreamContext calls http2.gzipReader.Close
+      #23: internal/upstream/desktop.go:477:28: upstream.Client.DesktopChatWithExpert calls http2.gzipReader.Read
+      #24: internal/upstream/desktop.go:477:28: upstream.Client.DesktopChatWithExpert calls http2.gzipReader.Read
+      #25: internal/upstream/client.go:1233:31: upstream.Client.ChatStreamContext calls http.Client.Do, which eventually calls http2.requestBody.Close
+      #26: internal/upstream/client.go:1233:31: upstream.Client.ChatStreamContext calls http.Client.Do, which eventually calls http2.requestBody.Close
+      #27: internal/server/logging.go:517:10: server.responseObserver.Flush calls http.http2ResponseWriter.Flush, which calls http2.responseWriter.FlushError
+      #28: internal/server/logging.go:517:10: server.responseObserver.Flush calls http.http2ResponseWriter.Flush, which calls http2.responseWriter.FlushError
+      #29: internal/server/logging.go:512:31: server.responseObserver.Write calls http2.responseWriter.Write
+      #30: internal/server/logging.go:512:31: server.responseObserver.Write calls http2.responseWriter.Write
+      #31: internal/server/logging.go:505:30: server.responseObserver.WriteHeader calls http2.responseWriter.WriteHeader
+      #32: internal/server/logging.go:505:30: server.responseObserver.WriteHeader calls http2.responseWriter.WriteHeader
+      #33: internal/upstream/sse.go:729:32: upstream.StreamHint calls io.WriteString, which calls http2.responseWriter.WriteString
+      #34: internal/upstream/sse.go:729:32: upstream.StreamHint calls io.WriteString, which calls http2.responseWriter.WriteString
+      #35: internal/upstream/sse.go:729:32: upstream.StreamHint calls io.WriteString, which eventually calls http2.stickyErrWriter.Write
+      #36: internal/upstream/sse.go:729:32: upstream.StreamHint calls io.WriteString, which eventually calls http2.stickyErrWriter.Write
+      #37: internal/upstream/client.go:1245:19: upstream.Client.ChatStreamContext calls http2.transportResponseBody.Close
+      #38: internal/upstream/client.go:1245:19: upstream.Client.ChatStreamContext calls http2.transportResponseBody.Close
+      #39: internal/upstream/desktop.go:477:28: upstream.Client.DesktopChatWithExpert calls http2.transportResponseBody.Read
+      #40: internal/upstream/desktop.go:477:28: upstream.Client.DesktopChatWithExpert calls http2.transportResponseBody.Read
+
+Vulnerability #3: GO-2026-6613
+    HTTP/1 server connection desynchronization after 2xx CONNECT response in
+    net/http
+  More info: https://pkg.go.dev/vuln/GO-2026-6613
+  Standard library
+    Found in: net/http@go1.27.1
+    Fixed in: net/http@go1.27.2
+    Example traces found:
+      #1: internal/upstream/sse.go:729:32: upstream.StreamHint calls io.WriteString, which eventually calls http.CanonicalHeaderKey
+      #2: internal/upstream/client.go:1233:31: upstream.Client.ChatStreamContext calls http.Client.Do
+      #3: internal/upstream/client.go:431:31: upstream.ParseRetryAfter calls http.Header.Get
+      #4: internal/upstream/sse.go:522:7: upstream.StreamHint calls http.Header.Set
+      #5: internal/upstream/client.go:1224:30: upstream.Client.ChatStreamContext calls http.NewRequest
+      #6: internal/upstream/search.go:146:40: upstream.Client.Search calls http.NewRequestWithContext
+      #7: internal/server/logging.go:395:43: server.requestTrace.captureClientInfo calls http.Request.UserAgent
+      #8: internal/server/handler.go:151:15: server.NewHandler calls http.ServeMux.Handle
+      #9: internal/server/handler.go:143:18: server.NewHandler calls http.ServeMux.HandleFunc
+      #10: internal/panel/panel.go:205:17: panel.Panel.ServeHTTP calls http.ServeMux.ServeHTTP
+      #11: cmd/server/main.go:375:30: server.main calls http.Server.ListenAndServe
+      #12: cmd/server/main.go:371:19: server.main calls http.Server.Shutdown
+      #13: internal/upstream/transport.go:116:26: upstream.roundTripCloseIdle calls http.Transport.CloseIdleConnections
+      #14: internal/upstream/client.go:1245:19: upstream.Client.ChatStreamContext calls http.body.Close
+      #15: internal/upstream/desktop.go:477:28: upstream.Client.DesktopChatWithExpert calls http.body.Read
+      #16: internal/upstream/client.go:1245:19: upstream.Client.ChatStreamContext calls http.bodyEOFSignal.Close
+      #17: internal/upstream/desktop.go:477:28: upstream.Client.DesktopChatWithExpert calls http.bodyEOFSignal.Read
+      #18: internal/upstream/blackcat.go:60:17: upstream.Client.RunNightChats calls io.Copy, which eventually calls http.bodyLocked.Read
+      #19: internal/upstream/sse.go:729:32: upstream.StreamHint calls io.WriteString, which calls http.bufioFlushWriter.Write
+      #20: internal/upstream/client.go:1245:19: upstream.Client.ChatStreamContext calls http.cancelTimerBody.Close
+      #21: internal/upstream/desktop.go:477:28: upstream.Client.DesktopChatWithExpert calls http.cancelTimerBody.Read
+      #22: internal/upstream/sse.go:729:32: upstream.StreamHint calls io.WriteString, which eventually calls http.checkConnErrorWriter.Write
+      #23: internal/upstream/sse.go:729:32: upstream.StreamHint calls io.WriteString, which eventually calls http.chunkWriter.Write
+      #24: internal/upstream/blackcat.go:60:17: upstream.Client.RunNightChats calls io.Copy, which eventually calls http.connReader.Read
+      #25: internal/upstream/client.go:1245:19: upstream.Client.ChatStreamContext calls http2.transportResponseBody.Close, which eventually calls http.expectContinueReader.Close
+      #26: internal/upstream/client.go:1244:27: upstream.Client.ChatStreamContext calls io.ReadAll, which calls http.expectContinueReader.Read
+      #27: internal/upstream/client.go:1245:19: upstream.Client.ChatStreamContext calls http.gzipReader.Close
+      #28: internal/upstream/desktop.go:477:28: upstream.Client.DesktopChatWithExpert calls http.gzipReader.Read
+      #29: internal/server/logging.go:517:10: server.responseObserver.Flush calls http.http2ResponseWriter.Flush
+      #30: internal/session/ids.go:52:30: session.NewMessageID calls rand.Read, which eventually calls http.loggingConn.Read
+      #31: cmd/trial/main.go:69:14: trial.main calls fmt.Fprintf, which calls http.loggingConn.Write
+      #32: internal/upstream/blackcat.go:60:17: upstream.Client.RunNightChats calls io.Copy, which eventually calls http.maxBytesReader.Read
+      #33: internal/redisstore/redisstore.go:174:16: redisstore.Upstash.Close calls sync.Once.Do, which eventually calls http.onceCloseListener.Close
+      #34: internal/upstream/blackcat.go:60:17: upstream.Client.RunNightChats calls io.Copy, which eventually calls http.persistConn.Read
+      #35: internal/upstream/blackcat.go:60:17: upstream.Client.RunNightChats calls io.Copy, which eventually calls http.persistConnWriter.ReadFrom
+      #36: internal/upstream/sse.go:729:32: upstream.StreamHint calls io.WriteString, which eventually calls http.persistConnWriter.Write
+      #37: internal/upstream/client.go:1245:19: upstream.Client.ChatStreamContext calls http2.transportResponseBody.Close, which eventually calls http.readTrackingBody.Close
+      #38: internal/upstream/client.go:1244:27: upstream.Client.ChatStreamContext calls io.ReadAll, which calls http.readTrackingBody.Read
+      #39: internal/upstream/desktop.go:477:28: upstream.Client.DesktopChatWithExpert calls http.readWriteCloserBody.Read
+      #40: internal/server/logging.go:517:10: server.responseObserver.Flush calls http.response.Flush
+      #41: internal/server/logging.go:512:31: server.responseObserver.Write calls http.response.Write
+      #42: internal/server/logging.go:505:30: server.responseObserver.WriteHeader calls http.response.WriteHeader
+      #43: internal/upstream/sse.go:729:32: upstream.StreamHint calls io.WriteString, which calls http.response.WriteString
+      #44: cmd/credit/main.go:218:25: credit.main calls http.transportReadFromServerError.Error
+
+Vulnerability #4: GO-2026-6612
+    Double flow control refund on HTTP/2 server streams in net/http
+  More info: https://pkg.go.dev/vuln/GO-2026-6612
+  Standard library
+    Found in: net/http/internal/http2@go1.27.1
+    Fixed in: net/http/internal/http2@go1.27.2
+    Example traces found:
+      #1: cmd/server/main.go:375:30: server.main calls http.Server.ListenAndServe, which eventually calls http2.Server.ServeConn
+      #2: cmd/server/main.go:375:30: server.main calls http.Server.ListenAndServe, which eventually calls http2.Server.ServeConn
+      #3: internal/upstream/client.go:1233:31: upstream.Client.ChatStreamContext calls http.Client.Do, which eventually calls http2.requestBody.Close
+      #4: internal/upstream/client.go:1233:31: upstream.Client.ChatStreamContext calls http.Client.Do, which eventually calls http2.requestBody.Close
+      #5: internal/upstream/client.go:1244:27: upstream.Client.ChatStreamContext calls io.ReadAll, which calls http2.requestBody.Read
+      #6: internal/upstream/client.go:1244:27: upstream.Client.ChatStreamContext calls io.ReadAll, which calls http2.requestBody.Read
+
+Vulnerability #5: GO-2026-6611
+    Excessive CPU consumption from repeated initial window changes in net/http
+  More info: https://pkg.go.dev/vuln/GO-2026-6611
+  Standard library
+    Found in: net/http/internal/http2@go1.27.1
+    Fixed in: net/http/internal/http2@go1.27.2
+    Example traces found:
+      #1: internal/upstream/transport.go:116:26: upstream.roundTripCloseIdle calls http.Transport.CloseIdleConnections, which eventually calls http2.NetHTTPClientConn.Close
+      #2: internal/upstream/transport.go:116:26: upstream.roundTripCloseIdle calls http.Transport.CloseIdleConnections, which eventually calls http2.NetHTTPClientConn.Close
+      #3: internal/upstream/client.go:1233:31: upstream.Client.ChatStreamContext calls http.Client.Do, which eventually calls http2.NetHTTPClientConn.RoundTrip
+      #4: internal/upstream/client.go:1233:31: upstream.Client.ChatStreamContext calls http.Client.Do, which eventually calls http2.NetHTTPClientConn.RoundTrip
+      #5: cmd/server/main.go:371:19: server.main calls http.Server.Shutdown, which calls http2.Server.GracefulShutdown
+      #6: cmd/server/main.go:371:19: server.main calls http.Server.Shutdown, which calls http2.Server.GracefulShutdown
+      #7: cmd/server/main.go:375:30: server.main calls http.Server.ListenAndServe, which eventually calls http2.Server.ServeConn
+      #8: cmd/server/main.go:375:30: server.main calls http.Server.ListenAndServe, which eventually calls http2.Server.ServeConn
+      #9: internal/upstream/transport.go:116:26: upstream.roundTripCloseIdle calls http.Transport.CloseIdleConnections, which eventually calls http2.Transport.AddConn
+      #10: internal/upstream/transport.go:116:26: upstream.roundTripCloseIdle calls http.Transport.CloseIdleConnections, which eventually calls http2.Transport.AddConn
+      #11: internal/upstream/transport.go:116:26: upstream.roundTripCloseIdle calls http.Transport.CloseIdleConnections, which calls http2.Transport.CloseIdleConnections
+      #12: internal/upstream/transport.go:116:26: upstream.roundTripCloseIdle calls http.Transport.CloseIdleConnections, which calls http2.Transport.CloseIdleConnections
+      #13: internal/upstream/transport.go:116:26: upstream.roundTripCloseIdle calls http.Transport.CloseIdleConnections, which eventually calls http2.Transport.NewClientConn
+      #14: internal/upstream/transport.go:116:26: upstream.roundTripCloseIdle calls http.Transport.CloseIdleConnections, which eventually calls http2.Transport.NewClientConn
+      #15: internal/upstream/client.go:1233:31: upstream.Client.ChatStreamContext calls http.Client.Do, which eventually calls http2.Transport.RoundTrip
+      #16: internal/upstream/client.go:1233:31: upstream.Client.ChatStreamContext calls http.Client.Do, which eventually calls http2.Transport.RoundTrip
+      #17: internal/upstream/sse.go:729:32: upstream.StreamHint calls io.WriteString, which eventually calls http2.bufferedWriterTimeoutWriter.Write
+      #18: internal/upstream/sse.go:729:32: upstream.StreamHint calls io.WriteString, which eventually calls http2.bufferedWriterTimeoutWriter.Write
+      #19: internal/upstream/sse.go:729:32: upstream.StreamHint calls io.WriteString, which eventually calls http2.chunkWriter.Write
+      #20: internal/upstream/sse.go:729:32: upstream.StreamHint calls io.WriteString, which eventually calls http2.chunkWriter.Write
+      #21: internal/upstream/client.go:1245:19: upstream.Client.ChatStreamContext calls http2.gzipReader.Close
+      #22: internal/upstream/client.go:1245:19: upstream.Client.ChatStreamContext calls http2.gzipReader.Close
+      #23: internal/upstream/desktop.go:477:28: upstream.Client.DesktopChatWithExpert calls http2.gzipReader.Read
+      #24: internal/upstream/desktop.go:477:28: upstream.Client.DesktopChatWithExpert calls http2.gzipReader.Read
+      #25: internal/upstream/client.go:1233:31: upstream.Client.ChatStreamContext calls http.Client.Do, which eventually calls http2.requestBody.Close
+      #26: internal/upstream/client.go:1233:31: upstream.Client.ChatStreamContext calls http.Client.Do, which eventually calls http2.requestBody.Close
+      #27: internal/server/logging.go:517:10: server.responseObserver.Flush calls http.http2ResponseWriter.Flush, which calls http2.responseWriter.FlushError
+      #28: internal/server/logging.go:517:10: server.responseObserver.Flush calls http.http2ResponseWriter.Flush, which calls http2.responseWriter.FlushError
+      #29: internal/server/logging.go:512:31: server.responseObserver.Write calls http2.responseWriter.Write
+      #30: internal/server/logging.go:512:31: server.responseObserver.Write calls http2.responseWriter.Write
+      #31: internal/server/logging.go:505:30: server.responseObserver.WriteHeader calls http2.responseWriter.WriteHeader
+      #32: internal/server/logging.go:505:30: server.responseObserver.WriteHeader calls http2.responseWriter.WriteHeader
+      #33: internal/upstream/sse.go:729:32: upstream.StreamHint calls io.WriteString, which calls http2.responseWriter.WriteString
+      #34: internal/upstream/sse.go:729:32: upstream.StreamHint calls io.WriteString, which calls http2.responseWriter.WriteString
+      #35: internal/upstream/sse.go:729:32: upstream.StreamHint calls io.WriteString, which eventually calls http2.stickyErrWriter.Write
+      #36: internal/upstream/sse.go:729:32: upstream.StreamHint calls io.WriteString, which eventually calls http2.stickyErrWriter.Write
+      #37: internal/upstream/client.go:1245:19: upstream.Client.ChatStreamContext calls http2.transportResponseBody.Close
+      #38: internal/upstream/client.go:1245:19: upstream.Client.ChatStreamContext calls http2.transportResponseBody.Close
+      #39: internal/upstream/desktop.go:477:28: upstream.Client.DesktopChatWithExpert calls http2.transportResponseBody.Read
+      #40: internal/upstream/desktop.go:477:28: upstream.Client.DesktopChatWithExpert calls http2.transportResponseBody.Read
+
+Vulnerability #6: GO-2026-6610
+    HTTP/2 transport accepts malformed framing-related headers in net/http
+  More info: https://pkg.go.dev/vuln/GO-2026-6610
+  Standard library
+    Found in: net/http/internal/http2@go1.27.1
+    Fixed in: net/http/internal/http2@go1.27.2
+    Example traces found:
+      #1: internal/upstream/transport.go:116:26: upstream.roundTripCloseIdle calls http.Transport.CloseIdleConnections, which eventually calls http2.Transport.AddConn
+      #2: internal/upstream/transport.go:116:26: upstream.roundTripCloseIdle calls http.Transport.CloseIdleConnections, which eventually calls http2.Transport.AddConn
+      #3: internal/upstream/transport.go:116:26: upstream.roundTripCloseIdle calls http.Transport.CloseIdleConnections, which eventually calls http2.Transport.NewClientConn
+      #4: internal/upstream/transport.go:116:26: upstream.roundTripCloseIdle calls http.Transport.CloseIdleConnections, which eventually calls http2.Transport.NewClientConn
+      #5: internal/upstream/client.go:1233:31: upstream.Client.ChatStreamContext calls http.Client.Do, which eventually calls http2.Transport.RoundTrip
+      #6: internal/upstream/client.go:1233:31: upstream.Client.ChatStreamContext calls http.Client.Do, which eventually calls http2.Transport.RoundTrip
+
+Vulnerability #7: GO-2026-6608
+    Memory limit bypass when parsing MIME headers in net/textproto,
+    mime/multipart
+  More info: https://pkg.go.dev/vuln/GO-2026-6608
+  Standard library
+    Found in: net/textproto@go1.27.1
+    Fixed in: net/textproto@go1.27.2
+    Example traces found:
+      #1: internal/panel/import.go:45:32: panel.Panel.importCockpit calls http.Request.ParseMultipartForm, which calls multipart.Reader.ReadForm
+      #2: internal/upstream/transport.go:116:26: upstream.roundTripCloseIdle calls http.Transport.CloseIdleConnections, which eventually calls textproto.Reader.ReadMIMEHeader
+
+Vulnerability #8: GO-2026-6607
+    Reject malformed ECH outer extension references in crypto/tls
+  More info: https://pkg.go.dev/vuln/GO-2026-6607
+  Standard library
+    Found in: crypto/tls@go1.27.1
+    Fixed in: crypto/tls@go1.27.2
+    Example traces found:
+      #1: internal/upstream/transport.go:116:26: upstream.roundTripCloseIdle calls http.Transport.CloseIdleConnections, which eventually calls tls.Conn.HandshakeContext
+      #2: internal/upstream/desktop.go:477:28: upstream.Client.DesktopChatWithExpert calls http.readWriteCloserBody.Read, which calls tls.Conn.Read
+      #3: internal/upstream/sse.go:729:32: upstream.StreamHint calls io.WriteString, which calls tls.Conn.Write
+      #4: internal/redisstore/redisstore.go:71:27: redisstore.New calls redis.NewClient, which eventually calls tls.DialWithDialer
+      #5: internal/upstream/client.go:1233:31: upstream.Client.ChatStreamContext calls http.Client.Do, which eventually calls tls.Dialer.DialContext
+
+Vulnerability #9: GO-2026-6605
+    HTTP/1 client connection desynchronization after CONNECT rejection in
+    net/http
+  More info: https://pkg.go.dev/vuln/GO-2026-6605
+  Standard library
+    Found in: net/http@go1.27.1
+    Fixed in: net/http@go1.27.2
+    Example traces found:
+      #1: internal/upstream/client.go:1233:31: upstream.Client.ChatStreamContext calls http.Client.Do
+      #2: internal/upstream/transport.go:116:26: upstream.roundTripCloseIdle calls http.Transport.CloseIdleConnections
+
+Vulnerability #10: GO-2026-6603
+    HTTP/2 server memory exhaustion due to Trailer headers in net/http
+  More info: https://pkg.go.dev/vuln/GO-2026-6603
+  Standard library
+    Found in: net/http/internal/http2@go1.27.1
+    Fixed in: net/http/internal/http2@go1.27.2
+    Example traces found:
+      #1: internal/upstream/transport.go:116:26: upstream.roundTripCloseIdle calls http.Transport.CloseIdleConnections, which eventually calls http2.NetHTTPClientConn.Close
+      #2: internal/upstream/transport.go:116:26: upstream.roundTripCloseIdle calls http.Transport.CloseIdleConnections, which eventually calls http2.NetHTTPClientConn.Close
+      #3: internal/upstream/client.go:1233:31: upstream.Client.ChatStreamContext calls http.Client.Do, which eventually calls http2.NetHTTPClientConn.RoundTrip
+      #4: internal/upstream/client.go:1233:31: upstream.Client.ChatStreamContext calls http.Client.Do, which eventually calls http2.NetHTTPClientConn.RoundTrip
+      #5: cmd/server/main.go:371:19: server.main calls http.Server.Shutdown, which calls http2.Server.GracefulShutdown
+      #6: cmd/server/main.go:371:19: server.main calls http.Server.Shutdown, which calls http2.Server.GracefulShutdown
+      #7: cmd/server/main.go:375:30: server.main calls http.Server.ListenAndServe, which eventually calls http2.Server.ServeConn
+      #8: cmd/server/main.go:375:30: server.main calls http.Server.ListenAndServe, which eventually calls http2.Server.ServeConn
+      #9: internal/upstream/transport.go:116:26: upstream.roundTripCloseIdle calls http.Transport.CloseIdleConnections, which eventually calls http2.Transport.AddConn
+      #10: internal/upstream/transport.go:116:26: upstream.roundTripCloseIdle calls http.Transport.CloseIdleConnections, which eventually calls http2.Transport.AddConn
+      #11: internal/upstream/transport.go:116:26: upstream.roundTripCloseIdle calls http.Transport.CloseIdleConnections, which calls http2.Transport.CloseIdleConnections
+      #12: internal/upstream/transport.go:116:26: upstream.roundTripCloseIdle calls http.Transport.CloseIdleConnections, which calls http2.Transport.CloseIdleConnections
+      #13: internal/upstream/transport.go:116:26: upstream.roundTripCloseIdle calls http.Transport.CloseIdleConnections, which eventually calls http2.Transport.NewClientConn
+      #14: internal/upstream/transport.go:116:26: upstream.roundTripCloseIdle calls http.Transport.CloseIdleConnections, which eventually calls http2.Transport.NewClientConn
+      #15: internal/upstream/client.go:1233:31: upstream.Client.ChatStreamContext calls http.Client.Do, which eventually calls http2.Transport.RoundTrip
+      #16: internal/upstream/client.go:1233:31: upstream.Client.ChatStreamContext calls http.Client.Do, which eventually calls http2.Transport.RoundTrip
+      #17: internal/upstream/sse.go:729:32: upstream.StreamHint calls io.WriteString, which eventually calls http2.bufferedWriterTimeoutWriter.Write
+      #18: internal/upstream/sse.go:729:32: upstream.StreamHint calls io.WriteString, which eventually calls http2.bufferedWriterTimeoutWriter.Write
+      #19: internal/upstream/sse.go:729:32: upstream.StreamHint calls io.WriteString, which eventually calls http2.chunkWriter.Write
+      #20: internal/upstream/sse.go:729:32: upstream.StreamHint calls io.WriteString, which eventually calls http2.chunkWriter.Write
+      #21: internal/upstream/client.go:1245:19: upstream.Client.ChatStreamContext calls http2.gzipReader.Close
+      #22: internal/upstream/client.go:1245:19: upstream.Client.ChatStreamContext calls http2.gzipReader.Close
+      #23: internal/upstream/desktop.go:477:28: upstream.Client.DesktopChatWithExpert calls http2.gzipReader.Read
+      #24: internal/upstream/desktop.go:477:28: upstream.Client.DesktopChatWithExpert calls http2.gzipReader.Read
+      #25: internal/upstream/client.go:1233:31: upstream.Client.ChatStreamContext calls http.Client.Do, which eventually calls http2.requestBody.Close
+      #26: internal/upstream/client.go:1233:31: upstream.Client.ChatStreamContext calls http.Client.Do, which eventually calls http2.requestBody.Close
+      #27: internal/server/logging.go:517:10: server.responseObserver.Flush calls http.http2ResponseWriter.Flush, which calls http2.responseWriter.FlushError
+      #28: internal/server/logging.go:517:10: server.responseObserver.Flush calls http.http2ResponseWriter.Flush, which calls http2.responseWriter.FlushError
+      #29: internal/server/logging.go:512:31: server.responseObserver.Write calls http2.responseWriter.Write
+      #30: internal/server/logging.go:512:31: server.responseObserver.Write calls http2.responseWriter.Write
+      #31: internal/server/logging.go:505:30: server.responseObserver.WriteHeader calls http2.responseWriter.WriteHeader
+      #32: internal/server/logging.go:505:30: server.responseObserver.WriteHeader calls http2.responseWriter.WriteHeader
+      #33: internal/upstream/sse.go:729:32: upstream.StreamHint calls io.WriteString, which calls http2.responseWriter.WriteString
+      #34: internal/upstream/sse.go:729:32: upstream.StreamHint calls io.WriteString, which calls http2.responseWriter.WriteString
+      #35: internal/upstream/sse.go:729:32: upstream.StreamHint calls io.WriteString, which eventually calls http2.stickyErrWriter.Write
+      #36: internal/upstream/sse.go:729:32: upstream.StreamHint calls io.WriteString, which eventually calls http2.stickyErrWriter.Write
+      #37: internal/upstream/client.go:1245:19: upstream.Client.ChatStreamContext calls http2.transportResponseBody.Close
+      #38: internal/upstream/client.go:1245:19: upstream.Client.ChatStreamContext calls http2.transportResponseBody.Close
+      #39: internal/upstream/desktop.go:477:28: upstream.Client.DesktopChatWithExpert calls http2.transportResponseBody.Read
+      #40: internal/upstream/desktop.go:477:28: upstream.Client.DesktopChatWithExpert calls http2.transportResponseBody.Read
+
+Your code is affected by 10 vulnerabilities from the Go standard library.
+This scan also found 2 vulnerabilities in packages you import and 2
+vulnerabilities in modules you require, but your code doesn't appear to call
+these vulnerabilities.
+Use '-show verbose' for more details.
+exit status 3
