@@ -1,0 +1,12 @@
+{
+  "business_code": 0,
+  "credentials_changed": false,
+  "enterprise_id_present": false,
+  "http_status": 200,
+  "identity_entitlement": "not_established_by_readonly_task_list",
+  "legacy_source_gate": true,
+  "read_success": true,
+  "requests": 1,
+  "reward_or_behavior_calls": 0,
+  "task_count": 19
+}

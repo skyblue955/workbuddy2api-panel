@@ -210,27 +210,22 @@ func (a *Auth) IsGlobal() bool { return a.Realm() == "global" }
 // 无需加锁——Realm() 加锁是因为 realm/Domain 会被 RefreshToken 在锁内改写。
 func (a *Auth) IsEnterprise() bool { return strings.TrimSpace(a.EnterpriseID) != "" }
 
-// IsEnterpriseSession 报告当前凭证是否处于「企业上下文」：
-// 账号本身是企业版（IsEnterprise），或 AccessToken 签发自**企业切换会话**
-// （JWT payload 带 token_source=enterprise_switch——浏览器在企业空间状态下
-// 完成 OAuth 授权时签发）。
-//
-// 为什么单独一站：企业切换会话与真企业版的上游表现**不同**（实测 2026-10-12，
-// 同一时刻与个人号 A/B 对照）——成长任务列表 / 额度查询 / 领养 Buddy 等**读端点
-// 与直连 API 照常**，但 /v2/report 行为事件**返回 200 却被静默丢弃**（15 个成长
-// 任务全部 0/x，重跑并 90s 内逐 15s 回读进度从不跳动），连登 / 签到同样无效。
-// 即「读得见、记不上账」：不跳过则队列每轮白跑全部任务（含真实对话配额）且
-// 无任何报错。因此行为类任务（活跃上报 / 连登 / 旅行 / 夜猫子 / 成长任务执行）
-// 的门控应使用本方法；签到与任务列表扫描不在此列（签到失败是显式报错，
-// 列表扫描实测可用）。额度查询 / 选号 / 保活照常（按 IsEnterprise 口径）。
-//
-// 每次现解码 JWT 而非 Parse 时缓存：RefreshToken 会整体换发 token，
-// 企业切换状态可能随重新授权翻转，缓存会读到过期形态。解码成本仅一次
-// base64 + 小 JSON（每调度轮每账号数次），可忽略。
+// IsEnterpriseSession 是沿用旧名称的保守自动化门控，不是账号身份或权益判断。
+// IsEnterprise() 使用账号响应中的 enterpriseId；JWT token_source=enterprise_switch
+// 仅表示令牌来源。上游未公开该字段的身份契约，个人登录也不能仅因此被拒绝。
+// 原项目在 2026-10-12 记录过此来源下行为上报不计进度，因此保留自动化门控，
+// 避免未验证的任务执行；不能把历史观察当作当前账号无个人权益的证据。
+// 每次读取当前 token，避免刷新后缓存的来源提示过期。
 func (a *Auth) IsEnterpriseSession() bool {
 	if a.IsEnterprise() {
 		return true
 	}
+	return a.HasEnterpriseSwitchSource()
+}
+
+// HasEnterpriseSwitchSource reports only the token_source diagnostic hint.
+// It intentionally does not imply enterprise entitlement.
+func (a *Auth) HasEnterpriseSwitchSource() bool {
 	return jwtTokenSource(a.AccessTokenValue()) == "enterprise_switch"
 }
 

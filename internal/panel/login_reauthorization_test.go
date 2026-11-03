@@ -109,7 +109,6 @@ func TestReauthorizationRejectsInvalidCandidateWithoutOverwrite(t *testing.T) {
 		expires                                       int64
 	}{
 		{"wrong_uid", "other", "personal", "", "copilot.tencent.com", "refresh", 3600},
-		{"enterprise_switch", "uid-1", enterpriseSwitchToken(), "", "copilot.tencent.com", "refresh", 3600},
 		{"enterprise_id", "uid-1", "personal", "organization", "copilot.tencent.com", "refresh", 3600},
 		{"wrong_realm", "uid-1", "personal", "", "www.workbuddy.ai", "refresh", 3600},
 		{"zero_expiry", "uid-1", "personal", "", "copilot.tencent.com", "refresh", 0},
@@ -279,12 +278,13 @@ func TestReauthorizationOverviewReportsContextWithoutCredentials(t *testing.T) {
 		Accounts []struct {
 			Enterprise bool `json:"enterprise"`
 			Session    bool `json:"enterprise_session"`
+			SourceHint bool `json:"enterprise_switch_source"`
 		}
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &data); err != nil {
 		t.Fatal(err)
 	}
-	if len(data.Accounts) != 1 || data.Accounts[0].Enterprise || !data.Accounts[0].Session {
+	if len(data.Accounts) != 1 || data.Accounts[0].Enterprise || !data.Accounts[0].Session || !data.Accounts[0].SourceHint {
 		t.Fatalf("incorrect context: %s", rec.Body)
 	}
 	if strings.Contains(rec.Body.String(), old.AccessToken) {
@@ -331,4 +331,56 @@ func TestReauthorizationGlobalUsesMatchingEndpointsAndDomain(t *testing.T) {
 	if rec.Code != 200 || calls != 3 || p.cfg.Pool.AuthByUID(old.UID).Realm() != "global" {
 		t.Fatalf("global recovery failed status=%d calls=%d", rec.Code, calls)
 	}
+}
+
+// A personal-login token may retain this source hint. It must not cause an
+// endless reject-and-retain-old-credential loop when account identity matches.
+func TestReauthorizationAcceptsSourceHintWithoutAssertingEnterprise(t *testing.T) {
+	p, old := reauthPanel(t, "uid-1", "uid-1")
+	old.DeviceToken = "fixture-device"
+	if err := old.SaveAtomic(); err != nil {
+		t.Fatal(err)
+	}
+	p.cfg.Pool.Disable(old.UID, "preserve-disabled")
+	p.cfg.Pool.SetCredits(old.UID, 70, 100)
+	fresh := "hdr." + base64.RawURLEncoding.EncodeToString([]byte(`{"token_source":"enterprise_switch","fixture":"fresh-login"}`)) + ".sig"
+	withLoginTransport(t, old.UID, fresh)
+	p.logins["source-hint"] = loginSession{created: time.Now(), realm: "cn", reauthorizeUID: old.UID}
+	rec := httptest.NewRecorder()
+	p.loginPoll(rec, httptest.NewRequest("GET", "/?state=source-hint", nil))
+	if rec.Code != 200 {
+		t.Fatalf("source-hint login rejected: status=%d body=%s", rec.Code, rec.Body)
+	}
+	got := p.cfg.Pool.AuthByUID(old.UID)
+	if got == old || got.AccessTokenValue() != fresh || got.AccessTokenValue() == old.AccessTokenValue() || got.FilePath != old.FilePath || got.DeviceToken != old.DeviceToken {
+		t.Fatal("fresh source-hint credential not persisted with original account path/device")
+	}
+	b, err := os.ReadFile(old.FilePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	saved, err := auth.Parse(b)
+	if err != nil || saved.AccessTokenValue() != fresh {
+		t.Fatal("credential file did not contain new source-hint token")
+	}
+	if got.IsEnterprise() || !got.HasEnterpriseSwitchSource() || !got.IsEnterpriseSession() {
+		t.Fatal("source hint must not assert enterprise identity or remove existing automation gate")
+	}
+	st, _ := p.cfg.Pool.Status(old.UID)
+	if !st.Disabled || st.Credits != 70 {
+		t.Fatal("source-hint reauthorization reset runtime/balance state")
+	}
+	var response struct {
+		Done       bool   `json:"done"`
+		Enterprise bool   `json:"enterprise"`
+		Source     bool   `json:"enterprise_switch_source"`
+		Message    string `json:"checkin_message"`
+	}
+	if json.Unmarshal(rec.Body.Bytes(), &response) != nil || !response.Done || response.Enterprise || !response.Source || !strings.Contains(response.Message, "不代表企业账号") {
+		t.Fatalf("misleading response: %s", rec.Body)
+	}
+	if _, ok := p.logins["source-hint"]; ok {
+		t.Fatal("successful state not consumed")
+	}
+	// No Upstream configured: any automatic checkin/reward/balance call would panic.
 }

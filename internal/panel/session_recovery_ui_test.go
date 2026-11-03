@@ -33,7 +33,7 @@ func TestEnterpriseSessionTaskRoutesRejectBeforeMutation(t *testing.T) {
 			t.Fatalf("%s status=%d body=%s", path, rec.Code, rec.Body.String())
 		}
 		body := rec.Body.String()
-		if !strings.Contains(body, "无需移除账号") || !strings.Contains(body, "个人身份重新授权") {
+		if !strings.Contains(body, "无需移除账号") || !strings.Contains(body, "不等于企业账号身份") {
 			t.Fatalf("%s recovery guidance missing: %s", path, body)
 		}
 	}
@@ -49,7 +49,7 @@ func TestEnterpriseSessionTaskScanRejectsBeforeUpstream(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer fixture-key")
 	rec := httptest.NewRecorder()
 	p.ServeHTTP(rec, req)
-	if rec.Code != 200 || !strings.Contains(rec.Body.String(), "growth_error") || !strings.Contains(rec.Body.String(), "个人身份重新授权") {
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), "growth_error") || !strings.Contains(rec.Body.String(), "不代表企业账号") {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
 }
@@ -89,5 +89,28 @@ process.stdout.write('ok');`
 	out, err := cmd.CombinedOutput()
 	if err != nil || strings.TrimSpace(string(out)) != "ok" {
 		t.Fatalf("UI harness failed: %v output=%s", err, out)
+	}
+}
+
+func TestAccountRowAndReauthorizationCopyUseIdentityNeutralLanguage(t *testing.T) {
+	src, err := os.ReadFile("app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(src)
+	// The rendered row must not turn a source hint into an enterprise identity.
+	for _, required := range []string{
+		"s.enterprise ? ' <span class=\"realm-tag\">企业版</span>' : (s.enterprise_switch_source ? ' <span class=\"realm-tag\">登录来源待核实</span>' : '')",
+		"更新登录授权",
+		"当前登录来源提示尚未核实，旧版任务自动化暂未验证；仅展示官方任务记录。这不等于企业账号",
+	} {
+		if !strings.Contains(text, required) {
+			t.Fatalf("app.js missing identity-neutral contract: %q", required)
+		}
+	}
+	for _, forbidden := range []string{"浏览器退出企业会话后，以个人身份重新授权", "退出企业会话后，再次使用个人身份登录"} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("app.js retained stale reauthorization instruction: %q", forbidden)
+		}
 	}
 }

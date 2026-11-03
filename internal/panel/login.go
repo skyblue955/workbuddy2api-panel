@@ -141,7 +141,7 @@ func (p *Panel) loginStart(w http.ResponseWriter, r *http.Request) {
 		}
 		found := p.cfg.Pool.AuthByUID(reauthorizeUID)
 		if found == nil || found.Realm() != realm || !found.IsEnterpriseSession() || found.IsEnterprise() {
-			writeErr(w, http.StatusBadRequest, "该账号当前不是可重新授权的企业切换会话，请先保持同一账号与版本")
+			writeErr(w, http.StatusBadRequest, "该账号不满足当前凭证更新条件，请刷新账号列表并核对同一账号与版本")
 			return
 		}
 	}
@@ -261,11 +261,12 @@ func (p *Panel) loginPoll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if sess.reauthorizeUID != "" {
-		if reauthCurrent == nil || acct.UID != sess.reauthorizeUID || acct.EnterpriseID != "" || (&auth.Auth{AccessToken: tok.AccessToken}).IsEnterpriseSession() {
+		log.Printf("panel: reauthorization result same_account=%t enterprise_id_present=%t enterprise_switch_source=%t", acct.UID == sess.reauthorizeUID, strings.TrimSpace(acct.EnterpriseID) != "", (&auth.Auth{AccessToken: tok.AccessToken}).HasEnterpriseSwitchSource())
+		if reauthCurrent == nil || acct.UID != sess.reauthorizeUID || acct.EnterpriseID != "" {
 			p.loginMu.Lock()
 			delete(p.logins, state)
 			p.loginMu.Unlock()
-			writeErr(w, http.StatusBadRequest, "此次授权仍是企业身份或不是原账号，原凭证已保留；请在官方页面选择同一账号的个人身份后重新授权")
+			writeErr(w, http.StatusBadRequest, "此次授权不是原账号或上游返回了企业标识，原凭证已保留；请核对官方授权页的账号与身份")
 			return
 		}
 	}
@@ -332,7 +333,10 @@ func (p *Panel) loginPoll(w http.ResponseWriter, r *http.Request) {
 	remain := int64(-1)
 	total := int64(0)
 	if sess.reauthorizeUID != "" {
-		checkinMsg = "个人身份重新授权完成；未执行奖励或签到操作"
+		checkinMsg = "授权已更新；未执行签到或奖励操作"
+		if a.HasEnterpriseSwitchSource() {
+			checkinMsg += "；token_source仅为来源提示，不代表企业账号；任务资格尚未验证"
+		}
 	} else if sess.realm == "global" {
 		// 注册激活（幂等）：region required 时自动补地区（白名单首个，HK）后重新激活。
 		// 失败不阻断登录结果（auth 已落盘），只在返回字段里体现。
@@ -368,11 +372,9 @@ func (p *Panel) loginPoll(w http.ResponseWriter, r *http.Request) {
 	delete(p.logins, state)
 	p.loginMu.Unlock()
 	log.Printf("panel: 新账号已热加载 uid=%s nickname=%q realm=%s（免重启生效）", acct.UID, acct.Nickname, sess.realm)
-	// 企业切换会话预警：该形态下 /v2/report 行为事件被上游静默丢弃（200 不计分），
-	// 成长任务全部无法点亮（签到/列表/额度/领养照常）。当场给出修复路径，
-	// 避免用户事后对着「已上报但进度 0/x」排查（见 auth.IsEnterpriseSession）。
-	if a.IsEnterpriseSession() && !a.IsEnterprise() {
-		log.Printf("panel: WARN uid=%s 的凭证为企业切换会话（token_source=enterprise_switch）：成长任务行为事件会被上游静默丢弃；请在浏览器退出企业会话后使用个人身份重新授权", acct.UID)
+	// 来源字段不等于账号身份；保留保守自动化门控，但不要求反复登出重登。
+	if a.HasEnterpriseSwitchSource() && !a.IsEnterprise() {
+		log.Printf("panel: 登录凭证包含 enterprise_switch 来源提示；该提示不证明企业身份，旧版成长任务自动化仍待验证")
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"done":            true,
@@ -388,6 +390,8 @@ func (p *Panel) loginPoll(w http.ResponseWriter, r *http.Request) {
 			}
 			return "new_login"
 		}(),
+		"enterprise":               a.IsEnterprise(),
+		"enterprise_switch_source": a.HasEnterpriseSwitchSource(),
 	})
 }
 

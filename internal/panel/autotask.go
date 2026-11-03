@@ -631,13 +631,11 @@ func (p *Panel) accountTaskAuto(w http.ResponseWriter, r *http.Request) {
 	if a == nil {
 		return
 	}
-	// 企业上下文门控（企业版 / 企业切换会话）：行为事件会被上游静默丢弃或
-	// 直接 403，执行任何成长任务都是零收益白跑（含真实对话配额）——直接拒绝
-	// 并给出修复路径，不再让用户对着「已上报但进度 0/x」猜原因
-	// （见 auth.IsEnterpriseSession）。
+	// 保留旧版自动化保护：真实企业标识或未经核验的来源提示均不自动执行。
+	// token_source 本身不证明企业身份或当前权益；只读任务列表仍保留。
 	if a.IsEnterpriseSession() {
 		writeErr(w, http.StatusUnprocessableEntity,
-			"当前凭证处于企业上下文，成长任务执行已暂停；无需移除账号，请返回账号列表点击「个人身份重新授权」，在官方授权页选择同一账号的个人身份。重新授权不保证任务资格，任务进度以官方记录为准")
+			"企业标识或登录来源提示触发了旧版自动化保护，成长任务自动执行尚未验证；token_source 不等于企业账号身份，无需移除账号或反复重新授权。官方任务记录可只读查看，资格和进度以官方记录为准")
 		return
 	}
 	var body struct {
@@ -1274,12 +1272,10 @@ func (p *Panel) accountTaskAutoAll(w http.ResponseWriter, r *http.Request) {
 	if a == nil {
 		return
 	}
-	// 企业上下文门控：与 accountTaskAuto 同口径（企业版 / 企业切换会话下成长任务
-	// 行为事件被上游静默丢弃，跑全量只会白耗真实对话配额）。「一键完成全部」与
-	// 单任务入口共用同一套动作，必须一并挡上（下游 fork 吸收本 PR 时发现的缺口）。
+	// 与单任务入口共用保守保护，不因身份展示纠正而开启未验证的自动化。
 	if a.IsEnterpriseSession() {
 		writeErr(w, http.StatusUnprocessableEntity,
-			"当前凭证处于企业上下文，成长任务执行已暂停；无需移除账号，请返回账号列表点击「个人身份重新授权」，在官方授权页选择同一账号的个人身份。重新授权不保证任务资格，任务进度以官方记录为准")
+			"企业标识或登录来源提示触发了旧版自动化保护，成长任务自动执行尚未验证；token_source 不等于企业账号身份，无需移除账号或反复重新授权。官方任务记录可只读查看，资格和进度以官方记录为准")
 		return
 	}
 	// per-account 互斥（与单任务动作共用一把锁）：重复点击 409。

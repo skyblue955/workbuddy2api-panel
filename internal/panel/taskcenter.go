@@ -83,7 +83,7 @@ func (p *Panel) tasksScanAll(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			if a.IsEnterpriseSession() {
-				it.GrowthErr = "当前凭证处于企业上下文，成长任务已跳过；无需移除账号，请在账号列表点击「个人身份重新授权」"
+				it.GrowthErr = "登录来源提示触发旧版自动化保护，成长任务自动执行尚未验证；该提示不代表企业账号，无需移除账号或反复重新授权"
 				return
 			}
 			if tasks, err := p.cfg.Upstream.ListTasks(a); err != nil {
@@ -226,16 +226,13 @@ func (p *Panel) startGrowthQueue(concurrency int, growth bool) (started bool, to
 			if a.IsGlobal() {
 				return
 			}
-			// 企业版门控：同上（企业版无个人成长体系，任务端点上游一律 403）。
-			// 企业切换会话（token_source=enterprise_switch）同跳：任务列表读得到，
-			// 但执行后行为事件被上游静默丢弃（200 不计分）——每项都是零收益白跑
-			// （含 expert_5 等真实对话配额），故不入队并给出重登指引（见
-			// auth.IsEnterpriseSession）。
+			// 企业标识按既有规则门控；来源提示则只代表旧版自动化尚未核验。
+			// 不把 token_source 当作企业身份，也不要求反复重新授权。
 			if a.IsEnterprise() {
 				return
 			}
 			if a.IsEnterpriseSession() {
-				log.Printf("panel: WARN 队列跳过 uid=%s nickname=%q：凭证为企业切换会话（token_source=enterprise_switch），成长任务已跳过；无需移除账号，请从账号列表发起「个人身份重新授权」，在官方授权页选择同一账号的个人身份", a.UID, a.Nickname)
+				log.Printf("panel: WARN 队列跳过 uid=%s nickname=%q：凭证包含来源提示 token_source=enterprise_switch，旧版成长任务自动化尚未验证，已跳过；该提示不代表企业身份，无需移除账号或反复重新授权", a.UID, a.Nickname)
 				return
 			}
 			if growth {

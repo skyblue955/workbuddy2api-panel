@@ -435,7 +435,7 @@ function renderAccounts(list) {
     const usageTitle = '最近一次：' + req + ' 次 / ' + totalTok + ' / 延迟 ' + latency + ' / ' + rate;
     return '<tr class="' + cls + '" title="uid: ' + esc(s.uid) + '">' +
       '<td class="mark" aria-hidden="true"><i></i></td>' +
-      '<td class="who"><div class="nm">' + remarkName(s.uid, s.nickname ? esc(s.nickname) : '<span style="color:var(--ink-3)">未命名</span>') + (s.realm === 'global' ? ' <span class="realm-tag">国际版</span>' : '') + (s.enterprise ? ' <span class="realm-tag">企业版</span>' : (s.enterprise_session ? ' <span class="realm-tag">企业会话·需个人授权</span>' : '')) + '</div><div class="id">' + esc(short) + '</div></td>' +
+      '<td class="who"><div class="nm">' + remarkName(s.uid, s.nickname ? esc(s.nickname) : '<span style="color:var(--ink-3)">未命名</span>') + (s.realm === 'global' ? ' <span class="realm-tag">国际版</span>' : '') + (s.enterprise ? ' <span class="realm-tag">企业版</span>' : (s.enterprise_switch_source ? ' <span class="realm-tag">登录来源待核实</span>' : '')) + '</div><div class="id">' + esc(short) + '</div></td>' +
       '<td>' + tag + note + rateLimits + '</td>' +
       '<td class="cred" title="' + esc(credTip) + '"><div class="n">' + cred + '</div><div class="bar"><i style="width:' + pct + '%"></i></div></td>' +
       '<td class="num">' + (s.success_count || 0) + ' <span style="color:var(--ink-3)">/</span> <span style="color:var(--bad)">' + (s.err_total || 0) + '</span></td>' +
@@ -448,7 +448,7 @@ function renderAccounts(list) {
       '</span></td>' +
       '<td class="num" style="color:var(--ink-3)">' + ago(s.last_success) + '</td>' +
       '<td class="acts">' +
-        (s.enterprise_session && !s.enterprise ? '<button class="xs primary" data-a="reauthorize" data-u="' + esc(s.uid) + '" data-r="' + esc(s.realm || 'cn') + '" title="浏览器退出企业会话后，以个人身份重新授权">个人身份重新授权</button>' : '') +
+        (s.enterprise_session && !s.enterprise ? '<button class="xs primary" data-a="reauthorize" data-u="' + esc(s.uid) + '" data-r="' + esc(s.realm || 'cn') + '" title="更新同一账号凭证；来源字段不决定账号身份">更新登录授权</button>' : '') +
         // 企业版无个人成长体系（签到 400「企业账号不支持该操作」/ 成长任务 403）：
         // 不渲染「签到」「任务」按钮，只留「额度」——点它走 /balance，企业额度由
         // upstream 的 get-enterprise-user-usage 口径填充。
@@ -1296,7 +1296,7 @@ function openAdd(targetUID, targetRealm) {
   });
   document.querySelectorAll('#addTabs .tab').forEach(x => { x.disabled = !!reauthUID && x.dataset.tab === 'import'; });
   $('addReauthNote').hidden = !reauthUID;
-  $('addReauthNote').textContent = reauthUID ? '请在官方授权页面选择同一账号的个人身份；若仍自动进入企业身份，请先退出官方网页的企业会话再授权。原账号无需移除；本次仅更新凭证，不签到、不领取奖励，不保证任务资格。' : '';
+  $('addReauthNote').textContent = reauthUID ? '请在官方授权页面登录同一账号。原账号无需移除；本次仅更新凭证，不签到、不领取奖励。token_source 是来源提示，不用于拒绝同账号且未返回企业标识的新凭证，也不保证任务资格。' : '';
   $('addPoll').textContent = '等待授权完成，自动检测中';
 }
 function switchAddTab(tab) {
@@ -1338,7 +1338,7 @@ async function pollLogin() {
       stopPoll();
       $('addReady').hidden = true;
       $('addDone').hidden = false;
-      $('addDone').textContent = (r.session_kind === 'personal_reauthorization' ? '个人身份重新授权完成：' : '已添加 ') + (r.nickname || r.uid) + (r.session_kind === 'personal_reauthorization' ? '（未执行签到或奖励操作）' : (r.realm === 'global' ? '（国际版）' : '') + (r.credits >= 0 ? ' · 积分 ' + r.credits + (r.credits_total > 0 ? '/' + r.credits_total : '') : '') + '，账号已载入池中');
+      $('addDone').textContent = (r.session_kind === 'personal_reauthorization' ? '登录授权已更新：' : '已添加 ') + (r.nickname || r.uid) + (r.session_kind === 'personal_reauthorization' ? '（未执行签到或奖励操作）' + (r.enterprise_switch_source ? ' · 登录来源提示仍在，但不代表企业账号；任务资格待核验' : '') : (r.realm === 'global' ? '（国际版）' : '') + (r.credits >= 0 ? ' · 积分 ' + r.credits + (r.credits_total > 0 ? '/' + r.credits_total : '') : '') + '，账号已载入池中');
       setTimeout(() => { closeAdd(); loadOverview(true); }, 1600);
     }
   } catch (e) {
@@ -1701,7 +1701,7 @@ async function loadTasks() {
         : t.locked ? '<span class="tag mute">未解锁</span>'
         : t.accept_status === 'accepted' ? '<span class="tag mute">进行中</span>'
         : '<span class="tag mute">未接受</span>';
-      const acted = taskSessionBlocked() ? '<span class="hint">需个人身份重新授权</span>' : t.claimed || t.locked ? ''
+      const acted = taskSessionBlocked() ? '<span class="hint">自动化尚未验证</span>' : t.claimed || t.locked ? ''
         : t.claimable ? '<button class="xs primary" data-t="claim" data-c="' + esc(t.task_code) + '">领取</button>'
         : AUTO_TASKS[t.task_code] ? '<button class="xs primary" data-t="auto" data-c="' + esc(t.task_code) + '" title="' + esc(AUTO_TASKS[t.task_code]) + '">一键完成</button>'
         : t.accept_status === 'accepted' ? ''
@@ -1716,7 +1716,7 @@ async function loadTasks() {
         '<td class="acts">' + acted + '</td></tr>';
     }).join('');
     st.hidden = !taskSessionBlocked();
-    if (taskSessionBlocked()) st.textContent = '当前为企业上下文，仅展示官方任务记录；请返回账号列表完成个人身份重新授权。';
+    if (taskSessionBlocked()) st.textContent = '当前登录来源提示尚未核实，旧版任务自动化暂未验证；仅展示官方任务记录。这不等于企业账号，也不证明缺少个人权益。';
     tb.hidden = false;
   } catch (e) {
     st.className = 'state err';

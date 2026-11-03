@@ -12,8 +12,8 @@ func mustJWT(t *testing.T, payload string) string {
 	return "hdr." + base64.RawURLEncoding.EncodeToString([]byte(payload)) + ".sig"
 }
 
-// TestIsEnterpriseSession 企业切换会话判定：JWT token_source=enterprise_switch
-// 视为企业上下文；无该声明 / 非 JWT / 空 token 一律否（老凭证零回归）；
+// TestIsEnterpriseSession 验证旧版自动化门控，而非账号身份判断。
+// token_source 来源提示仍触发保守门控；无该声明 / 非 JWT / 空 token 一律否；
 // enterpriseId 非空短路为真（与 IsEnterprise 同口径）。
 func TestIsEnterpriseSession(t *testing.T) {
 	cases := []struct {
@@ -51,4 +51,22 @@ func TestIsEnterpriseSession(t *testing.T) {
 			t.Error("仅 token_source=enterprise_switch 不应翻转 IsEnterprise（额度查询仍走个人口径）")
 		}
 	})
+}
+
+func TestEnterpriseSwitchSourceIsSeparateFromAccountIdentity(t *testing.T) {
+	for _, tc := range []struct {
+		name, enterpriseID, payload string
+		source, enterprise          bool
+	}{
+		{"source_only", "", `{"token_source":"enterprise_switch"}`, true, false},
+		{"enterprise_without_hint", "organization", `{"token_source":"personal"}`, false, true},
+		{"no_hint", "", `{}`, false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a := &Auth{EnterpriseID: tc.enterpriseID, AccessToken: mustJWT(t, tc.payload)}
+			if a.HasEnterpriseSwitchSource() != tc.source || a.IsEnterprise() != tc.enterprise {
+				t.Fatal("token source and account identity were conflated")
+			}
+		})
+	}
 }
