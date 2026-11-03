@@ -1,0 +1,133 @@
+Authorization button state UI — 2026-11-03 Asia/Shanghai
+Branch: maintenance/v1-compat-rewards
+Baseline commit: 086054e1e14c42b3bab430ead59411bdafbaf306
+Changed fields/branches: Auth.CredentialStatus(now); overview.accounts[].authorization.state/expires_at; login/poll.authorization/reauthorized; client authorizationFeedback + epoch/deadline lifecycle; CSS auth-idle/pending/valid/expired/warning. Reauthorization is available for all existing accounts while still requiring same UID, enterprise space and realm.
+
+User-visible acceptance matrix
+- Missing credential / before starting modal login: neutral gray, 登录授权 / 获取授权链接.
+- Waiting for link or official authorization: blue, 授权中 / 等待授权中, duplicate clicks disabled.
+- Saved unexpired credential / successful authorization: green, 已授权·更新 / 授权成功. Tooltip explicitly says local credential state, not a live API/entitlement probe.
+- Expired credential or timed-out attempt: red, 凭证已过期·重登 / 授权超时·重试.
+- Failed update or unknown expiry: amber, 更新失败·重试 / 有效期未知·核查. Existing credential is preserved.
+- Cancel: stops waiting, restores display derived from the unchanged existing credential; does not label a valid account logged out.
+- Source hint, rate limit, pause, low balance or manual disable do not masquerade as authorization invalidity. Their existing account/task statuses remain separate.
+- Color always accompanied by text/title; pending has disabled and aria-busy; keyboard focus styles; light and dark themes visually checked.
+- No automatic login retry, token refresh, reward or model request added. No live OAuth flow was triggered to test colors. Upstream revocation is not polled by the color indicator; green means saved local credential has not expired, not guaranteed API usability.
+
+Four artifacts (reopened)
+MODIFIED_FILE: /Users/jinyanya/Code/Codex/workbuddy/maintenance/auth-status-ui/MODIFIED_FILE.js.txt (copy of actual modified app.js; cmp matches)
+DIFF_FILE: /Users/jinyanya/Code/Codex/workbuddy/maintenance/auth-status-ui/DIFF_FILE.patch
+VERIFICATION: /Users/jinyanya/Code/Codex/workbuddy/maintenance/auth-status-ui/VERIFICATION.txt
+ROLLBACK: /Users/jinyanya/Code/Codex/workbuddy/maintenance/auth-status-ui/ROLLBACK.sh (executable)
+Original hashes: ORIGINAL_SHA256.txt (7 tracked source files). New test files are created/deleted through the patch.
+
+BASELINE
+Input: independent clean git archive of086054e; deterministic fixtures only.
+Directory: /private/tmp/workbuddy-auth-ui-baseline
+Exact command:
+GOTOOLCHAIN=local GOCACHE=/private/tmp/workbuddy-gocache GOMODCACHE=/Users/jinyanya/go/pkg/mod /Users/jinyanya/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.3.darwin-arm64/bin/go test ./internal/auth ./internal/panel ./internal/pool
+Literal output:
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/auth	0.955s
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/panel	4.300s
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/pool	0.582s
+Exit status: 0.
+
+MODIFIED
+Input: deterministic backend status fixtures, mock OAuth transports, Node fake DOM and fake clocks/deferred promises. Tests cover expiry boundary, missing/unknown expiry, source/routing independence, non-secret overview JSON, same-account ordinary/expired/enterprise renewal, tenant mismatch rejection, no automatic rewards, color/label/escaping, success/failure/cancel, stalled start/poll, timeout and late-response suppression.
+Focused exact command:
+GOTOOLCHAIN=local GOCACHE=/private/tmp/workbuddy-gocache GOMODCACHE=/Users/jinyanya/go/pkg/mod /Users/jinyanya/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.3.darwin-arm64/bin/go test -race ./internal/auth ./internal/panel -run 'Test(Reauthor|CredentialStatus|Overview.*Authorization|Authorization|AddAccountButton|AccountRow)' -count=1
+Literal output:
+ok  github.com/linguo2625469/workbuddy2api-panel/internal/auth 1.899s [no tests to run]
+ok  github.com/linguo2625469/workbuddy2api-panel/internal/panel 3.362s
+Exit status: 0. CredentialStatus-specific tests reside in panel package; auth-package filter has no new named tests. Full auth suite runs below.
+Full exact command (includes timeout remediation and new tests):
+PATH=/Users/jinyanya/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.3.darwin-arm64/bin:$PATH GOTOOLCHAIN=local GOMODCACHE=/Users/jinyanya/go/pkg/mod GOCACHE=/private/tmp/workbuddy-gocache bash scripts/verify.sh
+Literal output:
+?   	github.com/linguo2625469/workbuddy2api-panel/cmd/credit	[no test files]
+ok  	github.com/linguo2625469/workbuddy2api-panel/cmd/login	2.239s
+ok  	github.com/linguo2625469/workbuddy2api-panel/cmd/openapi	(cached)
+ok  	github.com/linguo2625469/workbuddy2api-panel/cmd/server	1.744s
+?   	github.com/linguo2625469/workbuddy2api-panel/cmd/signin	[no test files]
+?   	github.com/linguo2625469/workbuddy2api-panel/cmd/trial	[no test files]
+?   	github.com/linguo2625469/workbuddy2api-panel/data/live-acceptance	[no test files]
+?   	github.com/linguo2625469/workbuddy2api-panel/data/live-acceptance/chat	[no test files]
+?   	github.com/linguo2625469/workbuddy2api-panel/data/live-acceptance/checkin	[no test files]
+?   	github.com/linguo2625469/workbuddy2api-panel/data/local-dev/identity-probe	[no test files]
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/activities	(cached)
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/auth	1.617s
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/credithist	(cached)
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/httpauth	(cached)
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/livecfg	(cached)
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/logfmt	(cached)
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/panel	14.184s
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/pool	1.795s
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/prompt	(cached)
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/redisstore	(cached)
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/reqlog	(cached)
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/scheduler	17.035s
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/server	13.238s
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/session	(cached)
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/upstream	2.115s
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/usage	(cached)
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/workbuddyopen	(cached)
+ACCEPTANCE PASS
+Exit status: 0. Node22.21.1 via fnm; cached Go1.27.3.
+
+Independent review / actual remediation
+/root/auth_status_review (security_reviewer) reproduced a P2 with actual source and mocked promises: a hung poll bypassed deadline checks and a late success could turn the button green. Fixed by deadline checks before in-flight guards, independent pending watchdog, checking deadlines after both start/poll responses, and epoch invalidation on failure/timeout. Test engineer added both stalled-request and late-result regressions. Reviewer reproduced corrected behavior without network:
+AFTER_DEADLINE={"pending":false,"polling":false,"feedback":"timeout"}
+LATE_POLL_VISUAL=auth-action auth-expired
+LATE_START_VISUAL=auth-action auth-expired
+Review command exit0; final verdict: no new security blocker. Same UID/tenant/realm/expiry protections and no-reward behavior verified. /root/v1_rewards ran actual UI race regressions; coordinator independently ran full gate.
+
+Visual browser verification
+Used isolated agent-browser session wb-auth-status with an empty fixture profile, local file page generated from actual stylesheet and authorization helper. No real credentials, login site or network API.
+Exact commands:
+agent-browser --session wb-auth-status --profile /private/tmp/wb-auth-status-profile open file:///Users/jinyanya/Code/Codex/workbuddy/data/local-dev/auth-status-preview.html
+agent-browser --session wb-auth-status snapshot -i
+agent-browser --session wb-auth-status screenshot /Users/jinyanya/Code/Codex/workbuddy/maintenance/auth-status-ui/preview-light.png
+agent-browser --session wb-auth-status eval "document.documentElement.setAttribute('data-theme','dark')"
+agent-browser --session wb-auth-status screenshot /Users/jinyanya/Code/Codex/workbuddy/maintenance/auth-status-ui/preview-dark.png
+agent-browser --session wb-auth-status close
+Literal snapshot result: 登录授权; 授权中… [disabled]; 已授权·更新; 凭证已过期·重登; 更新失败·重试; 有效期未知·核查. Commands exit0. Both screenshots reopened and visually inspected; no truncation/overlap, semantic colors readable. Screenshots are fixture previews, not live account acceptance.
+
+ROLLBACK
+Input: independent clean086054e tree plus forward-applied source patch; modified worktree remains changed.
+Exact command:
+bash /Users/jinyanya/Code/Codex/workbuddy/maintenance/auth-status-ui/ROLLBACK.sh /private/tmp/workbuddy-auth-ui-rollback
+Literal output: ROLLBACK PASS: authorization-state UI correction reversed
+Exit status: 0.
+Then in that copy:
+shasum -a 256 -c /Users/jinyanya/Code/Codex/workbuddy/maintenance/auth-status-ui/ORIGINAL_SHA256.txt
+Literal output:
+internal/auth/auth.go: OK
+internal/panel/app.js: OK
+internal/panel/index.html: OK
+internal/panel/login.go: OK
+internal/panel/panel.go: OK
+internal/panel/session_recovery_ui_test.go: OK
+internal/panel/login_reauthorization_test.go: OK
+Exit status: 0.
+Exact restored-source regression command:
+GOTOOLCHAIN=local GOCACHE=/private/tmp/workbuddy-gocache GOMODCACHE=/Users/jinyanya/go/pkg/mod /Users/jinyanya/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.3.darwin-arm64/bin/go test ./internal/auth ./internal/panel ./internal/pool
+Literal output:
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/auth	0.870s
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/panel	4.840s
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/pool	0.564s
+Exit status: 0. Restored behavior: previous fixed-blue action/previous source-hint-limited reauthorization restored only in disposable copy; original hashes/tests match. Corrected live binary and worktree remain changed. For shared Git history use git revert of the repair commit, rebuild/restart; no force-reset.
+
+LOCAL DEPLOY / real readonly smoke
+Rebuilt native binary (-buildvcs=false) and restarted only existing local.workbuddy.manualtest,127.0.0.1:7863. Original binary retained privately: data/local-dev/wb2api.before-auth-status-ui. Configuration and credential files snapshotted before restart and compared afterward; byte hashes unchanged. Automatic schedules remain unchanged/disabled.
+Previous binary SHA256: be51b670e6c5626b0a837635436f60b8b62a2447aa1d48ff534081ceea6c6719
+Modified binary SHA256: 32e3b71a56bba3f281977c8768cd476c96bca7907e74f54b9b8f7aabe2756239
+Exact smoke command:
+UV_CACHE_DIR=/private/tmp/uv-workbuddy-cache uv run --no-project python data/local-dev/auth-status-smoke.py
+Literal output (excluding uv advisory):
+OVERVIEW_HTTP=200
+AUTHORIZATION_STATE=valid
+AUTHORIZED_BUTTON=green
+JS_AND_CSS_STATES=PASS
+CREDENTIAL_AND_CONFIG_UNCHANGED=true
+LOGIN_REWARD_MODEL_CALLS=0
+READONLY_SMOKE_PASS
+Exit status: 0. Service observed running, PID40290 at check. Actual retained account has valid local credential metadata. Pending/failure/expiry/cancellation transitions were validated by fixtures rather than revoking an account or issuing another live OAuth request.

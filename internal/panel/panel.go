@@ -265,13 +265,14 @@ func (p *Panel) overview(w http.ResponseWriter, r *http.Request) {
 	}
 	type accountView struct {
 		pool.Status
-		EnterpriseSession      bool `json:"enterprise_session"`
-		EnterpriseSwitchSource bool `json:"enterprise_switch_source"`
+		EnterpriseSession      bool                  `json:"enterprise_session"`
+		EnterpriseSwitchSource bool                  `json:"enterprise_switch_source"`
+		Authorization          auth.CredentialStatus `json:"authorization"`
 	}
 	accountViews := make([]accountView, 0)
 	for _, account := range p.cfg.Pool.List() {
 		a := p.cfg.Pool.AuthByUID(account.UID)
-		accountViews = append(accountViews, accountView{Status: account, EnterpriseSession: a != nil && a.IsEnterpriseSession(), EnterpriseSwitchSource: a != nil && a.HasEnterpriseSwitchSource()})
+		accountViews = append(accountViews, accountView{Status: account, EnterpriseSession: a != nil && a.IsEnterpriseSession(), EnterpriseSwitchSource: a != nil && a.HasEnterpriseSwitchSource(), Authorization: a.CredentialStatus(time.Now())})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"version":         p.cfg.Version,

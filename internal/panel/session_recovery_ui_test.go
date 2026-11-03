@@ -61,15 +61,15 @@ func TestAddAccountButtonDoesNotReuseReauthorizationUID(t *testing.T) {
 	}
 	script := `const fs=require('fs'),vm=require('vm');
 const src=fs.readFileSync(process.argv[2],'utf8');
-const start=src.indexOf('function openAdd('), end=src.indexOf("$('btnRefresh').onclick");
+const hs=src.indexOf('/* AUTH_STATUS_START'),he=src.indexOf('/* AUTH_STATUS_END */')+'/* AUTH_STATUS_END */'.length,start=src.indexOf('function openAdd('), end=src.indexOf("$('btnRefresh').onclick");
 if(start<0||end<start) throw Error('add-account region missing');
 const ids=['addVeil','addPick','addLoad','addReady','addDone','addErr','importDone','importErr','btnCopyUrl','btnOpenUrl','btnStartLogin','btnCloseAdd','btnAdd','addTabLogin','addTabImport','importFile','addUrl','addPoll','addReauthNote'];
-const els={}; for(const id of ids) els[id]={hidden:false,disabled:false,textContent:'',dataset:{},classList:{on:false,add(){this.on=true},remove(){this.on=false}}};
+const els={}; for(const id of ids) els[id]={hidden:false,disabled:false,textContent:'',dataset:{},attrs:{},setAttribute(k,v){this.attrs[k]=v},classList:{on:false,add(){this.on=true},remove(){this.on=false}}};
 const realms=[{value:'cn',checked:true,disabled:false},{value:'global',checked:false,disabled:false}];
 const tabs=[{dataset:{tab:'login'},classList:{on:false,toggle(v){this.on=v}}},{dataset:{tab:'import'},classList:{on:false,toggle(v){this.on=v}}}];
 const doc={querySelectorAll:(q)=>q==='input[name="addRealm"]'?realms:q==='#addTabs .tab'?tabs:[],querySelector:(q)=>q==='input[name="addRealm"]:checked'?realms.find(x=>x.checked):null};
 const ctx={console,Array,Object,JSON,encodeURIComponent,setInterval,clearInterval,document:doc,$:id=>els[id],api:()=>Promise.reject(Error('unexpected network')),toast:()=>{}};
- vm.createContext(ctx); vm.runInContext('let loginTimer=null,loginState=null,reauthUID=null;'+src.slice(start,end),ctx); vm.runInContext('this.getReauth=()=>reauthUID',ctx);
+vm.createContext(ctx); vm.runInContext('function renderAccounts(){};let overviewData=null,loginTimer=null,loginState=null,reauthUID=null;'+src.slice(hs,he)+src.slice(start,end),ctx); vm.runInContext('this.getReauth=()=>reauthUID',ctx);
 ctx.openAdd('enterprise-switch','global');
 if(ctx.getReauth()!=='enterprise-switch') throw Error('reauthorization UID not set');
 if(!realms[0].disabled||!realms[1].disabled||!realms[1].checked||realms[0].checked) throw Error('reauthorization realm was not locked');

@@ -51,7 +51,7 @@ async function api(path, opts = {}) {
   const r = await fetch('/panel/api/' + path, Object.assign({}, opts, { headers: h }));
   if (r.status === 401) { openKey(); throw new Error('密钥无效或未填写'); }
   const d = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(d.error || ('HTTP ' + r.status));
+  if (!r.ok) { const error = new Error(d.error || ('HTTP ' + r.status)); error.httpStatus = r.status; throw error; }
   return d;
 }
 function toast(msg, cls) {
@@ -379,6 +379,37 @@ setTimeout(() => {
 }, 0);
 
 /* ── 账号池 ───────────────────────────────────────────────────────── */
+/* AUTH_STATUS_START: local credential state is separate from account routing/identity. */
+const authorizationFeedback = new Map();
+let loginEpoch = 0, loginPending = false, loginCompleted = false, loginDeadline = 0, loginPolling = false;
+function authorizationView(account, feedback = authorizationFeedback.get(account.uid)) {
+  if (feedback === 'pending') return { state: 'pending', label: '授权中…', title: '正在等待官方授权，请在已打开的登录窗口完成操作', disabled: true };
+  if (feedback === 'failed') return { state: 'warning', label: '更新失败 · 重试', title: '本次授权更新失败，原凭证未因此删除；实际凭证状态仍以服务端为准' };
+  if (feedback === 'timeout') return { state: 'expired', label: '授权超时 · 重试', title: '本次授权链接已超时，不代表原账号被封禁；点击重新获取链接' };
+  const credential = account.authorization || {};
+  if (credential.state === 'expired' || (credential.expires_at > 0 && credential.expires_at * 1000 <= Date.now()))
+    return { state: 'expired', label: '凭证已过期 · 重登', title: '本地访问凭证已过期，可重新授权；不等于账号被封禁，刷新凭证后状态会自动更新' };
+  if (credential.state === 'missing') return { state: 'idle', label: '登录授权', title: '尚未保存访问凭证，点击进行官方登录授权' };
+  if (credential.state === 'valid') return { state: 'valid', label: '已授权 · 更新', title: '已保存未到期的本地凭证；这不是实时上游验证。点击可更新登录授权；限流、暂停和账号身份另行展示' };
+  return { state: 'warning', label: '有效期未知 · 核查', title: '现有凭证有效期未知，请核查或更新授权；不根据登录来源或最近 API 成功时间猜测登录状态' };
+}
+function authorizationButton(account) {
+  const status = authorizationView(account);
+  return '<button class="xs auth-action auth-' + status.state + '" data-auth-state="' + status.state + '" data-a="reauthorize" data-u="' + esc(account.uid) + '" data-r="' + esc(account.realm || 'cn') + '" title="' + esc(status.title) + '"' + (status.disabled ? ' disabled aria-busy="true"' : '') + '>' + esc(status.label) + '</button>';
+}
+function repaintAuthorization() {
+  if (overviewData && Array.isArray(overviewData.accounts)) renderAccounts(overviewData.accounts);
+}
+function setLoginVisual(state) {
+  const labels = { idle: '获取授权链接', pending: '等待授权中…', valid: '授权成功', warning: '授权失败 · 重试', expired: '授权超时 · 重试' };
+  const button = $('btnStartLogin');
+  button.hidden = false;
+  button.className = 'auth-action auth-' + state;
+  button.textContent = labels[state] || labels.idle;
+  button.disabled = state === 'pending' || state === 'valid';
+  button.setAttribute('aria-busy', String(state === 'pending'));
+}
+/* AUTH_STATUS_END */
 function renderAccounts(list) {
   const tb = $('accBody');
   if (!list.length) {
@@ -448,7 +479,7 @@ function renderAccounts(list) {
       '</span></td>' +
       '<td class="num" style="color:var(--ink-3)">' + ago(s.last_success) + '</td>' +
       '<td class="acts">' +
-        (s.enterprise_session && !s.enterprise ? '<button class="xs primary" data-a="reauthorize" data-u="' + esc(s.uid) + '" data-r="' + esc(s.realm || 'cn') + '" title="更新同一账号凭证；来源字段不决定账号身份">更新登录授权</button>' : '') +
+        authorizationButton(s) +
         // 企业版无个人成长体系（签到 400「企业账号不支持该操作」/ 成长任务 403）：
         // 不渲染「签到」「任务」按钮，只留「额度」——点它走 /balance，企业额度由
         // upstream 的 get-enterprise-user-usage 口径填充。
@@ -1278,25 +1309,24 @@ $('cfgForm').onsubmit = async ev => {
 
 /* ── 添加账号 ─────────────────────────────────────────────────────── */
 function openAdd(targetUID, targetRealm) {
+  closeAdd(); // Invalidate requests belonging to the previous modal, if any.
   reauthUID = targetUID || null;
+  loginCompleted = false;
   $('addVeil').classList.add('on');
-  // 重置到登录标签
   switchAddTab('login');
   $('addPick').hidden = false;
   $('addLoad').hidden = true; $('addReady').hidden = true;
   $('addDone').hidden = true; $('addErr').hidden = true;
   $('importDone').hidden = true; $('importErr').hidden = true;
   $('btnCopyUrl').hidden = true; $('btnOpenUrl').hidden = true;
-  $('btnStartLogin').hidden = false; $('btnStartLogin').disabled = false;
-  stopPoll();
-  loginState = null;
+  setLoginVisual('idle');
   document.querySelectorAll('input[name="addRealm"]').forEach(x => {
     x.disabled = !!reauthUID;
     x.checked = x.value === (reauthUID ? (targetRealm || 'cn') : 'cn');
   });
   document.querySelectorAll('#addTabs .tab').forEach(x => { x.disabled = !!reauthUID && x.dataset.tab === 'import'; });
   $('addReauthNote').hidden = !reauthUID;
-  $('addReauthNote').textContent = reauthUID ? '请在官方授权页面登录同一账号。原账号无需移除；本次仅更新凭证，不签到、不领取奖励。token_source 是来源提示，不用于拒绝同账号且未返回企业标识的新凭证，也不保证任务资格。' : '';
+  $('addReauthNote').textContent = reauthUID ? '请在官方授权页面登录同一账号和同一企业空间（如有）。原账号无需移除；本次仅更新凭证，不签到、不领取奖励。登录来源提示不决定账号身份；颜色展示凭证和本次授权进度，不表示 API 或任务资格已通过实时验证。' : '';
   $('addPoll').textContent = '等待授权完成，自动检测中';
 }
 function switchAddTab(tab) {
@@ -1308,47 +1338,93 @@ function switchAddTab(tab) {
 document.querySelectorAll('#addTabs .tab').forEach(b => {
   b.onclick = () => switchAddTab(b.dataset.tab);
 });
-function startAddLogin() {
+function loginFailure(kind, message) {
+  ++loginEpoch; // Ignore any late response from the failed/expired attempt.
+  stopPoll();
+  loginPending = false; loginPolling = false;
+  loginState = null;
+  if (reauthUID) authorizationFeedback.set(reauthUID, kind);
+  setLoginVisual(kind === 'timeout' ? 'expired' : 'warning');
+  $('addLoad').hidden = true;
+  $('addReady').hidden = true;
+  $('addErr').hidden = false;
+  $('addErr').textContent = message + '；可以重试，原凭证会保留。';
+  repaintAuthorization();
+}
+async function startAddLogin() {
+  if (loginPending || loginCompleted) return;
+  const epoch = ++loginEpoch;
+  const target = reauthUID;
   const realm = (document.querySelector('input[name="addRealm"]:checked') || {}).value || 'cn';
-  $('btnStartLogin').disabled = true;
+  stopPoll();
+  loginPending = true; loginPolling = false; loginState = null;
+  loginDeadline = Date.now() + 15 * 60 * 1000;
+  loginTimer = setInterval(pollLogin, 3000); // Watchdog also covers a stalled login/start request.
+  if (target) authorizationFeedback.set(target, 'pending');
+  setLoginVisual('pending');
+  repaintAuthorization();
   $('addLoad').hidden = false; $('addErr').hidden = true;
+  $('addDone').hidden = true; $('addReady').hidden = true;
   const payload = { realm };
-  if (reauthUID) payload.reauthorize_uid = reauthUID;
-  api('login/start', { method: 'POST', body: JSON.stringify(payload) }).then(r => {
+  if (target) payload.reauthorize_uid = target;
+  try {
+    const r = await api('login/start', { method: 'POST', body: JSON.stringify(payload) });
+    if (epoch !== loginEpoch) return;
+    if (Date.now() >= loginDeadline) { loginFailure('timeout', '本次授权链接已超时'); return; }
+    if (!r.state || !r.url) throw new Error('授权服务未返回完整链接');
     loginState = r.state;
+    loginDeadline = Date.now() + 15 * 60 * 1000;
     $('addUrl').textContent = r.url;
-    $('addPick').hidden = true; // 选域锁定（会话已按该域发起）
+    $('addPick').hidden = true;
     $('addLoad').hidden = true; $('addReady').hidden = false;
-    $('btnStartLogin').hidden = true;
     $('btnCopyUrl').hidden = false; $('btnOpenUrl').hidden = false;
-    loginTimer = setInterval(pollLogin, 3000);
-  }).catch(e => {
-    $('addLoad').hidden = true;
-    $('btnStartLogin').disabled = false;
-    $('addErr').hidden = false;
-    $('addErr').textContent = e.message;
-  });
+  } catch (e) {
+    if (epoch !== loginEpoch) return;
+    loginFailure('failed', e.message);
+  }
 }
 function stopPoll() { if (loginTimer) { clearInterval(loginTimer); loginTimer = null; } }
 async function pollLogin() {
-  if (!loginState) return;
+  if (!loginPending) return;
+  if (Date.now() >= loginDeadline) { loginFailure('timeout', '本次授权链接已超时'); return; }
+  if (!loginState || loginPolling) return;
+  const epoch = loginEpoch, state = loginState, target = reauthUID;
+  loginPolling = true;
   try {
-    const r = await api('login/poll?state=' + encodeURIComponent(loginState));
+    const r = await api('login/poll?state=' + encodeURIComponent(state));
+    if (epoch !== loginEpoch) return;
+    if (Date.now() >= loginDeadline) { loginFailure('timeout', '本次授权链接已超时'); return; }
     if (r.done) {
       stopPoll();
+      loginPending = false; loginCompleted = true; loginState = null;
+      if (target) {
+        authorizationFeedback.delete(target);
+        const account = ((overviewData || {}).accounts || []).find(s => s.uid === target);
+        if (account && r.authorization) account.authorization = r.authorization;
+      }
+      setLoginVisual('valid');
+      repaintAuthorization();
       $('addReady').hidden = true;
       $('addDone').hidden = false;
-      $('addDone').textContent = (r.session_kind === 'personal_reauthorization' ? '登录授权已更新：' : '已添加 ') + (r.nickname || r.uid) + (r.session_kind === 'personal_reauthorization' ? '（未执行签到或奖励操作）' + (r.enterprise_switch_source ? ' · 登录来源提示仍在，但不代表企业账号；任务资格待核验' : '') : (r.realm === 'global' ? '（国际版）' : '') + (r.credits >= 0 ? ' · 积分 ' + r.credits + (r.credits_total > 0 ? '/' + r.credits_total : '') : '') + '，账号已载入池中');
-      setTimeout(() => { closeAdd(); loadOverview(true); }, 1600);
+      const updated = r.reauthorized || r.session_kind === 'personal_reauthorization';
+      $('addDone').textContent = (updated ? '登录授权已更新：' : '已添加 ') + (r.nickname || r.uid) + (updated ? '（未执行签到或奖励操作）' + (r.enterprise_switch_source ? ' · 登录来源提示仍在，但不代表企业账号；任务资格待核验' : '') : (r.realm === 'global' ? '（国际版）' : '') + (r.credits >= 0 ? ' · 积分 ' + r.credits + (r.credits_total > 0 ? '/' + r.credits_total : '') : '') + '，账号已载入池中');
+      loadOverview(true);
+      setTimeout(() => { if (epoch === loginEpoch) closeAdd(); }, 1600);
     }
   } catch (e) {
-    stopPoll();
-    $('addReady').hidden = true;
-    $('addErr').hidden = false;
-    $('addErr').textContent = e.message + '（关闭后重新添加）';
+    if (epoch === loginEpoch) loginFailure(e.httpStatus === 404 ? 'timeout' : 'failed', e.message);
+  } finally {
+    if (epoch === loginEpoch) loginPolling = false;
   }
 }
-function closeAdd() { stopPoll(); loginState = null; $('addVeil').classList.remove('on'); }
+function closeAdd() {
+  if (loginPending && reauthUID) authorizationFeedback.delete(reauthUID);
+  ++loginEpoch;
+  stopPoll();
+  loginState = null; loginPending = false; loginPolling = false;
+  $('addVeil').classList.remove('on');
+  repaintAuthorization();
+}
 $('btnCloseAdd').onclick = closeAdd;
 $('btnStartLogin').onclick = startAddLogin;
 $('btnOpenUrl').onclick = () => open($('addUrl').textContent, '_blank');

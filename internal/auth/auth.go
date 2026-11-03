@@ -210,6 +210,33 @@ func (a *Auth) IsGlobal() bool { return a.Realm() == "global" }
 // 无需加锁——Realm() 加锁是因为 realm/Domain 会被 RefreshToken 在锁内改写。
 func (a *Auth) IsEnterprise() bool { return strings.TrimSpace(a.EnterpriseID) != "" }
 
+// CredentialStatus is a non-secret snapshot of credential availability.
+type CredentialStatus struct {
+	State     string `json:"state"`
+	ExpiresAt int64  `json:"expires_at"`
+}
+
+// CredentialStatus reports only local credential presence and expiry. It does
+// not inspect source hints, pool state, or perform refresh/network activity.
+func (a *Auth) CredentialStatus(now time.Time) CredentialStatus {
+	if a == nil {
+		return CredentialStatus{State: "missing"}
+	}
+	a.mu.Lock()
+	access, expires := strings.TrimSpace(a.AccessToken), a.ExpiresAt
+	a.mu.Unlock()
+	if access == "" {
+		return CredentialStatus{State: "missing", ExpiresAt: expires}
+	}
+	if expires <= 0 {
+		return CredentialStatus{State: "unknown", ExpiresAt: expires}
+	}
+	if expires <= now.Unix() {
+		return CredentialStatus{State: "expired", ExpiresAt: expires}
+	}
+	return CredentialStatus{State: "valid", ExpiresAt: expires}
+}
+
 // IsEnterpriseSession 是沿用旧名称的保守自动化门控，不是账号身份或权益判断。
 // IsEnterprise() 使用账号响应中的 enterpriseId；JWT token_source=enterprise_switch
 // 仅表示令牌来源。上游未公开该字段的身份契约，个人登录也不能仅因此被拒绝。

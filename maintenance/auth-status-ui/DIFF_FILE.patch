@@ -1,0 +1,632 @@
+diff --git a/internal/auth/auth.go b/internal/auth/auth.go
+index 8d1528b..4d214b7 100644
+--- a/internal/auth/auth.go
++++ b/internal/auth/auth.go
+@@ -210,6 +210,33 @@ func (a *Auth) IsGlobal() bool { return a.Realm() == "global" }
+ // 无需加锁——Realm() 加锁是因为 realm/Domain 会被 RefreshToken 在锁内改写。
+ func (a *Auth) IsEnterprise() bool { return strings.TrimSpace(a.EnterpriseID) != "" }
+ 
++// CredentialStatus is a non-secret snapshot of credential availability.
++type CredentialStatus struct {
++	State     string `json:"state"`
++	ExpiresAt int64  `json:"expires_at"`
++}
++
++// CredentialStatus reports only local credential presence and expiry. It does
++// not inspect source hints, pool state, or perform refresh/network activity.
++func (a *Auth) CredentialStatus(now time.Time) CredentialStatus {
++	if a == nil {
++		return CredentialStatus{State: "missing"}
++	}
++	a.mu.Lock()
++	access, expires := strings.TrimSpace(a.AccessToken), a.ExpiresAt
++	a.mu.Unlock()
++	if access == "" {
++		return CredentialStatus{State: "missing", ExpiresAt: expires}
++	}
++	if expires <= 0 {
++		return CredentialStatus{State: "unknown", ExpiresAt: expires}
++	}
++	if expires <= now.Unix() {
++		return CredentialStatus{State: "expired", ExpiresAt: expires}
++	}
++	return CredentialStatus{State: "valid", ExpiresAt: expires}
++}
++
+ // IsEnterpriseSession 是沿用旧名称的保守自动化门控，不是账号身份或权益判断。
+ // IsEnterprise() 使用账号响应中的 enterpriseId；JWT token_source=enterprise_switch
+ // 仅表示令牌来源。上游未公开该字段的身份契约，个人登录也不能仅因此被拒绝。
+diff --git a/internal/panel/app.js b/internal/panel/app.js
+index 8c87601..e4cf10f 100644
+--- a/internal/panel/app.js
++++ b/internal/panel/app.js
+@@ -51,7 +51,7 @@ async function api(path, opts = {}) {
+   const r = await fetch('/panel/api/' + path, Object.assign({}, opts, { headers: h }));
+   if (r.status === 401) { openKey(); throw new Error('密钥无效或未填写'); }
+   const d = await r.json().catch(() => ({}));
+-  if (!r.ok) throw new Error(d.error || ('HTTP ' + r.status));
++  if (!r.ok) { const error = new Error(d.error || ('HTTP ' + r.status)); error.httpStatus = r.status; throw error; }
+   return d;
+ }
+ function toast(msg, cls) {
+@@ -379,6 +379,37 @@ setTimeout(() => {
+ }, 0);
+ 
+ /* ── 账号池 ───────────────────────────────────────────────────────── */
++/* AUTH_STATUS_START: local credential state is separate from account routing/identity. */
++const authorizationFeedback = new Map();
++let loginEpoch = 0, loginPending = false, loginCompleted = false, loginDeadline = 0, loginPolling = false;
++function authorizationView(account, feedback = authorizationFeedback.get(account.uid)) {
++  if (feedback === 'pending') return { state: 'pending', label: '授权中…', title: '正在等待官方授权，请在已打开的登录窗口完成操作', disabled: true };
++  if (feedback === 'failed') return { state: 'warning', label: '更新失败 · 重试', title: '本次授权更新失败，原凭证未因此删除；实际凭证状态仍以服务端为准' };
++  if (feedback === 'timeout') return { state: 'expired', label: '授权超时 · 重试', title: '本次授权链接已超时，不代表原账号被封禁；点击重新获取链接' };
++  const credential = account.authorization || {};
++  if (credential.state === 'expired' || (credential.expires_at > 0 && credential.expires_at * 1000 <= Date.now()))
++    return { state: 'expired', label: '凭证已过期 · 重登', title: '本地访问凭证已过期，可重新授权；不等于账号被封禁，刷新凭证后状态会自动更新' };
++  if (credential.state === 'missing') return { state: 'idle', label: '登录授权', title: '尚未保存访问凭证，点击进行官方登录授权' };
++  if (credential.state === 'valid') return { state: 'valid', label: '已授权 · 更新', title: '已保存未到期的本地凭证；这不是实时上游验证。点击可更新登录授权；限流、暂停和账号身份另行展示' };
++  return { state: 'warning', label: '有效期未知 · 核查', title: '现有凭证有效期未知，请核查或更新授权；不根据登录来源或最近 API 成功时间猜测登录状态' };
++}
++function authorizationButton(account) {
++  const status = authorizationView(account);
++  return '<button class="xs auth-action auth-' + status.state + '" data-auth-state="' + status.state + '" data-a="reauthorize" data-u="' + esc(account.uid) + '" data-r="' + esc(account.realm || 'cn') + '" title="' + esc(status.title) + '"' + (status.disabled ? ' disabled aria-busy="true"' : '') + '>' + esc(status.label) + '</button>';
++}
++function repaintAuthorization() {
++  if (overviewData && Array.isArray(overviewData.accounts)) renderAccounts(overviewData.accounts);
++}
++function setLoginVisual(state) {
++  const labels = { idle: '获取授权链接', pending: '等待授权中…', valid: '授权成功', warning: '授权失败 · 重试', expired: '授权超时 · 重试' };
++  const button = $('btnStartLogin');
++  button.hidden = false;
++  button.className = 'auth-action auth-' + state;
++  button.textContent = labels[state] || labels.idle;
++  button.disabled = state === 'pending' || state === 'valid';
++  button.setAttribute('aria-busy', String(state === 'pending'));
++}
++/* AUTH_STATUS_END */
+ function renderAccounts(list) {
+   const tb = $('accBody');
+   if (!list.length) {
+@@ -448,7 +479,7 @@ function renderAccounts(list) {
+       '</span></td>' +
+       '<td class="num" style="color:var(--ink-3)">' + ago(s.last_success) + '</td>' +
+       '<td class="acts">' +
+-        (s.enterprise_session && !s.enterprise ? '<button class="xs primary" data-a="reauthorize" data-u="' + esc(s.uid) + '" data-r="' + esc(s.realm || 'cn') + '" title="更新同一账号凭证；来源字段不决定账号身份">更新登录授权</button>' : '') +
++        authorizationButton(s) +
+         // 企业版无个人成长体系（签到 400「企业账号不支持该操作」/ 成长任务 403）：
+         // 不渲染「签到」「任务」按钮，只留「额度」——点它走 /balance，企业额度由
+         // upstream 的 get-enterprise-user-usage 口径填充。
+@@ -1278,25 +1309,24 @@ $('cfgForm').onsubmit = async ev => {
+ 
+ /* ── 添加账号 ─────────────────────────────────────────────────────── */
+ function openAdd(targetUID, targetRealm) {
++  closeAdd(); // Invalidate requests belonging to the previous modal, if any.
+   reauthUID = targetUID || null;
++  loginCompleted = false;
+   $('addVeil').classList.add('on');
+-  // 重置到登录标签
+   switchAddTab('login');
+   $('addPick').hidden = false;
+   $('addLoad').hidden = true; $('addReady').hidden = true;
+   $('addDone').hidden = true; $('addErr').hidden = true;
+   $('importDone').hidden = true; $('importErr').hidden = true;
+   $('btnCopyUrl').hidden = true; $('btnOpenUrl').hidden = true;
+-  $('btnStartLogin').hidden = false; $('btnStartLogin').disabled = false;
+-  stopPoll();
+-  loginState = null;
++  setLoginVisual('idle');
+   document.querySelectorAll('input[name="addRealm"]').forEach(x => {
+     x.disabled = !!reauthUID;
+     x.checked = x.value === (reauthUID ? (targetRealm || 'cn') : 'cn');
+   });
+   document.querySelectorAll('#addTabs .tab').forEach(x => { x.disabled = !!reauthUID && x.dataset.tab === 'import'; });
+   $('addReauthNote').hidden = !reauthUID;
+-  $('addReauthNote').textContent = reauthUID ? '请在官方授权页面登录同一账号。原账号无需移除；本次仅更新凭证，不签到、不领取奖励。token_source 是来源提示，不用于拒绝同账号且未返回企业标识的新凭证，也不保证任务资格。' : '';
++  $('addReauthNote').textContent = reauthUID ? '请在官方授权页面登录同一账号和同一企业空间（如有）。原账号无需移除；本次仅更新凭证，不签到、不领取奖励。登录来源提示不决定账号身份；颜色展示凭证和本次授权进度，不表示 API 或任务资格已通过实时验证。' : '';
+   $('addPoll').textContent = '等待授权完成，自动检测中';
+ }
+ function switchAddTab(tab) {
+@@ -1308,47 +1338,93 @@ function switchAddTab(tab) {
+ document.querySelectorAll('#addTabs .tab').forEach(b => {
+   b.onclick = () => switchAddTab(b.dataset.tab);
+ });
+-function startAddLogin() {
++function loginFailure(kind, message) {
++  ++loginEpoch; // Ignore any late response from the failed/expired attempt.
++  stopPoll();
++  loginPending = false; loginPolling = false;
++  loginState = null;
++  if (reauthUID) authorizationFeedback.set(reauthUID, kind);
++  setLoginVisual(kind === 'timeout' ? 'expired' : 'warning');
++  $('addLoad').hidden = true;
++  $('addReady').hidden = true;
++  $('addErr').hidden = false;
++  $('addErr').textContent = message + '；可以重试，原凭证会保留。';
++  repaintAuthorization();
++}
++async function startAddLogin() {
++  if (loginPending || loginCompleted) return;
++  const epoch = ++loginEpoch;
++  const target = reauthUID;
+   const realm = (document.querySelector('input[name="addRealm"]:checked') || {}).value || 'cn';
+-  $('btnStartLogin').disabled = true;
++  stopPoll();
++  loginPending = true; loginPolling = false; loginState = null;
++  loginDeadline = Date.now() + 15 * 60 * 1000;
++  loginTimer = setInterval(pollLogin, 3000); // Watchdog also covers a stalled login/start request.
++  if (target) authorizationFeedback.set(target, 'pending');
++  setLoginVisual('pending');
++  repaintAuthorization();
+   $('addLoad').hidden = false; $('addErr').hidden = true;
++  $('addDone').hidden = true; $('addReady').hidden = true;
+   const payload = { realm };
+-  if (reauthUID) payload.reauthorize_uid = reauthUID;
+-  api('login/start', { method: 'POST', body: JSON.stringify(payload) }).then(r => {
++  if (target) payload.reauthorize_uid = target;
++  try {
++    const r = await api('login/start', { method: 'POST', body: JSON.stringify(payload) });
++    if (epoch !== loginEpoch) return;
++    if (Date.now() >= loginDeadline) { loginFailure('timeout', '本次授权链接已超时'); return; }
++    if (!r.state || !r.url) throw new Error('授权服务未返回完整链接');
+     loginState = r.state;
++    loginDeadline = Date.now() + 15 * 60 * 1000;
+     $('addUrl').textContent = r.url;
+-    $('addPick').hidden = true; // 选域锁定（会话已按该域发起）
++    $('addPick').hidden = true;
+     $('addLoad').hidden = true; $('addReady').hidden = false;
+-    $('btnStartLogin').hidden = true;
+     $('btnCopyUrl').hidden = false; $('btnOpenUrl').hidden = false;
+-    loginTimer = setInterval(pollLogin, 3000);
+-  }).catch(e => {
+-    $('addLoad').hidden = true;
+-    $('btnStartLogin').disabled = false;
+-    $('addErr').hidden = false;
+-    $('addErr').textContent = e.message;
+-  });
++  } catch (e) {
++    if (epoch !== loginEpoch) return;
++    loginFailure('failed', e.message);
++  }
+ }
+ function stopPoll() { if (loginTimer) { clearInterval(loginTimer); loginTimer = null; } }
+ async function pollLogin() {
+-  if (!loginState) return;
++  if (!loginPending) return;
++  if (Date.now() >= loginDeadline) { loginFailure('timeout', '本次授权链接已超时'); return; }
++  if (!loginState || loginPolling) return;
++  const epoch = loginEpoch, state = loginState, target = reauthUID;
++  loginPolling = true;
+   try {
+-    const r = await api('login/poll?state=' + encodeURIComponent(loginState));
++    const r = await api('login/poll?state=' + encodeURIComponent(state));
++    if (epoch !== loginEpoch) return;
++    if (Date.now() >= loginDeadline) { loginFailure('timeout', '本次授权链接已超时'); return; }
+     if (r.done) {
+       stopPoll();
++      loginPending = false; loginCompleted = true; loginState = null;
++      if (target) {
++        authorizationFeedback.delete(target);
++        const account = ((overviewData || {}).accounts || []).find(s => s.uid === target);
++        if (account && r.authorization) account.authorization = r.authorization;
++      }
++      setLoginVisual('valid');
++      repaintAuthorization();
+       $('addReady').hidden = true;
+       $('addDone').hidden = false;
+-      $('addDone').textContent = (r.session_kind === 'personal_reauthorization' ? '登录授权已更新：' : '已添加 ') + (r.nickname || r.uid) + (r.session_kind === 'personal_reauthorization' ? '（未执行签到或奖励操作）' + (r.enterprise_switch_source ? ' · 登录来源提示仍在，但不代表企业账号；任务资格待核验' : '') : (r.realm === 'global' ? '（国际版）' : '') + (r.credits >= 0 ? ' · 积分 ' + r.credits + (r.credits_total > 0 ? '/' + r.credits_total : '') : '') + '，账号已载入池中');
+-      setTimeout(() => { closeAdd(); loadOverview(true); }, 1600);
++      const updated = r.reauthorized || r.session_kind === 'personal_reauthorization';
++      $('addDone').textContent = (updated ? '登录授权已更新：' : '已添加 ') + (r.nickname || r.uid) + (updated ? '（未执行签到或奖励操作）' + (r.enterprise_switch_source ? ' · 登录来源提示仍在，但不代表企业账号；任务资格待核验' : '') : (r.realm === 'global' ? '（国际版）' : '') + (r.credits >= 0 ? ' · 积分 ' + r.credits + (r.credits_total > 0 ? '/' + r.credits_total : '') : '') + '，账号已载入池中');
++      loadOverview(true);
++      setTimeout(() => { if (epoch === loginEpoch) closeAdd(); }, 1600);
+     }
+   } catch (e) {
+-    stopPoll();
+-    $('addReady').hidden = true;
+-    $('addErr').hidden = false;
+-    $('addErr').textContent = e.message + '（关闭后重新添加）';
++    if (epoch === loginEpoch) loginFailure(e.httpStatus === 404 ? 'timeout' : 'failed', e.message);
++  } finally {
++    if (epoch === loginEpoch) loginPolling = false;
+   }
+ }
+-function closeAdd() { stopPoll(); loginState = null; $('addVeil').classList.remove('on'); }
++function closeAdd() {
++  if (loginPending && reauthUID) authorizationFeedback.delete(reauthUID);
++  ++loginEpoch;
++  stopPoll();
++  loginState = null; loginPending = false; loginPolling = false;
++  $('addVeil').classList.remove('on');
++  repaintAuthorization();
++}
+ $('btnCloseAdd').onclick = closeAdd;
+ $('btnStartLogin').onclick = startAddLogin;
+ $('btnOpenUrl').onclick = () => open($('addUrl').textContent, '_blank');
+diff --git a/internal/panel/index.html b/internal/panel/index.html
+index d6e9500..cda96e9 100644
+--- a/internal/panel/index.html
++++ b/internal/panel/index.html
+@@ -161,6 +161,15 @@ button.ghost { background: transparent; }
+ button.danger { color: var(--bad); }
+ button.danger:hover:not(:disabled) { border-color: var(--bad); }
+ button.xs { padding: 3.5px 9px; font-size: 12.5px; border-radius: 6px; white-space: nowrap; }
++/* Authorization has its own state; source hints, rate limits and manual pauses do not set it. */
++button.auth-action { font-weight: 550; }
++button.auth-idle { color: var(--ink-3); background: var(--surface); border-color: var(--line); }
++button.auth-pending { color: var(--accent-ink); background: var(--accent); border-color: var(--accent); }
++button.auth-valid { color: var(--ok); background: var(--ok-soft); border-color: var(--ok); }
++button.auth-warning { color: var(--warn); background: var(--warn-soft); border-color: var(--warn); }
++button.auth-expired { color: var(--bad); background: var(--bad-soft); border-color: var(--bad); }
++button.auth-pending:disabled, button.auth-valid:disabled { opacity: 1; }
++button.auth-action:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+ /* select.xs：header 里的紧凑选择框。通用 input/select 规则是 width:100%（表单页用），
+    header 里若不收窄会把同行 note 挤到换行——收成内容宽并压小外观，与 button.xs 同款。 */
+ select.xs { width: auto; padding: 3.5px 9px; font-size: 12.5px; border-radius: 6px; }
+diff --git a/internal/panel/login.go b/internal/panel/login.go
+index dac8ad8..6d537fe 100644
+--- a/internal/panel/login.go
++++ b/internal/panel/login.go
+@@ -140,7 +140,7 @@ func (p *Panel) loginStart(w http.ResponseWriter, r *http.Request) {
+ 			return
+ 		}
+ 		found := p.cfg.Pool.AuthByUID(reauthorizeUID)
+-		if found == nil || found.Realm() != realm || !found.IsEnterpriseSession() || found.IsEnterprise() {
++		if found == nil || found.FilePath == "" || found.Realm() != realm {
+ 			writeErr(w, http.StatusBadRequest, "该账号不满足当前凭证更新条件，请刷新账号列表并核对同一账号与版本")
+ 			return
+ 		}
+@@ -212,7 +212,7 @@ func (p *Panel) loginPoll(w http.ResponseWriter, r *http.Request) {
+ 	var reauthCurrent *auth.Auth
+ 	if sess.reauthorizeUID != "" {
+ 		reauthCurrent = p.cfg.Pool.AuthByUID(sess.reauthorizeUID)
+-		if reauthCurrent == nil || reauthCurrent.FilePath == "" || reauthCurrent.Realm() != sess.realm || !reauthCurrent.IsEnterpriseSession() || reauthCurrent.IsEnterprise() {
++		if reauthCurrent == nil || reauthCurrent.FilePath == "" || reauthCurrent.Realm() != sess.realm {
+ 			p.loginMu.Lock()
+ 			delete(p.logins, state)
+ 			p.loginMu.Unlock()
+@@ -262,11 +262,11 @@ func (p *Panel) loginPoll(w http.ResponseWriter, r *http.Request) {
+ 	}
+ 	if sess.reauthorizeUID != "" {
+ 		log.Printf("panel: reauthorization result same_account=%t enterprise_id_present=%t enterprise_switch_source=%t", acct.UID == sess.reauthorizeUID, strings.TrimSpace(acct.EnterpriseID) != "", (&auth.Auth{AccessToken: tok.AccessToken}).HasEnterpriseSwitchSource())
+-		if reauthCurrent == nil || acct.UID != sess.reauthorizeUID || acct.EnterpriseID != "" {
++		if reauthCurrent == nil || acct.UID != sess.reauthorizeUID || strings.TrimSpace(acct.EnterpriseID) != strings.TrimSpace(reauthCurrent.EnterpriseID) {
+ 			p.loginMu.Lock()
+ 			delete(p.logins, state)
+ 			p.loginMu.Unlock()
+-			writeErr(w, http.StatusBadRequest, "此次授权不是原账号或上游返回了企业标识，原凭证已保留；请核对官方授权页的账号与身份")
++			writeErr(w, http.StatusBadRequest, "此次授权的账号或企业空间与原账号不一致，原凭证已保留；请核对官方授权页的账号与身份")
+ 			return
+ 		}
+ 	}
+@@ -378,6 +378,8 @@ func (p *Panel) loginPoll(w http.ResponseWriter, r *http.Request) {
+ 	}
+ 	writeJSON(w, http.StatusOK, map[string]any{
+ 		"done":            true,
++		"reauthorized":    sess.reauthorizeUID != "",
++		"authorization":   a.CredentialStatus(time.Now()),
+ 		"uid":             acct.UID,
+ 		"nickname":        acct.Nickname,
+ 		"realm":           sess.realm,
+diff --git a/internal/panel/login_reauthorization_test.go b/internal/panel/login_reauthorization_test.go
+index c304716..5ba9a36 100644
+--- a/internal/panel/login_reauthorization_test.go
++++ b/internal/panel/login_reauthorization_test.go
+@@ -384,3 +384,80 @@ func TestReauthorizationAcceptsSourceHintWithoutAssertingEnterprise(t *testing.T
+ 	}
+ 	// No Upstream configured: any automatic checkin/reward/balance call would panic.
+ }
++
++func TestReauthorizationSupportsOrdinaryAndSameTenantAccounts(t *testing.T) {
++	for _, tc := range []struct {
++		name, existingTenant, returnedTenant string
++		expired, accepted                    bool
++	}{
++		{"ordinary_valid", "", "", false, true},
++		{"ordinary_expired", "", "", true, true},
++		{"same_enterprise", "org-1", "org-1", false, true},
++		{"changed_enterprise", "org-1", "org-2", false, false},
++		{"enterprise_to_personal", "org-1", "", false, false},
++	} {
++		t.Run(tc.name, func(t *testing.T) {
++			p, old := reauthPanel(t, "uid-1", "uid-1")
++			old.AccessToken = "fixture-existing-personal"
++			old.EnterpriseID = tc.existingTenant
++			old.ExpiresAt = time.Now().Add(time.Hour).Unix()
++			if tc.expired {
++				old.ExpiresAt = time.Now().Add(-time.Minute).Unix()
++			}
++			if err := old.SaveAtomic(); err != nil {
++				t.Fatal(err)
++			}
++			before, err := os.ReadFile(old.FilePath)
++			if err != nil {
++				t.Fatal(err)
++			}
++			previous := loginHTTP
++			calls := 0
++			loginHTTP = &http.Client{Transport: loginRoundTripFunc(func(r *http.Request) (*http.Response, error) {
++				calls++
++				var data any
++				switch r.URL.Path {
++				case "/v2/plugin/auth/state":
++					data = map[string]any{"state": "ordinary", "authUrl": "https://example.invalid/fixture"}
++				case "/v2/plugin/auth/token":
++					data = map[string]any{"accessToken": "fixture-new", "refreshToken": "fixture-refresh", "expiresIn": 3600, "domain": "copilot.tencent.com"}
++				case "/v2/plugin/login/account":
++					data = map[string]any{"uid": old.UID, "enterpriseId": tc.returnedTenant}
++				default:
++					t.Errorf("unexpected state-changing endpoint: %s", r.URL.Path)
++				}
++				b, _ := json.Marshal(map[string]any{"code": 0, "data": data})
++				return &http.Response{StatusCode: 200, Header: http.Header{}, Body: io.NopCloser(bytes.NewReader(b))}, nil
++			})}
++			t.Cleanup(func() { loginHTTP = previous })
++			rec := httptest.NewRecorder()
++			p.loginStart(rec, httptest.NewRequest("POST", "/", strings.NewReader(`{"reauthorize_uid":"uid-1"}`)))
++			if rec.Code != 200 {
++				t.Fatalf("existing account start rejected: %d %s", rec.Code, rec.Body)
++			}
++			rec = httptest.NewRecorder()
++			p.loginPoll(rec, httptest.NewRequest("GET", "/?state=ordinary", nil))
++			after, err := os.ReadFile(old.FilePath)
++			if err != nil {
++				t.Fatal(err)
++			}
++			if tc.accepted {
++				if rec.Code != 200 || bytes.Equal(before, after) {
++					t.Fatalf("same-account reauth failed: %d %s", rec.Code, rec.Body)
++				}
++				var response struct {
++					Reauthorized  bool                  `json:"reauthorized"`
++					Authorization auth.CredentialStatus `json:"authorization"`
++				}
++				if json.Unmarshal(rec.Body.Bytes(), &response) != nil || !response.Reauthorized || response.Authorization.State != "valid" || response.Authorization.ExpiresAt <= time.Now().Unix() {
++					t.Fatalf("missing success metadata: %s", rec.Body)
++				}
++			} else if rec.Code != 400 || !bytes.Equal(before, after) || p.cfg.Pool.AuthByUID(old.UID) != old {
++				t.Fatal("changed tenant overwrote existing credential")
++			}
++			if calls != 3 {
++				t.Fatalf("unexpected requests=%d", calls)
++			}
++		})
++	}
++}
+diff --git a/internal/panel/panel.go b/internal/panel/panel.go
+index 76f31d5..bd9d29d 100644
+--- a/internal/panel/panel.go
++++ b/internal/panel/panel.go
+@@ -265,13 +265,14 @@ func (p *Panel) overview(w http.ResponseWriter, r *http.Request) {
+ 	}
+ 	type accountView struct {
+ 		pool.Status
+-		EnterpriseSession      bool `json:"enterprise_session"`
+-		EnterpriseSwitchSource bool `json:"enterprise_switch_source"`
++		EnterpriseSession      bool                  `json:"enterprise_session"`
++		EnterpriseSwitchSource bool                  `json:"enterprise_switch_source"`
++		Authorization          auth.CredentialStatus `json:"authorization"`
+ 	}
+ 	accountViews := make([]accountView, 0)
+ 	for _, account := range p.cfg.Pool.List() {
+ 		a := p.cfg.Pool.AuthByUID(account.UID)
+-		accountViews = append(accountViews, accountView{Status: account, EnterpriseSession: a != nil && a.IsEnterpriseSession(), EnterpriseSwitchSource: a != nil && a.HasEnterpriseSwitchSource()})
++		accountViews = append(accountViews, accountView{Status: account, EnterpriseSession: a != nil && a.IsEnterpriseSession(), EnterpriseSwitchSource: a != nil && a.HasEnterpriseSwitchSource(), Authorization: a.CredentialStatus(time.Now())})
+ 	}
+ 	writeJSON(w, http.StatusOK, map[string]any{
+ 		"version":         p.cfg.Version,
+diff --git a/internal/panel/session_recovery_ui_test.go b/internal/panel/session_recovery_ui_test.go
+index bd92aad..3e9527b 100644
+--- a/internal/panel/session_recovery_ui_test.go
++++ b/internal/panel/session_recovery_ui_test.go
+@@ -61,15 +61,15 @@ func TestAddAccountButtonDoesNotReuseReauthorizationUID(t *testing.T) {
+ 	}
+ 	script := `const fs=require('fs'),vm=require('vm');
+ const src=fs.readFileSync(process.argv[2],'utf8');
+-const start=src.indexOf('function openAdd('), end=src.indexOf("$('btnRefresh').onclick");
++const hs=src.indexOf('/* AUTH_STATUS_START'),he=src.indexOf('/* AUTH_STATUS_END */')+'/* AUTH_STATUS_END */'.length,start=src.indexOf('function openAdd('), end=src.indexOf("$('btnRefresh').onclick");
+ if(start<0||end<start) throw Error('add-account region missing');
+ const ids=['addVeil','addPick','addLoad','addReady','addDone','addErr','importDone','importErr','btnCopyUrl','btnOpenUrl','btnStartLogin','btnCloseAdd','btnAdd','addTabLogin','addTabImport','importFile','addUrl','addPoll','addReauthNote'];
+-const els={}; for(const id of ids) els[id]={hidden:false,disabled:false,textContent:'',dataset:{},classList:{on:false,add(){this.on=true},remove(){this.on=false}}};
++const els={}; for(const id of ids) els[id]={hidden:false,disabled:false,textContent:'',dataset:{},attrs:{},setAttribute(k,v){this.attrs[k]=v},classList:{on:false,add(){this.on=true},remove(){this.on=false}}};
+ const realms=[{value:'cn',checked:true,disabled:false},{value:'global',checked:false,disabled:false}];
+ const tabs=[{dataset:{tab:'login'},classList:{on:false,toggle(v){this.on=v}}},{dataset:{tab:'import'},classList:{on:false,toggle(v){this.on=v}}}];
+ const doc={querySelectorAll:(q)=>q==='input[name="addRealm"]'?realms:q==='#addTabs .tab'?tabs:[],querySelector:(q)=>q==='input[name="addRealm"]:checked'?realms.find(x=>x.checked):null};
+ const ctx={console,Array,Object,JSON,encodeURIComponent,setInterval,clearInterval,document:doc,$:id=>els[id],api:()=>Promise.reject(Error('unexpected network')),toast:()=>{}};
+- vm.createContext(ctx); vm.runInContext('let loginTimer=null,loginState=null,reauthUID=null;'+src.slice(start,end),ctx); vm.runInContext('this.getReauth=()=>reauthUID',ctx);
++vm.createContext(ctx); vm.runInContext('function renderAccounts(){};let overviewData=null,loginTimer=null,loginState=null,reauthUID=null;'+src.slice(hs,he)+src.slice(start,end),ctx); vm.runInContext('this.getReauth=()=>reauthUID',ctx);
+ ctx.openAdd('enterprise-switch','global');
+ if(ctx.getReauth()!=='enterprise-switch') throw Error('reauthorization UID not set');
+ if(!realms[0].disabled||!realms[1].disabled||!realms[1].checked||realms[0].checked) throw Error('reauthorization realm was not locked');
+diff --git a/internal/panel/authorization_status_test.go b/internal/panel/authorization_status_test.go
+new file mode 100644
+index 0000000..5adecc0
+--- /dev/null
++++ b/internal/panel/authorization_status_test.go
+@@ -0,0 +1,75 @@
++package panel
++
++import (
++	"encoding/json"
++	"net/http/httptest"
++	"strings"
++	"testing"
++	"time"
++
++	"github.com/linguo2625469/workbuddy2api-panel/internal/auth"
++	"github.com/linguo2625469/workbuddy2api-panel/internal/pool"
++)
++
++func TestOverviewAuthorizationStatusIsNonSecretAndDeterministic(t *testing.T) {
++	now := time.Unix(1_700_000_000, 0)
++	cases := []struct {
++		name, access string
++		expires      int64
++		want         string
++	}{
++		{"valid", "token", now.Add(time.Second).Unix(), "valid"},
++		{"boundary", "token", now.Unix(), "expired"},
++		{"unknown", "token", 0, "unknown"},
++		{"missing", "  ", now.Add(time.Hour).Unix(), "missing"},
++	}
++	for _, tc := range cases {
++		a := &auth.Auth{AccessToken: tc.access, ExpiresAt: tc.expires}
++		got := a.CredentialStatus(now)
++		if got.State != tc.want || got.ExpiresAt != tc.expires {
++			t.Errorf("%s: got=%+v want state=%s expires=%d", tc.name, got, tc.want, tc.expires)
++		}
++		b, _ := json.Marshal(got)
++		if string(b) == "" || string(b) == "token" || string(b) == "\"token\"" {
++			t.Errorf("%s: status leaked credential: %s", tc.name, b)
++		}
++	}
++}
++
++func TestCredentialStatusIgnoresSourceHintAndPoolState(t *testing.T) {
++	p := pool.New("")
++	a := &auth.Auth{UID: "u1", AccessToken: "token", ExpiresAt: 1_700_000_100, FilePath: t.TempDir() + "/a.json"}
++	p.Add(a)
++	p.Disable("u1", "test")
++	st := a.CredentialStatus(time.Unix(1_700_000_000, 0))
++	if st.State != "valid" {
++		t.Fatalf("disabled account misclassified: %+v", st)
++	}
++}
++
++func TestOverviewIncludesOnlyNonSecretAuthorizationMetadata(t *testing.T) {
++	accounts := pool.New("")
++	token := "fixture-distinct-access-secret"
++	refresh := "fixture-distinct-refresh-secret"
++	a := &auth.Auth{UID: "status-fixture", AccessToken: token, RefreshToken: refresh, ExpiresAt: time.Now().Add(time.Hour).Unix()}
++	accounts.Add(a)
++	accounts.Disable(a.UID, "manual disable")
++	accounts.Pause(a.UID)
++	accounts.Cooldown(a.UID, pool.CoolSoft, time.Minute, "fixture rate limit")
++	p := New(Config{Pool: accounts})
++	rec := httptest.NewRecorder()
++	p.overview(rec, httptest.NewRequest("GET", "/", nil))
++	var d struct {
++		Accounts []struct {
++			Authorization auth.CredentialStatus `json:"authorization"`
++		}
++	}
++	if rec.Code != 200 || json.Unmarshal(rec.Body.Bytes(), &d) != nil || len(d.Accounts) != 1 || d.Accounts[0].Authorization.State != "valid" || d.Accounts[0].Authorization.ExpiresAt != a.ExpiresAt {
++		t.Fatalf("bad status metadata: %s", rec.Body)
++	}
++	for _, secret := range []string{token, refresh, "accessToken", "refreshToken"} {
++		if strings.Contains(rec.Body.String(), secret) {
++			t.Fatal("overview leaked credential")
++		}
++	}
++}
+diff --git a/internal/panel/authorization_ui_test.go b/internal/panel/authorization_ui_test.go
+new file mode 100644
+index 0000000..6ae7243
+--- /dev/null
++++ b/internal/panel/authorization_ui_test.go
+@@ -0,0 +1,106 @@
++package panel
++
++import (
++	"os"
++	"os/exec"
++	"strings"
++	"testing"
++)
++
++func TestAuthorizationStatusHelperStatesAndEscaping(t *testing.T) {
++	node, err := exec.LookPath("node")
++	if err != nil {
++		t.Skip("node not installed")
++	}
++	script := `const fs=require('fs'),vm=require('vm');
++const src=fs.readFileSync(process.argv[2],'utf8');
++const start=src.indexOf('/* AUTH_STATUS_START'),end=src.indexOf('/* AUTH_STATUS_END */');
++if(start<0||end<start) throw Error('authorization helper block missing');
++const button={className:'',textContent:'',disabled:false,attrs:{},setAttribute(k,v){this.attrs[k]=v}};
++const ctx={Map,Object,Date,JSON,esc:s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])),$:id=>button};
++vm.createContext(ctx); vm.runInContext(src.slice(start,end),ctx); vm.runInContext('this.setFeedback=(u,v)=>authorizationFeedback.set(u,v)',ctx);
++const now=1700000000000; ctx.Date={now:()=>now};
++function view(account,feedback){ return ctx.authorizationView(account,feedback); }
++const base={uid:'<x>',realm:'cn',authorization:{state:'valid',expires_at:now/1000+60}};
++const checks=[
++  [view(base,'pending'), 'pending', true],
++  [view(base,'failed'), 'warning', false],
++  [view(base,'timeout'), 'expired', false],
++  [view(base), 'valid', false],
++  [view({...base,authorization:{state:'valid',expires_at:now/1000}}), 'expired', false],
++  [view({...base,authorization:{state:'missing'}}), 'idle', false],
++  [view({...base,authorization:{}}), 'warning', false],
++  [view({...base,enterprise_switch_source:true,manual_disabled:true,rate_limited_models:[{model:'x'}]}), 'valid', false],
++];
++for(const [got,state,disabled] of checks) if(got.state!==state||!!got.disabled!==disabled) throw Error(JSON.stringify({got,state,disabled}));
++ctx.setFeedback('<x>','pending');
++const html=ctx.authorizationButton(base);
++if(!html.includes('data-u="&lt;x&gt;"')||!html.includes('auth-pending')||!html.includes(' disabled ')) throw Error('button escaping/state missing: '+html);
++process.stdout.write('ok');`
++	tmp := t.TempDir() + "/authorization.cjs"
++	if err := os.WriteFile(tmp, []byte(script), 0600); err != nil {
++		t.Fatal(err)
++	}
++	cmd := exec.Command(node, tmp, "app.js")
++	cmd.Dir = "."
++	out, err := cmd.CombinedOutput()
++	if err != nil || strings.TrimSpace(string(out)) != "ok" {
++		t.Fatalf("authorization helper harness failed: %v output=%s", err, out)
++	}
++}
++
++func TestAuthorizationModalLifecycleEpochAndTimeout(t *testing.T) {
++	node, err := exec.LookPath("node")
++	if err != nil {
++		t.Skip("node not installed")
++	}
++	script := `(async()=>{const fs=require('fs'),vm=require('vm');
++const src=fs.readFileSync(process.argv[2],'utf8');
++const hs=src.indexOf('/* AUTH_STATUS_START'),he=src.indexOf('/* AUTH_STATUS_END */')+'/* AUTH_STATUS_END */'.length;
++const start=src.indexOf('function openAdd('),end=src.indexOf("$('importFile').onchange");
++if(hs<0||start<0||end<start) throw Error('lifecycle source region missing');
++const ids=['addVeil','addPick','addLoad','addReady','addDone','addErr','importDone','importErr','btnCopyUrl','btnOpenUrl','btnStartLogin','btnCloseAdd','btnAdd','addTabLogin','addTabImport','importFile','addUrl','addPoll','addReauthNote'];
++const els={}; for(const id of ids) els[id]={hidden:false,disabled:false,textContent:'',className:'',attrs:{},dataset:{},classList:{on:false,add(){this.on=true},remove(){this.on=false}},setAttribute(k,v){this.attrs[k]=v}};
++const realms=[{value:'cn',checked:true,disabled:false},{value:'global',checked:false,disabled:false}];
++const tabs=[{dataset:{tab:'login'},classList:{toggle(){}}},{dataset:{tab:'import'},classList:{toggle(){}}}];
++const doc={querySelectorAll:q=>q==='input[name="addRealm"]'?realms:q==='#addTabs .tab'?tabs:[],querySelector:q=>q==='input[name="addRealm"]:checked'?realms.find(x=>x.checked):null};
++let deferred=[]; const account={uid:'u',realm:'cn',authorization:{state:'valid',expires_at:9999999999}};
++const ctx={console,Array,Object,JSON,Date,encodeURIComponent,setInterval,clearInterval,document:doc,$:id=>els[id],overviewData:{accounts:[account]},loadOverview:()=>{},esc:s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])),api:path=>new Promise((resolve,reject)=>deferred.push({path,resolve,reject})),toast:()=>{},open:()=>{},navigator:{clipboard:{writeText:()=>Promise.resolve()}},setTimeout,clearTimeout};
++vm.createContext(ctx); vm.runInContext('function renderAccounts(){};let loginTimer=null,loginState=null,reauthUID=null;'+src.slice(hs,he)+src.slice(start,end),ctx);
++ctx.openAdd('u','cn'); const first=ctx.startAddLogin();
++if(!els.btnStartLogin.disabled||!els.btnStartLogin.className.includes('auth-pending')) throw Error('pending visual missing');
++deferred.shift().resolve({state:'s1',url:'fixture'}); await first; const poll=ctx.pollLogin();
++deferred.shift().resolve({done:true,reauthorized:true,nickname:'fixture',authorization:{state:'valid',expires_at:9999999999}}); await poll;
++if(!els.btnStartLogin.className.includes('auth-valid')||!els.btnStartLogin.disabled||account.authorization.state!=='valid'||!els.addDone.textContent.includes('登录授权已更新')) throw Error('success lifecycle missing');
++ctx.openAdd('u','cn'); deferred=[]; const failed=ctx.startAddLogin(); deferred.shift().reject(Error('fixture failure')); await failed;
++if(!els.btnStartLogin.className.includes('auth-warning')||account.authorization.state!=='valid') throw Error('failure did not preserve old credential');
++ctx.openAdd('u','cn'); const timedStart=ctx.startAddLogin(); deferred.shift().resolve({state:'s2',url:'fixture'}); await timedStart; ctx.Date={now:()=>Date.now()+16*60*1000}; await ctx.pollLogin();
++if(!els.btnStartLogin.className.includes('auth-expired')) throw Error('timeout visual missing');
++// A poll that never resolves must still expire via the deadline check; a late
++// success must not turn the expired state green or patch the cached account.
++ctx.openAdd('u','cn'); let clock=0; ctx.Date={now:()=>clock}; const stalledPollStart=ctx.startAddLogin();
++deferred.shift().resolve({state:'s3',url:'fixture'}); await stalledPollStart; const latePoll=ctx.pollLogin();
++clock=15*60*1000+1; await ctx.pollLogin();
++if(!els.btnStartLogin.className.includes('auth-expired')||account.authorization.state!=='valid') throw Error('unresolved poll did not expire safely');
++deferred.shift().resolve({done:true,reauthorized:true,authorization:{state:'expired'}}); await latePoll;
++if(!els.btnStartLogin.className.includes('auth-expired')||account.authorization.state!=='valid') throw Error('late poll revived expired state');
++// A stalled login/start request is covered by the same watchdog and its late
++// response must be ignored after timeout.
++ctx.openAdd('u','cn'); clock=0; const stalledStart=ctx.startAddLogin(); clock=15*60*1000+1; await ctx.pollLogin();
++if(!els.btnStartLogin.className.includes('auth-expired')) throw Error('stalled start did not expire');
++deferred.shift().resolve({state:'late',url:'fixture'}); await stalledStart;
++if(!els.btnStartLogin.className.includes('auth-expired')) throw Error('late start revived expired state');
++ctx.openAdd('u','cn'); const pending=ctx.startAddLogin(); if(!els.btnStartLogin.disabled) throw Error('pending not disabled'); els.btnCloseAdd.onclick(); deferred.shift().resolve({state:'stale',url:'fixture'}); await pending; ctx.openAdd('u','cn');
++if(!els.btnStartLogin.className.includes('auth-idle')||els.btnStartLogin.disabled) throw Error('cancel left pending state');
++process.stdout.write('ok');})().catch(e=>{console.error(e);process.exit(1)});`
++	tmp := t.TempDir() + "/lifecycle.cjs"
++	if err := os.WriteFile(tmp, []byte(script), 0600); err != nil {
++		t.Fatal(err)
++	}
++	cmd := exec.Command(node, tmp, "app.js")
++	cmd.Dir = "."
++	out, err := cmd.CombinedOutput()
++	if err != nil || strings.TrimSpace(string(out)) != "ok" {
++		t.Fatalf("authorization lifecycle harness failed: %v output=%s", err, out)
++	}
++}

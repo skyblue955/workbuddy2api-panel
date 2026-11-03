@@ -384,3 +384,80 @@ func TestReauthorizationAcceptsSourceHintWithoutAssertingEnterprise(t *testing.T
 	}
 	// No Upstream configured: any automatic checkin/reward/balance call would panic.
 }
+
+func TestReauthorizationSupportsOrdinaryAndSameTenantAccounts(t *testing.T) {
+	for _, tc := range []struct {
+		name, existingTenant, returnedTenant string
+		expired, accepted                    bool
+	}{
+		{"ordinary_valid", "", "", false, true},
+		{"ordinary_expired", "", "", true, true},
+		{"same_enterprise", "org-1", "org-1", false, true},
+		{"changed_enterprise", "org-1", "org-2", false, false},
+		{"enterprise_to_personal", "org-1", "", false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p, old := reauthPanel(t, "uid-1", "uid-1")
+			old.AccessToken = "fixture-existing-personal"
+			old.EnterpriseID = tc.existingTenant
+			old.ExpiresAt = time.Now().Add(time.Hour).Unix()
+			if tc.expired {
+				old.ExpiresAt = time.Now().Add(-time.Minute).Unix()
+			}
+			if err := old.SaveAtomic(); err != nil {
+				t.Fatal(err)
+			}
+			before, err := os.ReadFile(old.FilePath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			previous := loginHTTP
+			calls := 0
+			loginHTTP = &http.Client{Transport: loginRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+				calls++
+				var data any
+				switch r.URL.Path {
+				case "/v2/plugin/auth/state":
+					data = map[string]any{"state": "ordinary", "authUrl": "https://example.invalid/fixture"}
+				case "/v2/plugin/auth/token":
+					data = map[string]any{"accessToken": "fixture-new", "refreshToken": "fixture-refresh", "expiresIn": 3600, "domain": "copilot.tencent.com"}
+				case "/v2/plugin/login/account":
+					data = map[string]any{"uid": old.UID, "enterpriseId": tc.returnedTenant}
+				default:
+					t.Errorf("unexpected state-changing endpoint: %s", r.URL.Path)
+				}
+				b, _ := json.Marshal(map[string]any{"code": 0, "data": data})
+				return &http.Response{StatusCode: 200, Header: http.Header{}, Body: io.NopCloser(bytes.NewReader(b))}, nil
+			})}
+			t.Cleanup(func() { loginHTTP = previous })
+			rec := httptest.NewRecorder()
+			p.loginStart(rec, httptest.NewRequest("POST", "/", strings.NewReader(`{"reauthorize_uid":"uid-1"}`)))
+			if rec.Code != 200 {
+				t.Fatalf("existing account start rejected: %d %s", rec.Code, rec.Body)
+			}
+			rec = httptest.NewRecorder()
+			p.loginPoll(rec, httptest.NewRequest("GET", "/?state=ordinary", nil))
+			after, err := os.ReadFile(old.FilePath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tc.accepted {
+				if rec.Code != 200 || bytes.Equal(before, after) {
+					t.Fatalf("same-account reauth failed: %d %s", rec.Code, rec.Body)
+				}
+				var response struct {
+					Reauthorized  bool                  `json:"reauthorized"`
+					Authorization auth.CredentialStatus `json:"authorization"`
+				}
+				if json.Unmarshal(rec.Body.Bytes(), &response) != nil || !response.Reauthorized || response.Authorization.State != "valid" || response.Authorization.ExpiresAt <= time.Now().Unix() {
+					t.Fatalf("missing success metadata: %s", rec.Body)
+				}
+			} else if rec.Code != 400 || !bytes.Equal(before, after) || p.cfg.Pool.AuthByUID(old.UID) != old {
+				t.Fatal("changed tenant overwrote existing credential")
+			}
+			if calls != 3 {
+				t.Fatalf("unexpected requests=%d", calls)
+			}
+		})
+	}
+}

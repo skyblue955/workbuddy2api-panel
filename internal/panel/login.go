@@ -140,7 +140,7 @@ func (p *Panel) loginStart(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		found := p.cfg.Pool.AuthByUID(reauthorizeUID)
-		if found == nil || found.Realm() != realm || !found.IsEnterpriseSession() || found.IsEnterprise() {
+		if found == nil || found.FilePath == "" || found.Realm() != realm {
 			writeErr(w, http.StatusBadRequest, "该账号不满足当前凭证更新条件，请刷新账号列表并核对同一账号与版本")
 			return
 		}
@@ -212,7 +212,7 @@ func (p *Panel) loginPoll(w http.ResponseWriter, r *http.Request) {
 	var reauthCurrent *auth.Auth
 	if sess.reauthorizeUID != "" {
 		reauthCurrent = p.cfg.Pool.AuthByUID(sess.reauthorizeUID)
-		if reauthCurrent == nil || reauthCurrent.FilePath == "" || reauthCurrent.Realm() != sess.realm || !reauthCurrent.IsEnterpriseSession() || reauthCurrent.IsEnterprise() {
+		if reauthCurrent == nil || reauthCurrent.FilePath == "" || reauthCurrent.Realm() != sess.realm {
 			p.loginMu.Lock()
 			delete(p.logins, state)
 			p.loginMu.Unlock()
@@ -262,11 +262,11 @@ func (p *Panel) loginPoll(w http.ResponseWriter, r *http.Request) {
 	}
 	if sess.reauthorizeUID != "" {
 		log.Printf("panel: reauthorization result same_account=%t enterprise_id_present=%t enterprise_switch_source=%t", acct.UID == sess.reauthorizeUID, strings.TrimSpace(acct.EnterpriseID) != "", (&auth.Auth{AccessToken: tok.AccessToken}).HasEnterpriseSwitchSource())
-		if reauthCurrent == nil || acct.UID != sess.reauthorizeUID || acct.EnterpriseID != "" {
+		if reauthCurrent == nil || acct.UID != sess.reauthorizeUID || strings.TrimSpace(acct.EnterpriseID) != strings.TrimSpace(reauthCurrent.EnterpriseID) {
 			p.loginMu.Lock()
 			delete(p.logins, state)
 			p.loginMu.Unlock()
-			writeErr(w, http.StatusBadRequest, "此次授权不是原账号或上游返回了企业标识，原凭证已保留；请核对官方授权页的账号与身份")
+			writeErr(w, http.StatusBadRequest, "此次授权的账号或企业空间与原账号不一致，原凭证已保留；请核对官方授权页的账号与身份")
 			return
 		}
 	}
@@ -378,6 +378,8 @@ func (p *Panel) loginPoll(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"done":            true,
+		"reauthorized":    sess.reauthorizeUID != "",
+		"authorization":   a.CredentialStatus(time.Now()),
 		"uid":             acct.UID,
 		"nickname":        acct.Nickname,
 		"realm":           sess.realm,
