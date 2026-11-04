@@ -62,6 +62,11 @@ func (p *Panel) accountTaskAccept(w http.ResponseWriter, r *http.Request) {
 	if a == nil {
 		return
 	}
+	if !p.tryLockAccount(uid) {
+		writeErr(w, http.StatusConflict, "account task operation is busy")
+		return
+	}
+	defer p.unlockAccount(uid)
 	var body struct {
 		TaskCodes []string `json:"task_codes"`
 	}
@@ -89,6 +94,11 @@ func (p *Panel) taskAcceptAll(w http.ResponseWriter, r *http.Request) {
 	if a == nil {
 		return
 	}
+	if !p.tryLockAccount(uid) {
+		writeErr(w, http.StatusConflict, "account task operation is busy")
+		return
+	}
+	defer p.unlockAccount(uid)
 	tasks, err := p.cfg.Upstream.ListTasks(a)
 	if err != nil {
 		writeErr(w, http.StatusBadGateway, "list tasks: "+err.Error())
@@ -156,6 +166,11 @@ func (p *Panel) accountTaskClaim(w http.ResponseWriter, r *http.Request) {
 	if a == nil {
 		return
 	}
+	if !p.tryLockAccount(uid) {
+		writeErr(w, http.StatusConflict, "account task operation is busy")
+		return
+	}
+	defer p.unlockAccount(uid)
 	var body struct {
 		TaskCode string `json:"task_code"`
 	}
