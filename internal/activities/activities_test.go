@@ -12,7 +12,7 @@ func officialActivity() Activity {
 
 func TestRegistryIsSourceBackedAndStable(t *testing.T) {
 	got := Registry()
-	if len(got) != 5 || got[0].ID != "credit_redemption" || got[1].ID != "checkin_status" || got[2].ID != "compensation_status" || got[3].ID != "referral_fission_rules" || got[4].ID != "enterprise_doublecredits_2026" {
+	if len(got) != 8 || got[0].ID != "credit_redemption" || got[1].ID != "checkin_status" || got[2].ID != "compensation_status" || got[3].ID != "referral_fission_rules" || got[4].ID != "enterprise_doublecredits_2026" {
 		t.Fatalf("registry IDs = %#v", got)
 	}
 	if got[0].DocsURL != DocsURL || got[0].Support != SupportOfficial {
@@ -82,5 +82,33 @@ func TestDecideDisabledAndUnsupported(t *testing.T) {
 	activity.Support = SupportLegacyUnverified
 	if got := Decide(activity, time.Time{}, KnownEligibility(true), false); got.Reason != DecisionUnsupported {
 		t.Fatalf("unsupported = %#v", got)
+	}
+}
+
+func TestCatalogExpiryAndNoInventedEntitlements(t *testing.T) {
+	now := time.Date(2026, time.November, 3, 12, 0, 0, 0, time.FixedZone("UTC+8", 8*3600))
+	for _, item := range Catalog(now) {
+		if item.RewardAvailable || item.Eligibility != "unknown" || item.SourceVerifiedAt != SourceVerifiedAt {
+			t.Fatalf("invented entitlement: %+v", item)
+		}
+		if item.ID == "credit_redemption" {
+			if !item.PublicClaimAPI || item.Availability != "requires_authorization" {
+				t.Fatalf("bad redemption metadata: %+v", item)
+			}
+		} else if item.PublicClaimAPI {
+			t.Fatalf("undocumented claimAPI: %+v", item)
+		}
+		switch item.ID {
+		case "referral_invite_2026", "campus_freshman_2026", "enterprise_doublecredits_2026":
+			if item.Availability != "expired" || item.Enabled {
+				t.Fatalf("expired channel appears active: %+v", item)
+			}
+		}
+	}
+	campusEnd := datePointer(2026, time.November, 1)
+	for _, item := range Catalog(*campusEnd) {
+		if item.ID == "campus_freshman_2026" && item.Availability != "expired" {
+			t.Fatal("exclusive campus expiry boundary wrong")
+		}
 	}
 }

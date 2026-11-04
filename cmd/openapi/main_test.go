@@ -20,7 +20,7 @@ type fakeRedeemer struct {
 func (f *fakeRedeemer) Redeem(_ context.Context, token string, input workbuddyopen.RedemptionRequest) (*workbuddyopen.RedemptionResponse, error) {
 	f.calls++
 	f.token, f.input = token, input
-	return &workbuddyopen.RedemptionResponse{FlowNo: "flow", Credits: 7, OpenID: "secret-open-id"}, nil
+	return &workbuddyopen.RedemptionResponse{Status: "success", FlowNo: "flow", Credits: 7, OpenID: "fixture-open-id"}, nil
 }
 
 func TestRedeemDryRunDoesNotCallClient(t *testing.T) {
@@ -35,13 +35,14 @@ func TestRedeemDryRunDoesNotCallClient(t *testing.T) {
 func TestRedeemExecuteReadsTokenAndDoesNotPrintSecrets(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "token.json")
-	tokenJSON := `{"access_token":"official-token","token_type":"Bearer","expires_in":3600,"scope":"user.credit.exchange","obtained_at":"` + time.Now().UTC().Format(time.RFC3339) + `"}`
+	journal := filepath.Join(dir, "journal")
+	tokenJSON := `{"access_token":"official-token","token_type":"Bearer","expires_in":3600,"scope":"user.credit.exchange","open_id":"fixture-open-id","obtained_at":"` + time.Now().UTC().Format(time.RFC3339) + `"}`
 	if err := os.WriteFile(path, []byte(tokenJSON), 0600); err != nil {
 		t.Fatal(err)
 	}
 	f := &fakeRedeemer{}
 	var out strings.Builder
-	err := run([]string{"redeem", "-execute", "-token-file", path}, strings.NewReader(`{"gift_key":"giftkey","gift_code":"giftcode","request_id":"stable-2"}`), &out, f)
+	err := run([]string{"redeem", "-execute", "-token-file", path, "-journal-dir", journal}, strings.NewReader(`{"gift_key":"giftkey","gift_code":"giftcode","request_id":"stable-2"}`), &out, f)
 	if err != nil || f.calls != 1 || f.token != "official-token" || !strings.Contains(out.String(), `"flow_no":"flow"`) || !strings.Contains(out.String(), `"credits":7`) || strings.Contains(out.String(), "official-token") || strings.Contains(out.String(), "secret-open-id") {
 		t.Fatalf("err=%v out=%q calls=%d token=%q", err, out.String(), f.calls, f.token)
 	}
@@ -59,10 +60,11 @@ func TestRedeemRejectsUnknownTrailingAndOversizedInput(t *testing.T) {
 func TestRedeemTokenFilePermissionsAndExecuteRequirement(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "token.json")
+	journal := filepath.Join(dir, "journal")
 	if err := os.WriteFile(path, []byte(`{"access_token":"secret"}`), 0644); err != nil {
 		t.Fatal(err)
 	}
-	if err := run([]string{"redeem", "-execute", "-token-file", path}, strings.NewReader(`{"code":"code","request_id":"stable-1"}`), &strings.Builder{}, &fakeRedeemer{}); err == nil {
+	if err := run([]string{"redeem", "-execute", "-token-file", path, "-journal-dir", journal}, strings.NewReader(`{"code":"code","request_id":"stable-1"}`), &strings.Builder{}, &fakeRedeemer{}); err == nil {
 		t.Fatal("permissive token file accepted")
 	}
 	if err := run([]string{"redeem", "-execute"}, strings.NewReader(`{"code":"code","request_id":"stable-1"}`), &strings.Builder{}, &fakeRedeemer{}); err == nil {

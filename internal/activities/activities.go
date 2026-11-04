@@ -9,6 +9,7 @@ import (
 )
 
 const DocsURL = "https://open.workbuddy.cn/docs/openapi"
+const SourceVerifiedAt = "2026-11-03"
 
 type SupportStatus string
 
@@ -45,16 +46,18 @@ func EligibilityFailure(err error) Eligibility {
 }
 
 type Activity struct {
-	ID              string        `json:"id"`
-	Name            string        `json:"name"`
-	Enabled         bool          `json:"enabled"`
-	Support         SupportStatus `json:"support"`
-	DocsURL         string        `json:"docs_url"`
-	SupportReason   string        `json:"support_reason"`
-	Mode            string        `json:"mode"`
-	RewardAvailable bool          `json:"reward_available"`
-	StartsAt        *time.Time    `json:"starts_at,omitempty"`
-	ExpiresAt       *time.Time    `json:"expires_at,omitempty"`
+	ID               string        `json:"id"`
+	Name             string        `json:"name"`
+	Enabled          bool          `json:"enabled"`
+	Support          SupportStatus `json:"support"`
+	DocsURL          string        `json:"docs_url"`
+	SupportReason    string        `json:"support_reason"`
+	Mode             string        `json:"mode"`
+	RewardAvailable  bool          `json:"reward_available"`
+	PublicClaimAPI   bool          `json:"public_claim_api"`
+	SourceVerifiedAt string        `json:"source_verified_at"`
+	StartsAt         *time.Time    `json:"starts_at,omitempty"`
+	ExpiresAt        *time.Time    `json:"expires_at,omitempty"`
 }
 
 // Registry returns the small, source-backed set currently exposed to callers.
@@ -62,10 +65,10 @@ type Activity struct {
 // private endpoints or to claim anything.
 func Registry() []Activity {
 	sep30 := time.Date(2026, 10, 1, 0, 0, 0, 0, time.FixedZone("UTC+8", 8*3600)) // exclusive end
-	return []Activity{
+	entries := []Activity{
 		{
 			ID: "credit_redemption", Name: "Credit redemption", Enabled: true,
-			Support: SupportOfficial, DocsURL: DocsURL,
+			Support: SupportOfficial, DocsURL: DocsURL, Mode: "opt_in_api", PublicClaimAPI: true,
 			SupportReason:   "official contract; requires approved app, user OAuth, and a valid code; eligibility is unknown until verified",
 			RewardAvailable: false,
 		},
@@ -93,7 +96,60 @@ func Registry() []Activity {
 			SupportReason:   "historical record; expired 2026-09-30 and not an active entitlement",
 			RewardAvailable: false, ExpiresAt: &sep30,
 		},
+		{
+			ID: "referral_invite_2026", Name: "2026 referral invitation (historical)", Enabled: false,
+			Support: SupportOfficial, DocsURL: "https://www.codebuddy.cn/events/invite/", Mode: "rules_only",
+			SupportReason: "published invitation campaign ended 2026-09-30; no public claim API established", ExpiresAt: &sep30,
+		},
+		{
+			ID: "campus_freshman_2026", Name: "Campus freshman campaign (historical)", Enabled: false,
+			Support: SupportOfficial, DocsURL: "https://www.workbuddy.cn/events/campus-freshman/", Mode: "rules_only",
+			SupportReason: "published campaign ended 2026-10-31; student verification was required; no public claim API established",
+			StartsAt:      datePointer(2026, time.August, 24), ExpiresAt: datePointer(2026, time.November, 1),
+		},
+		{
+			ID: "buddy_one_reward_rules", Name: "Buddy One platform reward credit rules", Enabled: true,
+			Support: SupportOfficial, DocsURL: "https://www.codebuddy.cn/docs/workbuddy/Buddy-One/Credits", Mode: "rules_only",
+			SupportReason: "credit sharing and validity rules only; rewards depend on individual invitation/compensation campaigns, no general free-credit claim API established",
+		},
 	}
+	for i := range entries {
+		entries[i].SourceVerifiedAt = SourceVerifiedAt
+	}
+	return entries
+}
+
+func datePointer(year int, month time.Month, day int) *time.Time {
+	value := time.Date(year, month, day, 0, 0, 0, 0, time.FixedZone("UTC+8", 8*3600))
+	return &value
+}
+
+type ActivityStatus struct {
+	Activity
+	Availability string `json:"availability"`
+	Eligibility  string `json:"eligibility"`
+}
+
+// Catalog reports dated public-source facts, never an account claim entitlement.
+func Catalog(now time.Time) []ActivityStatus {
+	result := make([]ActivityStatus, 0)
+	for _, activity := range Registry() {
+		phase := "requires_authorization"
+		switch {
+		case activity.ExpiresAt != nil && !now.Before(*activity.ExpiresAt):
+			phase = "expired"
+		case activity.StartsAt != nil && now.Before(*activity.StartsAt):
+			phase = "not_started"
+		case !activity.Enabled:
+			phase = "disabled"
+		case activity.Support != SupportOfficial:
+			phase = "legacy_unverified"
+		case activity.Mode == "rules_only":
+			phase = "rules_only"
+		}
+		result = append(result, ActivityStatus{Activity: activity, Availability: phase, Eligibility: "unknown"})
+	}
+	return result
 }
 
 type DecisionReason string

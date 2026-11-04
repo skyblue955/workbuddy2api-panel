@@ -31,7 +31,7 @@ func TestActivitiesEndpointIsReadOnlyCatalog(t *testing.T) {
 	if err := json.Unmarshal(r.Body.Bytes(), &body); err != nil {
 		t.Fatal(err)
 	}
-	if body.VerifiedAt != "2026-11-02" || len(body.Activities) != 5 {
+	if body.VerifiedAt != "2026-11-03" || len(body.Activities) != 8 {
 		t.Fatalf("body=%s", r.Body.String())
 	}
 	for _, activity := range body.Activities {

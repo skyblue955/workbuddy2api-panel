@@ -633,6 +633,12 @@ func (p *Panel) accountCheckin(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "account not found")
 		return
 	}
+	if !p.tryLockAccount(uid) {
+		writeErr(w, http.StatusConflict, "该账号有签到或其他操作正在执行，请等待本次操作完成")
+		return
+	}
+	defer p.unlockAccount(uid)
+
 	checkinMsg := ""
 	checkinDone := false
 	// 企业版无签到体系（上游 400 code 10001「企业账号不支持该操作」）：不发起该调用，

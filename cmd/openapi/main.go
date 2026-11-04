@@ -9,7 +9,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/linguo2625469/workbuddy2api-panel/internal/activities"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/workbuddyopen"
@@ -48,7 +50,7 @@ func run(args []string, stdin io.Reader, out io.Writer, client redeemer) error {
 		if err := fs.Parse(args[1:]); err != nil || fs.NArg() != 0 {
 			return errors.New("activities: unknown or trailing arguments")
 		}
-		return json.NewEncoder(out).Encode(activities.Registry())
+		return json.NewEncoder(out).Encode(activities.Catalog(time.Now()))
 	case "redeem":
 		return runRedeem(args[1:], stdin, out, client)
 	default:
@@ -61,6 +63,7 @@ func runRedeem(args []string, stdin io.Reader, out io.Writer, client redeemer) e
 	fs.SetOutput(io.Discard)
 	execute := fs.Bool("execute", false, "submit the request")
 	tokenFile := fs.String("token-file", "", "official OAuth access-token JSON file")
+	journalDir := fs.String("journal-dir", "", "durable redemption journal directory")
 	if err := fs.Parse(args); err != nil || fs.NArg() != 0 {
 		return errors.New("redeem: unknown or trailing arguments")
 	}
@@ -80,13 +83,43 @@ func runRedeem(args []string, stdin io.Reader, out io.Writer, client redeemer) e
 	if strings.TrimSpace(*tokenFile) == "" {
 		return errors.New("redeem: -token-file is required with -execute")
 	}
-	token, err := readTokenFile(*tokenFile)
+	if strings.TrimSpace(*journalDir) == "" {
+		return errors.New("redeem: -journal-dir is required with -execute")
+	}
+	normalizedJournal, pathErr := filepath.Abs(*journalDir)
+	if pathErr != nil {
+		return errors.New("redeem: journal directory is invalid")
+	}
+	*journalDir = normalizedJournal
+
+	doc, err := readTokenDocument(*tokenFile)
 	if err != nil {
 		return err
 	}
-	result, err := client.Redeem(context.Background(), token, input)
+	if strings.TrimSpace(doc.OpenID) == "" {
+		return errors.New("redeem: token file has no open_id")
+	}
+	rec, path, beginErr := beginRedemption(*journalDir, input, doc.OpenID)
+	if rec.State == "succeeded" && beginErr == nil {
+		result := replayResult(rec)
+		_, err = fmt.Fprintf(out, "{\"flow_no\":%q,\"credits\":%d}\n", result.FlowNo, result.Credits)
+		return err
+	}
+	if beginErr != nil {
+		return beginErr
+	}
+	result, err := client.Redeem(context.Background(), doc.AccessToken, input)
+	if err == nil {
+		err = validateRedemptionResult(result)
+	}
+	if err == nil && result.OpenID != doc.OpenID {
+		err = errors.New("redeem: response subject mismatch")
+	}
 	if err != nil {
 		return err
+	}
+	if err := completeRedemption(path, *journalDir, rec, result); err != nil {
+		return errors.New("redeem: result durability failed")
 	}
 	_, err = fmt.Fprintf(out, "{\"flow_no\":%q,\"credits\":%d}\n", result.FlowNo, result.Credits)
 	return err
