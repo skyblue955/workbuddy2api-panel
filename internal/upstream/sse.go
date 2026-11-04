@@ -18,11 +18,48 @@ import (
 // 「上游空流」与「客户端断连写失败」——空流是上游缺陷，应记 502 观测；写失败是
 // 客户端已走，日志口径不同。Aggregate 与 StreamHint 共用同一哨兵（errors.Is 判定）。
 var errEmptyStream = errors.New("upstream stream contained no valid data events")
+var errTruncatedStream = errors.New("upstream stream ended before terminal marker")
 
 // IsEmptyStreamError 报告错误是否为「上游空流」（无有效 SSE 帧）——供 handler
 // 在流式路径把空流记为失败观测（HTTP 头已发出只能 200，但日志/状态应收敛到
 // upstream_parse 同语义），与客户端断连类错误区分。
-func IsEmptyStreamError(err error) bool { return errors.Is(err, errEmptyStream) }
+func IsEmptyStreamError(err error) bool     { return errors.Is(err, errEmptyStream) }
+func IsTruncatedStreamError(err error) bool { return errors.Is(err, errTruncatedStream) }
+
+// choiceCompletion requires every observed choice to finish before accepting
+// EOF without [DONE]. It observes only upstream frames, never repaired output.
+type choiceCompletion map[float64]bool
+
+func (c choiceCompletion) observe(frame map[string]any) {
+	choices, _ := frame["choices"].([]any)
+	for ordinal, raw := range choices {
+		choice, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		index, ok := choice["index"].(float64)
+		if !ok {
+			index = float64(ordinal)
+		}
+		if _, exists := c[index]; !exists {
+			c[index] = false
+		}
+		if reason, _ := choice["finish_reason"].(string); reason != "" {
+			c[index] = true
+		}
+	}
+}
+func (c choiceCompletion) complete() bool {
+	if len(c) == 0 {
+		return false
+	}
+	for _, done := range c {
+		if !done {
+			return false
+		}
+	}
+	return true
+}
 
 // Aggregate 读取完整 SSE 流，聚合 delta.content 为单个 OpenAI chat.completion 响应。
 // 分片/半行由 bufio.Reader.ReadString 处理；遇到 "data: [DONE]" 结束。
@@ -30,18 +67,19 @@ func IsEmptyStreamError(err error) bool { return errors.Is(err, errEmptyStream) 
 func Aggregate(r io.Reader) (map[string]any, error) {
 	br := bufio.NewReaderSize(r, 64*1024)
 	var (
-		id, model     string
-		created       float64
-		content       strings.Builder
-		reasoning     strings.Builder
-		role          = "assistant"
-		finishReason  = "stop"
-		usage         map[string]any
-		gotAnyContent bool
-		validEvents   int
-		sawDone       bool // 上游显式发过 data: [DONE]（正常收尾）
-		toolCalls     = map[int]map[string]any{}
-		toolOrder     []int
+		id, model      string
+		created        float64
+		content        strings.Builder
+		reasoning      strings.Builder
+		role           = "assistant"
+		finishReason   = "stop"
+		usage          map[string]any
+		gotAnyContent  bool
+		validEvents    int
+		sawDone        bool // 上游显式发过 data: [DONE]（正常收尾）
+		terminalFrames = choiceCompletion{}
+		toolCalls      = map[int]map[string]any{}
+		toolOrder      []int
 		// toolSeq 缺 index 的 tool_call 的分配序号源：跨帧延续「最近分配」槽位，
 		// 同帧内递增（见 mergeToolCallsChunk 注释）。
 		toolSeq int
@@ -155,7 +193,11 @@ func Aggregate(r io.Reader) (map[string]any, error) {
 				var chunk map[string]any
 				if json.Unmarshal([]byte(payload), &chunk) == nil {
 					// 有效事件计数：仅 JSON 解析成功的数据帧计入（解析失败沿用静默 continue）。
+					if _, failed := chunk["error"]; failed {
+						return nil, errors.New("upstream stream returned an error event")
+					}
 					validEvents++
+					terminalFrames.observe(chunk)
 					if v, ok := chunk["id"].(string); ok && id == "" {
 						id = v
 					}
@@ -211,6 +253,9 @@ func Aggregate(r io.Reader) (map[string]any, error) {
 		// 上游返回 200 但没有任何有效数据事件（空流/只有 [DONE]/只有注释行）：
 		// 不再合成空 content 的假成功响应，直接报错，由 handler 映射为 502 upstream_parse。
 		return nil, errEmptyStream
+	}
+	if !sawDone && !terminalFrames.complete() {
+		return nil, errTruncatedStream
 	}
 	if id == "" {
 		id = fmt.Sprintf("chatcmpl-%d", time.Now().UnixNano())
@@ -674,6 +719,7 @@ func StreamHint(w http.ResponseWriter, r io.Reader, hintFn func(string) string, 
 		return out
 	}
 
+	terminalFrames := choiceCompletion{}
 	// writeFrame 把 payload 按规范白名单重建后以 data: 帧写出并 flush。
 	// 仅 JSON 解析成功时计数记为一次有效转发（JSON 解析失败照常降级原样写出，但不计数）。
 	writeFrame := func(payload string) (int, error) {
@@ -685,6 +731,7 @@ func StreamHint(w http.ResponseWriter, r io.Reader, hintFn func(string) string, 
 			}
 			return 0, nil
 		}
+		terminalFrames.observe(obj)
 		// 上游错误帧透传（error-passthrough）：带 error 键的帧**原样写出**，不走
 		// normalizeFrame 白名单——白名单会剥掉 error 字段，客户端就看不到上游
 		// code/msg/requestId。error.message 即上游原文（如 6004 限流、审核拦截），
@@ -709,14 +756,16 @@ func StreamHint(w http.ResponseWriter, r io.Reader, hintFn func(string) string, 
 
 	br := bufio.NewReaderSize(r, 64*1024)
 	validFrames := 0
+	sawDone := false
 readLoop:
 	for {
 		line, err := br.ReadString('\n')
 		trimmed := strings.TrimRight(line, "\r\n")
 		switch {
-		case strings.HasPrefix(trimmed, "data: [DONE]"):
+		case strings.TrimSpace(trimmed) == "data: [DONE]":
 			// 上游显式结束：停止读取，DONE 之后的任何数据（含垃圾帧）一律不再透传。
 			// [DONE] 统一在循环结束后写出，保证恰好一个。
+			sawDone = true
 			break readLoop
 		case strings.HasPrefix(trimmed, "data: "):
 			n, werr := writeFrame(strings.TrimPrefix(trimmed, "data: "))
@@ -738,8 +787,11 @@ readLoop:
 			if err == io.EOF {
 				break
 			}
-			return err
+			return fmt.Errorf("%w: upstream read failed", errTruncatedStream)
 		}
+	}
+	if !sawDone && validFrames > 0 && !terminalFrames.complete() {
+		return errTruncatedStream
 	}
 	// 标记修复的尾部收尾：流结束时仍未判定的字节一律原文回吐（绝不吞字节，未闭合
 	// 的块连起始标记一起交还）；若本流还原过调用、但上游从未给出收尾帧，补一帧
@@ -771,7 +823,7 @@ readLoop:
 	if validFrames == 0 {
 		_ = writeRaw(`{"error":{"message":"empty upstream stream","type":"upstream_error","code":"upstream_parse"}}`)
 	}
-	// 保证恰好写一个 [DONE]（上游漏发时兜底补上）。
+	// 仅在显式完成或所有观测 choice 已结束后补全 [DONE]；不掩盖中途 EOF。
 	if _, err := io.WriteString(w, "data: [DONE]\n\n"); err != nil {
 		return err
 	}

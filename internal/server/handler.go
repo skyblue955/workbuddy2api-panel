@@ -1052,6 +1052,7 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 				if strings.TrimSpace(msg) == "" {
 					msg = "upstream capacity is full (queue.full); retry after a short wait"
 				}
+				setRetryAfter(w, uerr.RetryAfter)
 				writeOpenAIErrorHint(w, http.StatusServiceUnavailable, "upstream_busy", msg,
 					h.hintOf(upstream.ErrUpstreamBusy, string(respBody), bareModel, reqHasImage, uerr))
 				st.status = http.StatusServiceUnavailable
@@ -1119,6 +1120,16 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 				st.outcome = reqlog.OutcomeStreamError
 				log.Printf("WARN: [server] stream acct=%s model=%s: upstream error frame kind=%s payload=%s",
 					logfmt.Label(acct.UID, acct.Nickname), bareModel, kind, logfmt.Truncate(errFrame, 200))
+			case upstream.IsTruncatedStreamError(sErr) && r.Context().Err() == nil:
+				// Upstream EOF is not a client disconnect and must not bind sticky state.
+				st.status = http.StatusBadGateway
+				st.outcome = reqlog.OutcomeStreamError
+				_, _ = io.WriteString(w, "data: {\"error\":{\"message\":\"upstream stream ended before completion\",\"type\":\"upstream_error\",\"code\":\"upstream_parse\"}}\n\n")
+				if fl, ok := w.(http.Flusher); ok {
+					fl.Flush()
+				}
+				log.Printf("WARN: [server] upstream stream truncated before terminal marker")
+
 			case sErr != nil:
 				// 客户端写失败（断连）：上游帧无恙，账号健康——账号侧照常记成功
 				// （与 default 同语义），请求日志归为 Interrupted（人已走，未完成）。
@@ -1310,9 +1321,35 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		}
 		status = http.StatusBadRequest
 	}
+	if status == http.StatusTooManyRequests || status == http.StatusServiceUnavailable {
+		wait := time.Duration(0)
+		if ue != nil && ue.RetryAfter > 0 {
+			wait = ue.RetryAfter
+		} else if !modelBlock.Until.IsZero() {
+			wait = time.Until(modelBlock.Until)
+		}
+		setRetryAfter(w, wait)
+	}
 	writeOpenAIErrorHint(w, status, code, msg, hint)
 	st.status = status
 	st.outcome = reqlog.OutcomeHTTPError
+}
+
+func setRetryAfter(w http.ResponseWriter, wait time.Duration) {
+	if wait <= 0 {
+		return
+	}
+	if wait > 24*time.Hour {
+		wait = 24 * time.Hour
+	}
+	secs := int64(wait / time.Second)
+	if wait%time.Second != 0 {
+		secs++
+	}
+	if secs < 1 {
+		secs = 1
+	}
+	w.Header().Set("Retry-After", fmt.Sprintf("%d", secs))
 }
 
 // tokensPerSecond 计算吐字速率（token/s），返回 (速率, 是否有意义)。
