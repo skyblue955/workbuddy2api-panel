@@ -206,3 +206,18 @@ func TestClaimReadySafetyRewardConfirmationFields(t *testing.T) {
 		}
 	}
 }
+
+func TestClaimReadySafetyAlreadyClaimedSnapshot(t *testing.T) {
+	done := st("x", 1, 1)
+	done.AcceptStatus = "claimed"
+	rt := &claimRT{lists: [][]upstream.Task{{done}}}
+	p := claimSafetyPanel(rt, &auth.Auth{UID: "u1", AccessToken: "fixture"})
+	code, m := safetyCall(p, "POST", "/panel/api/accounts/u1/tasks/claim_ready", `{"task_codes":["x"]}`)
+	if code != 200 || m["claims"] != float64(0) || len(rt.calls) != 1 {
+		t.Fatalf("unexpected calls %v %v", m, rt.calls)
+	}
+	r := m["results"].([]any)[0].(map[string]any)
+	if r["reason"] != "already_claimed" || r["upstream_claimed"] != true || r["reward_received"] != false {
+		t.Fatalf("contradictory claimed snapshot %v", r)
+	}
+}

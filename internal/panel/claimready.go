@@ -154,7 +154,7 @@ func (p *Panel) accountTasksClaimReady(w http.ResponseWriter, r *http.Request) {
 			reason = "not_ready"
 		}
 		if reason != "" {
-			results = append(results, claimReadyResult{TaskCode: code, Status: "skipped", Reason: reason})
+			results = append(results, claimReadyResult{TaskCode: code, Status: "skipped", Reason: reason, UpstreamClaimed: t.Claimed})
 			continue
 		}
 		eligible[code] = true
