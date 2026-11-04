@@ -1,0 +1,127 @@
+Version2 maintenance candidate — deployment, rollback, and optional official redemption
+Documentation date: 2026-11-04
+
+Status and boundaries
+---------------------
+- The ordinary-account gateway remains the primary route. It does not require an
+  Open API app, developer registration, or OAuth grant.
+- The Open API path below is an optional, separately approved official redemption
+  connector only. Do not present private, legacy, or undocumented endpoints as
+  officially supported third-party APIs, and do not infer account eligibility, a valid code, or
+  credits from this guide.
+- This round has no authorized real sign-in, claim, or redemption. Mock tests and
+  any live validation are distinct evidence; mock idempotency is not live proof.
+
+Build and deterministic checks
+------------------------------
+Use the repository's configured Go toolchain and run:
+
+  bash scripts/verify.sh
+  go build -o /private/tmp/workbuddy-v2 ./cmd/server
+  go build -o /private/tmp/workbuddy-openapi-v2 ./cmd/openapi
+  go run ./cmd/openapi activities
+
+Do not deploy a build that has not passed the repository gate. Keep ordinary
+account credentials/configuration separate from Open API OAuth files. Existing
+ordinary-account deployments should retain their private config/auth/data
+mounts and loopback/private listener defaults.
+
+Optional official OAuth setup (redemption only)
+------------------------------------------------
+Only an approved third-party application may use this path. Follow the current
+official Open API and third-party-app registration requirements: exact registered
+redirect URI, separate OAuth client credentials, and the user.credit.exchange
+scope. This is not a prerequisite for ordinary-account login or gateway use.
+
+Keep the client secret in WORKBUDDY_OPEN_CLIENT_SECRET (or an equivalent local
+secret manager), never in arguments, source, chat, or logs. Use a private
+working directory with mode 0700. The authorization state and token files are
+created with mode 0600:
+
+  /private/tmp/workbuddy-openapi-v2 authorize \
+    -client-id APP_ID \
+    -redirect-uri REGISTERED_URI \
+    -state-file /PRIVATE/DIR/oauth-state.json
+
+Open the printed official URL outside this chat and collect the registered
+callback's code/state locally. No callback listener or automatic account sign-in
+is provided. Save one JSON object with code/state in a private 0600 file. Exchange exactly once on stdin:
+
+  /private/tmp/workbuddy-openapi-v2 exchange \
+    -state-file /PRIVATE/DIR/oauth-state.json \
+    -token-file /PRIVATE/DIR/openapi-token.json \
+    < /PRIVATE/DIR/oauth-callback.json
+
+The local state expires after 15 minutes; the token destination must not already
+exist. The token file must contain valid, unexpired metadata, Bearer type, the
+user.credit.exchange scope, and an open_id before redemption. A .used marker
+prevents replay after an uncertain exchange; start a new authorization flow
+rather than resubmitting the one-use code. Do not migrate or merge this OAuth
+token with legacy client credentials.
+
+Optional official redemption guide
+----------------------------------
+Prepare a private request file containing exactly one supported request: either
+code, or gift_key plus gift_code, and a caller-created stable request_id of
+8–64 characters. Keep codes out of command arguments, chat, and logs. Validate
+without network first:
+
+  /private/tmp/workbuddy-openapi-v2 redeem \
+    < /PRIVATE/DIR/redemption-request.json
+
+Execute only after explicit approval of that specific state-changing redemption:
+
+  /private/tmp/workbuddy-openapi-v2 redeem -execute \
+    -token-file /PRIVATE/DIR/openapi-token.json \
+    -journal-dir /PRIVATE/DIR/redemption-journal \
+    < /PRIVATE/DIR/redemption-request.json
+
+With -execute, -token-file and -journal-dir are mandatory. Reuse one stable
+absolute journal directory across token rotation; token rotation must not create
+a new journal directory or request_id. The command creates/accepts the journal
+directory only at mode 0700 and each journal record at mode 0600. It writes an
+exclusive pending record and syncs it before the upstream POST. A confirmed
+receipt is replayed locally without another POST, and is bound to the same
+request_id, payload, and token open_id subject.
+
+A pending record means the outcome is uncertain. Do not automatically retry,
+delete the pending record, alter its payload/subject, or change request_id.
+There is no result-query endpoint documented for this maintenance; reconcile
+uncertain outcomes through the approved upstream process before any separately
+approved action. A receipt is accepted only when the upstream response is a
+success with flow_no, non-negative credits, and the same open_id subject.
+Output is limited to flow_no and credits on confirmed success.
+
+Rollback
+--------
+Do not reset or force-push shared history, and do not publish a release image
+from this candidate. Stop the running service before replacing its binary. Restore
+the previously accepted server/openapi binaries and private configuration from
+backup; keep ordinary-account config and Open API OAuth/journal directories
+separate. For source rollback, revert the v2 implementation commits in reverse
+chronological order on the maintenance branch and rerun:
+
+  bash scripts/verify.sh
+  go test ./...
+  go build ./...
+
+A source or binary rollback does not undo any account-side redemption or other
+upstream mutation. Preserve the journal for audit/reconciliation; never delete a
+pending record as a rollback step. No real sign-in, claim, or redemption was
+performed as part of this round.
+
+Release-note caveats for coordinator
+-------------------------------------
+- The durable redemption journal and stable -journal-dir requirement are new
+  operational prerequisites for execute mode.
+- Pending outcomes are intentionally fail-closed: no automatic retry, deletion,
+  request-id rotation, or fabricated reconciliation.
+- Ordinary-account and optional official-app/OAuth paths remain separate.
+- Acceptance evidence is deterministic/mock unless separately labeled live; this
+  candidate does not claim unofficial API support or live redemption success.
+
+Platform evidence: server and openapi compile on macOS/Linux/Windows; durable
+journal runtime tests are POSIX/macOS only. Unsupported directory fsync fails
+closed before submission; Windows runtime durability is not accepted by compilation.
+Use maintenance/v2/ROLLBACK.sh ABSOLUTE_COPY_PATH only on an isolated source
+copy to reverse the code patch; documentation/audit records are intentionally kept.

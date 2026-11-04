@@ -1,3 +1,7 @@
+SUPERSEDED OPERATION GUIDE: use maintenance/v2/DEPLOY.txt for current code.
+v2 redemption execute requires a stable -journal-dir and durable pending ledger.
+The v1 commands/no-ledger description below are historical, not current instructions.
+
 Version1 maintenance candidate — deployment and authorized validation
 
 Build (Go toolchain1.27.3, Node22 via fnm for tests)
@@ -42,3 +46,18 @@ Original sign-in/tasks/compensation remain present and regressions cover mock be
 
 Rollback
 Do not reset/force-push shared history. Revert v1 implementation commits in reverse chronological order. maintenance/v1/ROLLBACK.sh --copy DIR reverses this batch's patch on an isolated copy; preserve phase1 artifacts and baseline dab77f1. For running services restore previous binary/image and private config backup; stop process before replacing binaries. No account-side mutation is undone by Git rollback.
+
+==================== SUPERSEDED BY v2 (2026-11-04) ====================
+The redemption instructions above are historical v1 documentation. For current
+behavior use maintenance/v2/DEPLOY.txt. In particular, v2 execute mode requires
+both -token-file and a stable -journal-dir; the journal directory is mode0700
+and records are mode0600, and the same directory/request_id must survive token
+rotation. v2 writes a durable pending record before POST, replays only a
+confirmed receipt, and treats a pending outcome as uncertain: do not automatically retry,
+delete the record, change the payload/subject, or change request_id.
+The v1 statement that there is “no local crash-safe redemption ledger” is
+superseded and must not be used to operate v2. The historical v1 `redeem -execute` form without `-journal-dir` is
+superseded; current commands and defaults are those documented in v2. Ordinary-account use still does not require an Open API app, while the
+optional official app/OAuth route is redemption-only. No real sign-in, claim, or
+redemption occurred in this round; mock and live evidence remain distinct, and
+no unofficial API support is claimed.

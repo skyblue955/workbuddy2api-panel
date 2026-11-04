@@ -1,0 +1,28 @@
+?   	github.com/linguo2625469/workbuddy2api-panel/cmd/credit	[no test files]
+ok  	github.com/linguo2625469/workbuddy2api-panel/cmd/login	(cached)
+ok  	github.com/linguo2625469/workbuddy2api-panel/cmd/openapi	(cached)
+ok  	github.com/linguo2625469/workbuddy2api-panel/cmd/server	(cached)
+?   	github.com/linguo2625469/workbuddy2api-panel/cmd/signin	[no test files]
+?   	github.com/linguo2625469/workbuddy2api-panel/cmd/trial	[no test files]
+?   	github.com/linguo2625469/workbuddy2api-panel/data/live-acceptance	[no test files]
+?   	github.com/linguo2625469/workbuddy2api-panel/data/live-acceptance/chat	[no test files]
+?   	github.com/linguo2625469/workbuddy2api-panel/data/live-acceptance/checkin	[no test files]
+?   	github.com/linguo2625469/workbuddy2api-panel/data/local-dev/identity-probe	[no test files]
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/activities	(cached)
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/auth	(cached)
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/credithist	(cached)
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/httpauth	(cached)
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/livecfg	(cached)
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/logfmt	(cached)
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/panel	17.687s
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/pool	(cached)
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/prompt	(cached)
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/redisstore	(cached)
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/reqlog	(cached)
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/scheduler	(cached)
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/server	(cached)
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/session	(cached)
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/upstream	(cached)
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/usage	(cached)
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/workbuddyopen	(cached)
+ACCEPTANCE PASS

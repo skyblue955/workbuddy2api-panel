@@ -1,0 +1,105 @@
+Maintenance v2 acceptance (delivery date 2026-11-04; investigation 2026-11-03, OpenAPI/client-doc recheck 2026-11-04)
+Branch: maintenance/v1-compat-rewards; baseline b8522fc.
+Changed fields/branches:
+- validateChatRequest stream boolean/messages object validation before upstream.
+- gateway Retry-After on429/503, positiveceilsec/cap86400.
+- SSE terminal EOF/error branch: partialcontent EOF rejected; no DONE/success/sticky/autoPOST on truncation; client-disconnect bookkeeping distinct.
+- official opt-in redemption: stable -journal-dir, mandatory token open_id, durable pending beforePOST, request/payload/subject-bound success replay, uncertain failure retained.
+- manual panel signin shares account execution lock; overlapping call409 before claiming.
+- catalog availability/eligibility/public_claim_api/source_verified_at;8entries,3expired,2rules_only,2legacy_unverified,1requires_authorization. No assumed entitlement.
+
+Four artifacts (absolute paths):
+MODIFIED_FILE=/Users/jinyanya/Code/Codex/workbuddy/maintenance/v2/MODIFIED_FILE.go.txt
+DIFF_FILE=/Users/jinyanya/Code/Codex/workbuddy/maintenance/v2/DIFF_FILE.patch
+VERIFICATION=/Users/jinyanya/Code/Codex/workbuddy/maintenance/v2/VERIFICATION.txt
+ROLLBACK=/Users/jinyanya/Code/Codex/workbuddy/maintenance/v2/ROLLBACK.sh
+Snapshot is an exact modified request_validation.go copy. Patch covers19code/examplefiles; documentation is retained by source-copy rollback. ORIGINAL_SHA256.txt records baseline bytes or ABSENT.
+
+Command environment E (prefix all Go/gate commands below):
+PATH=/Users/jinyanya/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.3.darwin-arm64/bin:$PATH GOTOOLCHAIN=local GOMODCACHE=/Users/jinyanya/go/pkg/mod GOCACHE=/private/tmp/workbuddy-gocache
+Node22.21.1 from fnm. Python helpers run with UV_CACHE_DIR=/private/tmp/uv-workbuddy-cache uv run --no-project python. No dependency/global model setting modified.
+
+BASELINE:
+Directory /private/tmp/workbuddy-v2-baseline created by git archive b8522fc | tar -x.
+Exact gate command: PATH=/Users/jinyanya/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.3.darwin-arm64/bin:$PATH GOTOOLCHAIN=local GOMODCACHE=/Users/jinyanya/go/pkg/mod GOCACHE=/private/tmp/workbuddy-gocache bash scripts/verify.sh
+Input: clean baseline source; deterministic fixtures only.
+Literal last output: ACCEPTANCE PASS
+Exit status:0. Evidence evidence/baseline-verify.log.
+Probe setup: copy SSE_PROBE_test.go.txt into internal/upstream/v2_behavior_probe_test.go; remove after test.
+Exact probe command: E go test -v ./internal/upstream -run '^TestV2BehaviorEvidence$' -count=1
+Input literal SSE: data: {"choices":[{"index":0,"delta":{"content":"partial"}}]}\n\n
+Literal output: TRUNCATED_EOF_ACCEPTED_AS_SUCCESS=true ; PASS
+Exit status:0. evidence/baseline-probe.log.
+
+MODIFIED:
+Directory /Users/jinyanya/Code/Codex/workbuddy.
+Exact gate command: PATH=/Users/jinyanya/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.3.darwin-arm64/bin:$PATH GOTOOLCHAIN=local GOMODCACHE=/Users/jinyanya/go/pkg/mod GOCACHE=/private/tmp/workbuddy-gocache bash scripts/verify.sh
+Input: modified source; deterministic mocks only, no real credentials.
+Literal last output: ACCEPTANCE PASS
+Exit status:0. evidence/modified-verify.log. Gate runs node syntax, shell syntax, go vet ./..., go test -race ./..., go build ./....
+Probe on isolated baseline+forwardpatch, same command/input as BASELINE:
+Literal output: TRUNCATED_EOF_ACCEPTED_AS_SUCCESS=false ; PASS
+Exit status:0. evidence/modified-probe.log.
+
+ROLLBACK:
+Directory /private/tmp/workbuddy-v2-rollback, clean baseline archive then git apply DIFF_FILE.patch.
+Exact reverse command: bash /Users/jinyanya/Code/Codex/workbuddy/maintenance/v2/ROLLBACK.sh /private/tmp/workbuddy-v2-rollback
+Literal output: ROLLBACK PASS: v2 API/rewards code restored to b8522fc
+Exit status:0. Original hash assertion over19files including absence of newfiles: ROLLBACK_ORIGINAL_HASH_PASS files=19, exit0.
+Same probe command/input as BASELINE:
+Literal output: TRUNCATED_EOF_ACCEPTED_AS_SUCCESS=true ; PASS
+Exit status:0. evidence/rollback-probe.log. This confirms old truncation-acceptance behavior restored, NOT a recommendation to restore that defect.
+Exact gate command in rolledback copy: PATH=/Users/jinyanya/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.3.darwin-arm64/bin:$PATH GOTOOLCHAIN=local GOMODCACHE=/Users/jinyanya/go/pkg/mod GOCACHE=/private/tmp/workbuddy-gocache bash scripts/verify.sh
+Literal last output: ACCEPTANCE PASS ; ROLLBACK_TEST_EXIT=0
+Exit status:0. evidence/rollback-verify.log.
+Actual working tree remains modified; rollback tested on a separate copy only.
+
+Acceptance matrix (deterministic/mock unless explicitly marked localservice):
+- Original core: complete vet/race/build gate and existing suites pass; no feature silently removed.
+- API normal/sync/stream/tool regressions,429/503Retry-After, expiredcredentials, timeout/upstreamreadfailure/clientdisconnect, malformedtypedinput, partialEOF/multi-choice terminal/error events: PASS.
+- Signin overlap409/exactlyoneclaim, lockrelease, claim success despite following balance failure; existing alreadycheckedin/transientfailure tests: PASS. Lock scope panelmanual/process only, not distributed exactlyonce.
+- Activity eligibilityunknown/disabled/expired boundaries/neverinventrewards: PASS. New records are informational or expired, NOT new currently claimable rewards.
+- Redemption dryrun0network/0filesystem, onePOST concurrency, persistedsuccess0POST replay, actualtokenrotation, subject/payloadconflict, pending/partial/malformedreceipt/modes/symlink/trailing slash/oversize: PASS.
+- Credential/log safety: ordinary and OpenAPI tokens separate; journal contains hashes/publicreceipts, not rawcodes/tokens/openID; no realaccountfixtures committed.
+- Crosscompile command for each GOOS/GOARCH with CGO_ENABLED=0: E go build -buildvcs=false -o /private/tmp/workbuddy-v2-build/server-$GOOS-$GOARCH ./cmd/server; same for openapi ./cmd/openapi.
+  Literal output: CROSS_BUILD_PASS darwin/arm64 server+openapi; CROSS_BUILD_PASS darwin/amd64 server+openapi; CROSS_BUILD_PASS linux/arm64 server+openapi; CROSS_BUILD_PASS linux/amd64 server+openapi; CROSS_BUILD_PASS windows/amd64 server+openapi. Exit0 for all. Compile does not validate Windows directory fsync runtime.
+- Clean image build: docker build --no-cache -t workbuddy-maintenance:v2-check . ; completed export/name in evidence/docker-build.log.
+  Verification command: docker image inspect workbuddy-maintenance:v2-check --format '{{.Id}}'
+  Literal output: sha256:efef81cee83b1193450d6290531ede7881c7fdeb82f027f3a35e3077e04e7775 ; exit0.
+- Image readonly/dryrun command: docker run --rm --network none --entrypoint /app/openapi workbuddy-maintenance:v2-check activities
+  JSON assertion literal output: CONTAINER_CATALOG_PASS entries=8 expired=3 eligibility=unknown ; exit0.
+- Image no-network redemption command: docker run --rm -i --network none --entrypoint /app/openapi workbuddy-maintenance:v2-check redeem
+  Input: {"code":"fixture-code","request_id":"fixture-0001"}
+  Literal output: DRY_RUN: no network request ; exit0.
+
+Independent review:
+- v2_final_security: accepted current cmd/openapi diff; no evidence-backed blocker. Verified durable pending, canonical request/subject bindings, tokenrotation, receipt validation, paths/modes/sync. Sourceonly; no livecalls. Ancestor-directory replacement/crash injection not dynamically tested. Private trusted parent required.
+- v2_final_review: accepted SSE partialread vs clientdisconnect/error-event semantics, input, Retry-After and signin lock. Initial accountlock P1 was retracted after coordinator checked the interleaving: TryLock cannot acquire while the prior caller still owns the same permanently registered mutex. No production workaround was needed. Targeted upstream/server/panel tests exit0; reviewer sandbox could not bind some broader httptestlisteners, so coordinator separately ran complete gate with allowed localfixtures (exit0).
+
+Not performed / known limits:
+- No new live model request,signin,claim,redemption,agreement or taskprogress mutation in v2. Earlier twochat/onesignin grants consumed; do not reuse.
+- Previous v1 live chat and signin evidence retained, not generalized to current allmodels/clienttools/newactivities.
+- Optional official redemption needs approvedapp/OAuth/validcode and separately authorized accountside operation for live validation. NOT required for ordinaryaccount login.
+- Gateway originalupstream is legacy_unverified, not certifiedofficialthirdpartyAPI. Official client custom-model configuration does not endorse the gateway's legacy upstream.
+- No new currently active public free-credit claimAPI with confirmed accounteligibility found. Historical/unknownchannels stay labeled; no fake progress or invented reconciliation.
+- Responses/fullAnthropic still501; modeltools/multichoicefullcompatibility not claimed.
+- Durability POSIX/macOS tested at normalprocessruntime, not powerfailure faultinjection, NFS or Windowsruntime. fsync unsupported fails beforePOST. Pending requires manual upstreamreconciliation; no invented lookupendpoint.
+- No release tag/imagepublication/productiondeployment. Ongoingmaintenance and optional liveacceptance are not declared globally complete.
+
+Local manual-test deployment (not production):
+- Previousbinary data/local-dev/wb2api.before-v2 SHA25632e3b71a56bba3f281977c8768cd476c96bca7907e74f54b9b8f7aabe2756239.
+- Currentbinary data/local-dev/wb2api SHA256c73c377602740c53a022cbfa72a83ee2cc2df0a8633b2c5ea52b25050da52d0a.
+- OptionalCLI data/local-dev/openapi-v2 SHA256a8b561faa881e6e668962ec1b2929fc300e0e9f360794ea324722df054077004.
+- Exact controls: bash data/local-dev/service.sh stop ; replace binary with tested darwin/arm64 build ; bash data/local-dev/service.sh start.
+  Precheck literal IN_FLIGHT=0. Exit0. local.workbuddy.manualtest observed state=running,pid59371 after startup.
+- Exact readonly helper commands: UV_CACHE_DIR=/private/tmp/uv-workbuddy-cache uv run --no-project python data/local-dev/auth-status-smoke.py ; same prefix python data/local-dev/v2-smoke.py after.
+  Privatehelpers read localconfigkey internally, never output it. Snapshot before deploy; compare config/auth bytes after.
+  Literal outputs: OVERVIEW_HTTP=200 ; AUTHORIZATION_STATE=valid ; AUTHORIZED_BUTTON=green ; JS_AND_CSS_STATES=PASS ; CREDENTIAL_AND_CONFIG_UNCHANGED=true ; LOGIN_REWARD_MODEL_CALLS=0 ; READONLY_SMOKE_PASS.
+  Literal outputs: IN_FLIGHT=0 ; CATALOG_HTTP=200 ENTRIES=8 EXPIRED_RULES_AND_UNKNOWN_ELIGIBILITY=PASS ; CAPABILITIES_HTTP=200 UNSUPPORTED_PROTOCOLS_UNCHANGED=true ; UNAUTHORIZED_HTTP=401 ; UPSTREAM_AND_MUTATION_CALLS=0 ; V2_LOCAL_READONLY_SMOKE_PASS.
+  Bothhelpers exit0. Input localprivatekey not archived; onlylocalHTTP GETs. No fresh upstream/account mutations.
+- Local native rollback: stop localservice, restore wb2api.before-v2 to wb2api preservingmode, start. Do not roll back/delete optionalredemptionjournal. Source rollback separately exercised above.
+- User entry: http://127.0.0.1:7863/panel/ . No release/publicimage/tag.
+
+Source commits:64388b9(API),b516c92(rewards). Integration PR:https://github.com/skyblue955/workbuddy2api-panel/pull/2 (fork origin,main target). Final documentation/evidence commit and remote HEAD are verified during delivery; see Git log. No upstream push/forcepush/main push.
+
+Packaging check: git diff --cached --check initially exit2 on DIFF_FILE.patch context-prefix whitespace (valid patch content). Rechecked actual source/docs with git diff --cached --check -- . :!maintenance/v2/DIFF_FILE.patch, exit0; git apply --reverse --check confirms patch validity. No source whitespace suppressed or global setting changed.
