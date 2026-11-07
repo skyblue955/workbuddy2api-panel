@@ -1,0 +1,9 @@
+2026-11-07 旧代码优先回归与合法真实任务验收
+分支 maintenance/v1-compat-rewards；基线ec78db5；原缓存73a7560。
+R1 DONE：原代码fixture回归exit0，当前基线完整gateexit0；未经改写的旧请求只读真实task/model/config均200。源身份对比留存。
+R2 DONE：25项静态矩阵（17事件-only，8hybrid）；未实发伪造事件。旧action registry与27段action/helper原样保留。
+R3 DONE：严格领奖回执、原子progress、重复/过期/锁定守卫、真实新增计数、队列不重复动作、未确认/失败不冒充成功。源码09e59b5+7a10f04。
+R4 PARTIAL：真实两项报名accepted已确认。当前已发送0次/领奖0次；官方客户端专家草稿已备，等待人工仅选择空测试工作空间恢复发送按钮。8次GUI上限、失败不重试及两项各一次领取额度持久账本，不能重复授予或自动追加。
+R5 DONE(code)：独立review/security_review、整改、完整modified和clean archive gate、隔离rollback/fullgate/11文件原hash均通过。已更新本地面板，凭证配置不变，8计划/global关闭。fork提交/远端证据在交付时补记。
+R6 OUTSTANDING：用户空间选择后，先查私有账本再接续8次真实短问答；确认上游达标后每项至多一次领取；余额/实际回执分别记录。失败停止，不通过改造事件去凑进度。
+R7 LIMITS：MP队列报名未适配；其余hybrid/新活动/全模型未实测；v3 Library_read旧列表资格缺口仍在。此轮代码交付不等于25项全部自动完成，更不等于整个长期维护项目结束。

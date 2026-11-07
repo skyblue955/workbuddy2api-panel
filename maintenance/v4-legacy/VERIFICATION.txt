@@ -1,0 +1,117 @@
+维护轮次 v4：旧代码先回归、缺陷定位与奖励结果真实性
+日期：2026-11-07；国内 WorkBuddy V5.9.3。维护分支 maintenance/v1-compat-rewards。
+基线 ec78db5；原项目缓存 upstream/main73a7560（没有宣称为当前远端最新版本）。
+源码提交 09e59b5 + 7a10f04；PR https://github.com/skyblue955/workbuddy2api-panel/pull/2 。
+
+改变的分支/字段
+- ClaimReward/ClaimRewardMP 保留签名、域名、路径、请求头和原MP400回退；新增typed ClaimReceipt和Receipt API。严格拒绝空/null/重复键/负数/非法类型/冲突回执。
+- Task.IsInactive/CanClaimReward；嵌套progress原子快照，不再将不完整进度拼接旧平铺值。完整嵌套和纯平铺正常输入保留。
+- 清扫 Attempted/AlreadyClaimed/NoReward 分离，Claimed/Credits/Energy只计上游报告新增奖励。锁定、失效和重复码不接受/不领奖。
+- 单项/auto_all/任务队列：区分verified/progress_readback_ok/claimed/already_claimed/no_reward/claim_error；仅收到200或动作未报错不是任务完成；已达标队列不重复执行动作。
+- UI成功/未确认/失败分开；领奖错误、无奖励、不明done不被统计为成功。
+- 25项旧action registry与27段run* action/helper函数实现原样保留，未添加伪造事件、指纹或绕过逻辑。证明 evidence/action-preservation.json。
+
+四个真实交付物（均已创建；最终交付前逐一重新打开核验）
+MODIFIED_FILE=/Users/jinyanya/Code/Codex/workbuddy/maintenance/v4-legacy/MODIFIED_FILE.go.txt
+DIFF_FILE=/Users/jinyanya/Code/Codex/workbuddy/maintenance/v4-legacy/DIFF_FILE.patch
+VERIFICATION=/Users/jinyanya/Code/Codex/workbuddy/maintenance/v4-legacy/VERIFICATION.txt
+ROLLBACK=/Users/jinyanya/Code/Codex/workbuddy/maintenance/v4-legacy/ROLLBACK.sh
+MODIFIED_FILE精确复制修改后upstream/tasks.go；DIFF覆盖11个源码/测试文件；ORIGINAL_SHA256保留7个原文件哈希和4个新增文件ABSENT；ROLLBACK可执行并真实在另一份副本验证。真实工作区仍保留修改。
+
+命令环境（下文go/bash命令均使用此环境；未修改全局环境或Codex模型配置）
+PATH=/Users/jinyanya/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.3.darwin-arm64/bin:$PATH
+GOTOOLCHAIN=local GOCACHE=/private/tmp/workbuddy-gocache GOMODCACHE=/Users/jinyanya/go/pkg/mod GOPROXY=off
+Node22.21.1/fnm；Python使用 UV_CACHE_DIR=/private/tmp/uv-workbuddy-cache uv run --no-project python。
+监听权限仅用于httptest本地伪服务，无真实账号CI操作。
+
+OLD_CODE_FIRST
+输入：git archive upstream缓存73a7560的原代码，未修改原领奖/清扫实现。
+精确命令：go test -race ./internal/upstream ./internal/panel -run 'Test(ClaimReward|TaskSweep|RunAutoAllClaims|RunAutoAllSkipsClaimed)' -count=1
+结果：两个package均ok；OLD_CODE_FIXTURE_EXIT=0；exit0。evidence/old-regression.log。
+随后同源代码构建一次只读helper，真正请求国内旧task/model/config接口：GET共3次，全部HTTP200，tasks code0/18项/15未领/0ready，模型19个，mutation0/inference0，exit0。
+精确命令：./data/live-v4/preflight/probe -readonly。私有helper不入Git；脱敏汇总见本记录。源身份对比 evidence/legacy-source-reuse.json。
+
+BASELINE
+目录：/private/tmp/workbuddy-v4-baseline.bqEhDJ（ec78db5干净archive）。
+精确命令：bash scripts/verify.sh
+输入：原有源码/确定性fixtures；无真实凭据。
+字面结果：ACCEPTANCE PASS ; BASELINE_EXIT=0；exit0。evidence/baseline-verify.log。
+原始缺陷探针实际在cached upstream73a7560副本运行（ec78db5回滚副本也复现，见ROLLBACK）；将UPSTREAM_PROBE_test.go.txt/PANEL_PROBE_test.go.txt复制到各包v4_evidence_test.go。
+精确命令：go test -v ./internal/upstream ./internal/panel -run '^TestV4Legacy(Receipt|Sweep)Evidence$' -count=1
+输入回执literal：{"credit":100,"energy":5}、{"already_claimed":true}、{}、null、{"credit":-1}、{"credit":1,"credit":2}、{"credit":1,"already_claimed":null}。
+旧版字面输出摘录：
+RECEIPT empty accepted=true credit=0 energy=0
+RECEIPT null accepted=true credit=0 energy=0
+RECEIPT negative accepted=true credit=-1 energy=0
+RECEIPT duplicate accepted=true credit=2 energy=0
+RECEIPT null_marker_positive accepted=true credit=1 energy=0
+PROGRESS locked claimable=true
+PROGRESS expired claimable=true
+PROGRESS nested_zero claimable=true
+SWEEP already claim_requests=1 new_claimed_count=1 credits=0
+SWEEP locked claim_requests=1 new_claimed_count=1 credits=100
+SWEEP expired claim_requests=1 new_claimed_count=1 credits=100
+SWEEP duplicate claim_requests=2 new_claimed_count=2 credits=200
+探针exit0表示证据收集成功，不是无bug。evidence/old-probe.log。nested_null原本就是false控制组，未误报为修复。
+
+MODIFIED
+目录：真实工作区及全新ec78db5 archive+forwardpatch隔离副本。
+精确命令：bash scripts/verify.sh
+输入：修复后的11文件/确定性fixtures（Node/shell syntax、go vet ./...、go test -race ./...、go build ./...）。
+字面输出：ACCEPTANCE PASS ; MODIFIED_FINAL_EXIT=0；exit0。evidence/modified-verify.log。
+干净副本同命令：ACCEPTANCE PASS ; CLEAN_MODIFIED_EXIT=0；exit0。evidence/clean-modified-verify.log。
+同一探针命令及literal输入：
+RECEIPT valid accepted=true credit=100 energy=5
+RECEIPT already accepted=true credit=0 energy=0
+RECEIPT empty accepted=false credit=0 energy=0
+RECEIPT null accepted=false credit=0 energy=0
+RECEIPT negative accepted=false credit=0 energy=0
+RECEIPT duplicate accepted=false credit=0 energy=0
+RECEIPT null_marker_positive accepted=false credit=0 energy=0
+PROGRESS valid claimable=true
+PROGRESS locked claimable=false
+PROGRESS expired claimable=false
+PROGRESS nested_zero claimable=false
+SWEEP valid claim_requests=1 new_claimed_count=1 credits=100
+SWEEP already claim_requests=1 new_claimed_count=0 credits=0
+SWEEP locked claim_requests=0 new_claimed_count=0 credits=0
+SWEEP expired claim_requests=0 new_claimed_count=0 credits=0
+SWEEP duplicate claim_requests=0 new_claimed_count=0 credits=0
+探针exit0，evidence/modified-probe.log。valid正常行为保留。
+定向补测精确命令：go test -race ./internal/panel ./internal/upstream -run 'Test(LegacyQueue|GrowthPending|ParseClaimRewardReceiptIntegrity|GrowthProgressAndInactiveEligibility|AutoResultSummary)' -count=1
+字面输出两package ok，FOCUSED_EXIT=0，exit0。evidence/focused.log。
+
+ROLLBACK
+输入：另一份干净ec78db5源码archive先正向应用DIFF；不对维护工作区回滚。
+精确命令：bash /Users/jinyanya/Code/Codex/workbuddy/maintenance/v4-legacy/ROLLBACK.sh /private/tmp/workbuddy-v4-rollback.1xPhAR
+实际副本路径同时保存于 evidence/rollback-path.txt。
+字面输出：ROLLBACK PASS: v4 reward integrity code restored to ec78db5；exit0。
+精确命令：bash scripts/verify.sh（回滚副本中）
+字面输出：ACCEPTANCE PASS ; ROLLBACK_EXIT=0；exit0。evidence/rollback-verify.log。
+相同探针输入/命令回到原始行为（{}可被接受、locked会claim、重复会两次）；ROLLBACK_PROBE_EXIT=0，exit0。evidence/rollback-probe.log。
+逐文件SHA256/新增文件缺失核验字面输出：ROLLBACK_ORIGINAL_HASH_PASS files=11 ; MODIFIED_WORKTREE_RETAINED files=11 ; SNAPSHOT_EXACT_MATCH=true；exit0。evidence/hash-verification.log。
+恢复的是原代码行为/状态，不撤销真实账号副作用；真实工作区和MODIFIED_FILE保持修复后状态。
+
+验收矩阵
+PASS 原核心/网关API/授权/配置/日志/前端全部原测试，以及本轮新增回执、任务资格、重复执行、到期/锁定、失败、队列、UI统计回归。
+PASS 当前gate含原限流、授权过期、超时、异常响应测试；本轮没有重新执行付费API聊天，不复用v3额度。
+PASS 凭证配置不变、无新事件payload/绕过实现、无账号/令牌进入Git或测试fixture；当前diff独立审查及整改记录REVIEW.txt。
+PASS 干净源码构建/完整racegate、11文件反向patch/原哈希、原生本地部署与拒绝路径smoke。未宣称本轮重新执行容器/Windows运行时验收。
+PENDING 8次官方国内客户端专家/专家团真实问答、资格回读、两项各一次实际领奖。详见下方真实验收接续；模拟通过不替代真实通过。
+
+真实验收接续（只有脱敏汇总，无账号标识/绝对余额/令牌）
+用户新授权：官方国内客户端5次专家+3次专家团真实短问答，失败停止不自动重试；允许对应报名，确认达标后每项领取一次。不调用工具、连接器、协议、Buddy、签到或计划任务。
+报名实际命令：./data/live-v4/expert-ops/probe accept
+输入：本地私有凭据与限定两个任务；marker持久化防重；网络allowlist仅一次accept POST+两次task GET。
+字面结果：accept_response_ok=true ; writes=1 ; reads=2 ; statuses=[200,200,200] ; chat_calls=0 ; event_reports=0 ; automatic_retries=0 ; 两项accepted/0-of-5及0-of-3；exit0。
+真实聊天当前：0次已发送；第一条真实专家草稿已填好但发送按钮disabled。预约1次发送槽位尚未点击发送，不得误记为已消费请求/成功。
+客户端曾报noWindowsAvailable/invalidUIElement；用户关闭台前调度后授权重启。已正常终止国内主进程并重新打开，DOMESTIC_RESTART_LAUNCHED，exit0；专家卡及召唤恢复。后续工作空间菜单/目录确认仍不可自动操作，已请求人工只选择空测试工作空间，不发送。
+目前实际领奖0次、两项各一次额度未用。私有执行账本在data/live-v4/gui-expert/ledger.private.json；任何恢复须先查账本，不再发送重复8次；不得仅因报名200或UI召唤就认定任务达标。
+
+限制/未完成
+- 未对25项批量auto_all实发：17项只伪造行为事件，不执行真实产品功能，不按“自动完成”验收；8项hybrid也不是全部已实测。
+- MP任务队列报名仍是旧版默认列表路径，未完成适配；没有扩展伪造MP任务事件领取能力。
+- v3 Library_read曾由用户真实阅读+官方UI资格确认后领取，但其旧列表自动资格识别缺口并未由本轮假设性放开；不能据此宣布全任务自动化恢复。
+- 严格回执只代表上游报告新增奖励，不是独立余额对账，也不保证分布式或崩溃后的exactly-once；旧MP400fallback保留，未做真实MP领奖验收。
+- 无新活动公开契约/可用资格的真实奖励渠道被验证；本轮不编造新渠道或把私有接口标为官方支持。
+- 所有本地定时计划仍关闭；普通账号授权无需开发者账号；可选官方OAuth兑换与此相互独立。

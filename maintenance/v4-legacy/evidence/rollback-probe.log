@@ -1,0 +1,40 @@
+=== RUN   TestV4LegacyReceiptEvidence
+RECEIPT valid accepted=true credit=100 energy=5
+RECEIPT already accepted=true credit=0 energy=0
+RECEIPT empty accepted=true credit=0 energy=0
+RECEIPT null accepted=true credit=0 energy=0
+RECEIPT negative accepted=true credit=-1 energy=0
+RECEIPT duplicate accepted=true credit=2 energy=0
+RECEIPT null_marker_positive accepted=true credit=1 energy=0
+PROGRESS valid claimable=true
+PROGRESS locked claimable=true
+PROGRESS expired claimable=true
+PROGRESS nested_zero claimable=true
+PROGRESS nested_null claimable=false
+--- PASS: TestV4LegacyReceiptEvidence (0.00s)
+PASS
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/upstream	1.178s
+=== RUN   TestV4LegacySweepEvidence
+=== RUN   TestV4LegacySweepEvidence/valid
+2026/11/07 12:03:16 panel: 任务补领清扫：1 个账号（跳过 0）· 接受 0 · 领奖 1 · +100 分 +5 能 · 出错 0
+SWEEP valid claim_requests=1 new_claimed_count=1 credits=100
+=== RUN   TestV4LegacySweepEvidence/already
+2026/11/07 12:03:16 panel: 任务补领清扫：1 个账号（跳过 0）· 接受 0 · 领奖 1 · +0 分 +0 能 · 出错 0
+SWEEP already claim_requests=1 new_claimed_count=1 credits=0
+=== RUN   TestV4LegacySweepEvidence/locked
+2026/11/07 12:03:16 panel: 任务补领清扫：1 个账号（跳过 0）· 接受 0 · 领奖 1 · +100 分 +5 能 · 出错 0
+SWEEP locked claim_requests=1 new_claimed_count=1 credits=100
+=== RUN   TestV4LegacySweepEvidence/expired
+2026/11/07 12:03:16 panel: 任务补领清扫：1 个账号（跳过 0）· 接受 0 · 领奖 1 · +100 分 +5 能 · 出错 0
+SWEEP expired claim_requests=1 new_claimed_count=1 credits=100
+=== RUN   TestV4LegacySweepEvidence/duplicate
+2026/11/07 12:03:16 panel: 任务补领清扫：1 个账号（跳过 0）· 接受 0 · 领奖 2 · +200 分 +10 能 · 出错 0
+SWEEP duplicate claim_requests=2 new_claimed_count=2 credits=200
+--- PASS: TestV4LegacySweepEvidence (0.01s)
+    --- PASS: TestV4LegacySweepEvidence/valid (0.00s)
+    --- PASS: TestV4LegacySweepEvidence/already (0.00s)
+    --- PASS: TestV4LegacySweepEvidence/locked (0.00s)
+    --- PASS: TestV4LegacySweepEvidence/expired (0.00s)
+    --- PASS: TestV4LegacySweepEvidence/duplicate (0.00s)
+PASS
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/panel	1.190s

@@ -1,0 +1,17 @@
+2026-11-07 独立审查与整改记录
+审查角色 reviewer (/root/v4_acceptance_review) 与 security_reviewer (/root/v4_receipt_security)。只读审查；不以子代理“完成”作为测试通过。
+
+1. 嵌套 progress 缺字段混入旧平铺字段：确认本轮回归，已整改。
+   progress 对象作为原子快照，current/target 必须均明确有效；新增 target-only/current-only/empty/extension-only 反例。整体 progress:null 的旧平铺回退保留。
+2. 队列遗漏 inactive 守卫、已达标仍执行动作、领奖失败静默：已整改。
+   runGrowthQueued 失效/锁定不执行；已达标只领奖；严格回执区分新增/此前已领/零奖励/异常；回读失败或未达标返回错误。
+   acceptPendingTasks 过滤空码、重复全部匹配项及失效任务；报名200日志仅称“已提交，待回读”。
+3. 前端 done&&verifiedfalse 被漏计、claim_error/no_reward 仍绿色：已整改。
+   未确认和未知状态归入未确认，失败领奖不计成功；单项领奖不再无条件提示成功。单项动作“达标”与领奖结果分开。
+4. 测试断言错误：root 核查并整改。
+   旧 busy-account 测试默认 fixture 返回 already_claimedtrue，却期待新增奖励1；改为 Attempted1/AlreadyClaimed1/Claimed0，仍断言实际仅一次POST。
+   新队列 unready fixture 应运行纯stub一次后回读未达标错误，不是禁止未达标动作；locked/expired仍0。另补回读503错误回归。
+5. 小程序队列报名遗漏：独立审查继续报告为已知原有问题，未完成适配。
+   acceptPendingTasks 仍仅默认列表/默认报名；不宣称 MP 队列恢复。17类旧事件-only动作没有真实产品行为，本轮不扩展其报名或伪造事件获奖能力。旧代码和记录保留，没有静默删除。
+
+安全复审确认原 partial-progress P2 已解决，新增队列守卫/回执未见实质安全问题；未发现本轮新增凭证泄漏/鉴权弱化/账号锁回归。根协调者执行完整race gate、干净副本gate、隔离回滚和哈希验证，见 VERIFICATION.txt。

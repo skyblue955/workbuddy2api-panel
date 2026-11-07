@@ -1,0 +1,88 @@
+?   	github.com/linguo2625469/workbuddy2api-panel/cmd/credit	[no test files]
+ok  	github.com/linguo2625469/workbuddy2api-panel/cmd/login	(cached)
+ok  	github.com/linguo2625469/workbuddy2api-panel/cmd/openapi	(cached)
+ok  	github.com/linguo2625469/workbuddy2api-panel/cmd/server	4.084s
+?   	github.com/linguo2625469/workbuddy2api-panel/cmd/signin	[no test files]
+?   	github.com/linguo2625469/workbuddy2api-panel/cmd/trial	[no test files]
+?   	github.com/linguo2625469/workbuddy2api-panel/data/live-acceptance	[no test files]
+?   	github.com/linguo2625469/workbuddy2api-panel/data/live-acceptance/chat	[no test files]
+?   	github.com/linguo2625469/workbuddy2api-panel/data/live-acceptance/checkin	[no test files]
+?   	github.com/linguo2625469/workbuddy2api-panel/data/live-v3/accept	[no test files]
+?   	github.com/linguo2625469/workbuddy2api-panel/data/live-v3/chat	[no test files]
+?   	github.com/linguo2625469/workbuddy2api-panel/data/live-v3/chat-nonstream	[no test files]
+?   	github.com/linguo2625469/workbuddy2api-panel/data/live-v3/chat-stream	[no test files]
+?   	github.com/linguo2625469/workbuddy2api-panel/data/live-v3/claim	[no test files]
+?   	github.com/linguo2625469/workbuddy2api-panel/data/live-v3/claim-ui-confirmed	[no test files]
+?   	github.com/linguo2625469/workbuddy2api-panel/data/live-v3/preflight	[no test files]
+?   	github.com/linguo2625469/workbuddy2api-panel/data/live-v4/preflight	[no test files]
+?   	github.com/linguo2625469/workbuddy2api-panel/data/local-dev/identity-probe	[no test files]
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/activities	(cached)
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/auth	(cached)
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/credithist	(cached)
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/httpauth	(cached)
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/livecfg	(cached)
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/logfmt	(cached)
+2026/11/07 11:36:03 panel: cockpit import finished total=1 imported=1 skipped=0
+2026/11/07 11:36:03 [credithist] 已恢复 3 条积分流水 / 3 个余额基线（/var/folders/j7/d76bnmwx6mb2fv7b9r68vz0m0000gn/T/TestUpgLateAddedAccountSnapshotsIndependent3114273139/001/data/credit-history.json）
+2026/11/07 11:36:03 [credithist] 已恢复 1 条积分流水 / 1 个余额基线（/var/folders/j7/d76bnmwx6mb2fv7b9r68vz0m0000gn/T/TestUpgRestartContinuesBaseline2887053041/001/data/credit-history.json）
+2026/11/07 11:36:05 panel: 任务补领清扫：1 个账号（跳过 0）· 接受 0 · 领奖 0 · +0 分 +0 能 · 出错 1
+2026/11/07 11:36:05 panel: 任务补领清扫：1 个账号（跳过 0）· 接受 0 · 领奖 1 · +100 分 +0 能 · 出错 0
+2026/11/07 11:36:05 panel: 任务补领清扫：1 个账号（跳过 0）· 接受 0 · 领奖 0 · +0 分 +0 能 · 出错 1
+2026/11/07 11:36:05 panel: 任务补领清扫：1 个账号（跳过 0）· 接受 0 · 领奖 0 · +0 分 +0 能 · 出错 1
+2026/11/07 11:36:05 panel: 任务动作 uid=u1 code=chat_5 progress 0/1 -> 0/1 claimable=false claimed=<nil>
+2026/11/07 11:36:05 panel: 任务动作 uid=u1 code=chat_5 progress 0/1 ->  claimable=false claimed=<nil>
+2026/11/07 11:36:05 panel: 发起 OAuth 添加账号 realm=cn（state=state-re...）
+2026/11/07 11:36:05 panel: reauthorization result same_account=true enterprise_id_present=false enterprise_switch_source=false
+2026/11/07 11:36:05 panel: 新账号已热加载 uid=uid-1 nickname="personal" realm=cn（免重启生效）
+2026/11/07 11:36:05 panel: reauthorization result same_account=false enterprise_id_present=false enterprise_switch_source=false
+2026/11/07 11:36:05 panel: reauthorization result same_account=true enterprise_id_present=true enterprise_switch_source=false
+2026/11/07 11:36:05 panel: reauthorization result same_account=true enterprise_id_present=false enterprise_switch_source=false
+2026/11/07 11:36:05 panel: reauthorization result same_account=true enterprise_id_present=false enterprise_switch_source=false
+2026/11/07 11:36:05 panel: reauthorization result same_account=true enterprise_id_present=false enterprise_switch_source=false
+2026/11/07 11:36:05 panel: reauthorization result same_account=true enterprise_id_present=false enterprise_switch_source=false
+2026/11/07 11:36:05 panel: reauthorization result same_account=true enterprise_id_present=false enterprise_switch_source=false
+2026/11/07 11:36:05 panel: reauthorization result same_account=true enterprise_id_present=false enterprise_switch_source=false
+2026/11/07 11:36:05 panel: 新账号已热加载 uid=uid-1 nickname="personal" realm=cn（免重启生效）
+2026/11/07 11:36:05 panel: reauthorization result same_account=true enterprise_id_present=false enterprise_switch_source=false
+2026/11/07 11:36:05 panel: reauthorization result same_account=true enterprise_id_present=false enterprise_switch_source=false
+2026/11/07 11:36:05 panel: 新账号已热加载 uid=uid-1 nickname="personal" realm=cn（免重启生效）
+2026/11/07 11:36:05 panel: reauthorization result same_account=true enterprise_id_present=false enterprise_switch_source=false
+2026/11/07 11:36:05 panel: 新账号已热加载 uid=uid-1 nickname="" realm=cn（免重启生效）
+2026/11/07 11:36:05 panel: 发起 OAuth 添加账号 realm=global（state=global-s...）
+2026/11/07 11:36:05 panel: reauthorization result same_account=true enterprise_id_present=false enterprise_switch_source=false
+2026/11/07 11:36:05 panel: 新账号已热加载 uid=uid-1 nickname="" realm=global（免重启生效）
+2026/11/07 11:36:05 panel: reauthorization result same_account=true enterprise_id_present=false enterprise_switch_source=true
+2026/11/07 11:36:05 panel: 新账号已热加载 uid=uid-1 nickname="personal" realm=cn（免重启生效）
+2026/11/07 11:36:05 panel: 登录凭证包含 enterprise_switch 来源提示；该提示不证明企业身份，旧版成长任务自动化仍待验证
+2026/11/07 11:36:05 panel: 发起 OAuth 添加账号 realm=cn（state=ordinary...）
+2026/11/07 11:36:05 panel: reauthorization result same_account=true enterprise_id_present=false enterprise_switch_source=false
+2026/11/07 11:36:05 panel: 新账号已热加载 uid=uid-1 nickname="" realm=cn（免重启生效）
+2026/11/07 11:36:05 panel: 发起 OAuth 添加账号 realm=cn（state=ordinary...）
+2026/11/07 11:36:05 panel: reauthorization result same_account=true enterprise_id_present=false enterprise_switch_source=false
+2026/11/07 11:36:05 panel: 新账号已热加载 uid=uid-1 nickname="" realm=cn（免重启生效）
+2026/11/07 11:36:05 panel: 发起 OAuth 添加账号 realm=cn（state=ordinary...）
+2026/11/07 11:36:05 panel: reauthorization result same_account=true enterprise_id_present=true enterprise_switch_source=false
+2026/11/07 11:36:05 panel: 新账号已热加载 uid=uid-1 nickname="" realm=cn（免重启生效）
+2026/11/07 11:36:05 panel: 发起 OAuth 添加账号 realm=cn（state=ordinary...）
+2026/11/07 11:36:05 panel: reauthorization result same_account=true enterprise_id_present=true enterprise_switch_source=false
+2026/11/07 11:36:05 panel: 发起 OAuth 添加账号 realm=cn（state=ordinary...）
+2026/11/07 11:36:05 panel: reauthorization result same_account=true enterprise_id_present=false enterprise_switch_source=false
+2026/11/07 11:36:05 panel: 队列扫描完成：全部账号待办 0 项
+2026/11/07 11:36:05 panel: 任务补领清扫：1 个账号（跳过 0）· 接受 1 · 领奖 2 · +200 分 +10 能 · 出错 0
+2026/11/07 11:36:05 panel: 任务补领清扫：1 个账号（跳过 0）· 接受 0 · 领奖 1 · +100 分 +5 能 · 出错 0
+2026/11/07 11:36:05 panel: 任务补领清扫：1 个账号（跳过 0）· 接受 0 · 领奖 1 · +100 分 +5 能 · 出错 1
+--- FAIL: TestTaskSweepSkipsBusyAccount (0.00s)
+    tasksweep_test.go:272: 解锁后 stats = {Accounts:1 Skipped:0 Accepted:0 Claimed:0 Credits:0 Energy:0 Errors:0 Attempted:1 AlreadyClaimed:1 NoReward:0}, want skipped=0 claimed=1
+FAIL
+FAIL	github.com/linguo2625469/workbuddy2api-panel/internal/panel	18.993s
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/pool	(cached)
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/prompt	(cached)
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/redisstore	(cached)
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/reqlog	(cached)
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/scheduler	19.702s
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/server	17.263s
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/session	(cached)
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/upstream	4.907s
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/usage	(cached)
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/workbuddyopen	(cached)
+FAIL

@@ -1,0 +1,24 @@
+[
+  {
+    "path": "internal/upstream/tasks.go",
+    "cached_upstream_sha256": "0fbd6f25619784feca9fc1e6e8b3e7d7566bb95177b192bc815dfffe18400832",
+    "baseline_sha256": "0fbd6f25619784feca9fc1e6e8b3e7d7566bb95177b192bc815dfffe18400832",
+    "whole_file_equal": true
+  },
+  {
+    "path": "internal/panel/tasksweep.go",
+    "cached_upstream_sha256": "336b068b2764098cbcfd11134320ff2b24e448d9818dc0005304ade5bb10d475",
+    "baseline_sha256": "336b068b2764098cbcfd11134320ff2b24e448d9818dc0005304ade5bb10d475",
+    "whole_file_equal": true
+  },
+  {
+    "path": "internal/panel/autotask.go",
+    "cached_upstream_sha256": "9e4f3dbeb82c86c901d999b6f7af7bab10adcb7145f02cb000ca0d4006b90ea1",
+    "baseline_sha256": "55d6eadd9109d3330e8a3f87f9fd8eb40d924e87a02ffc49dda7b31e42af7a4e",
+    "whole_file_equal": false
+  },
+  {
+    "action_registry_unchanged": true,
+    "action_registry_sha256": "4fe944afe5d58033b53e54c2be738d2698ff27f96f376e88ce845fc4709f1383"
+  }
+]

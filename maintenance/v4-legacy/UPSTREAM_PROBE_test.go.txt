@@ -1,0 +1,6 @@
+package upstream
+import("encoding/json";"fmt";"testing")
+func TestV4LegacyReceiptEvidence(t *testing.T){
+ for _,x:=range []struct{name,raw string}{{"valid",`{"credit":100,"energy":5}`},{"already",`{"already_claimed":true}`},{"empty",`{}`},{"null",`null`},{"negative",`{"credit":-1}`},{"duplicate",`{"credit":1,"credit":2}`},{"null_marker_positive",`{"credit":1,"already_claimed":null}`}}{c,e,err:=parseClaimReward(json.RawMessage(x.raw));fmt.Printf("RECEIPT %s accepted=%t credit=%d energy=%d\n",x.name,err==nil,c,e)}
+ for _,x:=range []struct{name,raw string}{{"valid",`{"tasks":[{"task_code":"x","current":1,"target":1}]}`},{"locked",`{"tasks":[{"task_code":"x","current":1,"target":1,"locked":true}]}`},{"expired",`{"tasks":[{"task_code":"x","current":1,"target":1,"status":"expired"}]}`},{"nested_zero",`{"tasks":[{"task_code":"x","current":1,"target":1,"progress":{"current":0,"target":0}}]}`},{"nested_null",`{"tasks":[{"task_code":"x","current":1,"target":1,"progress":{"current":null,"target":1}}]}`}}{tasks,err:=parseGrowthTasks(json.RawMessage(x.raw));if err!=nil||len(tasks)!=1{t.Fatal("fixture parse failed")};fmt.Printf("PROGRESS %s claimable=%t\n",x.name,tasks[0].Claimable)}
+}
