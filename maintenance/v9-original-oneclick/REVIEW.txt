@@ -1,0 +1,9 @@
+2026-11-07 independent review
+repo_explorer R1核实缓存upstream/main=73a7560...与原单项/批量/chat_5/专家/领奖调用链；与v5/v6/v8记录对照，未重复声称旧fixture是实际计分。
+repo_explorer R2独立确认：单项仅跳过claimed、全量和成长队列已跳过CanClaimReward，单项多执行动作是可复现缺陷。
+implementer负责唯一生产函数和新测试文件；root持有集成、工件、baseline/modified/clean/rollback、真实部署。其他代码未被回退。
+reviewer最终结论：无Blocker；before.CanClaimReward精确门控，保留inactive/claimed/未知进度约束，回读及MP领奖未绕过。
+ready分支不设置顶层skipped，UI仍处理claim_error/no_reward，不将动作跳过当领奖成功。
+P2建议均已落实：零回执no_reward=true、失败claim_error；真实ServeHTTP Web/MP两口径mock，MP header/host/endpoint断言。
+reviewer focused及-race tests PASS，root另行执行完整gate与同输入缺陷回归，不以子代理“完成”代替验收。
+未访问真实账号、data令牌或外网；本轮不执行live任务写入。全部实际命令/结果另见VERIFICATION/evidence。

@@ -1,0 +1,87 @@
+2026-11-07 v9 原仓库一键完成审计及最小修复
+当前：旧单任务一键完成入口 / 已达标重复动作缺陷修复 / 真实任务计分、全量完成和领奖仍待验收。
+分支maintenance/v1-compat-rewards；基线c4fd2abfe2145e8a17a2d03acdda05fb84f0b2dd。
+原仓库缓存upstream/main=73a7560efc7a88ebd9865db4c71ae7f6d85859f8，非声称已联网确认最新HEAD。
+
+改变的分支/字段
+accountTaskAuto.before.CanClaimReward(): true时跳过act.run，继续同口径任务回读和现有claimTaskRewardReceipt；false仍运行原动作。
+没有新增顶层skipped=true，没有绕过inactive/claimed/来源guard，不变更report协议/参数，不补造任务进度。
+生产仅autotask.go的该分支；新测试autotask_ready_skip_test.go。原25动作体保持。
+
+四工件（已重新打开）：
+MODIFIED_FILE /Users/jinyanya/Code/Codex/workbuddy/maintenance/v9-original-oneclick/MODIFIED_FILE.go.txt
+DIFF_FILE /Users/jinyanya/Code/Codex/workbuddy/maintenance/v9-original-oneclick/DIFF_FILE.patch
+VERIFICATION /Users/jinyanya/Code/Codex/workbuddy/maintenance/v9-original-oneclick/VERIFICATION.txt
+ROLLBACK /Users/jinyanya/Code/Codex/workbuddy/maintenance/v9-original-oneclick/ROLLBACK.sh（executable）
+MODIFIED_FILE逐字复制修改版autotask.go；ORIGINAL_SHA256保存原源码hash/新测试ABSENT；MODIFIED_SHA256保存两个当前hash。
+REGRESSION_INPUT.go.txt是同输入测试副本，不包含真实账户、token或私人payload。
+
+先核实旧原理的结论
+原调用链=按钮/tasks/auto -> task_code动作表 -> 原动作 -> 任务回读 -> 资格允许才领奖；全量走auto_all/runAutoAll。
+chat_5原动作为ReportChatActivity报告链，不是真聊5次；专家/专家团为市场列表+召唤事件+真实专家聊天取ID+使用事件+外层回读。
+因此上一轮独立chat-only工作流不增长，不等于原runChat5原样测试失败。旧25动作17event-only/8hybrid，保持原矩阵，不重复真实写入。
+4个关键函数与原提交hash逐字相同；DesktopChatWithExpert仅既有敏感debug打印删除。详ORIGINAL_IMPLEMENTATION.txt和evidence/original-function-hashes.json。
+本轮发现单项入口缺少全量/队列已有的达标跳过动作逻辑：已达标模型/专家仍可重复聊天，动作失败还可能阻断领奖。
+
+BASELINE
+exact command: bash scripts/verify.sh
+input: git archive c4fd2ab 的隔离源码+原确定性fixtures，无真实账号。
+literal output/result: ACCEPTANCE PASS; BASELINE_VERIFY_EXIT=0; exit status 0.
+log evidence/baseline-verify.log。
+exact regression command: go test -race ./internal/panel -run '^TestAccountTaskAutoReadyModelChatRouteSkipsRealAction$' -count=1 -v
+input: REGRESSION_INPUT.go.txt临时复制到基线；真实ServeHTTP /panel/api/accounts/u1/tasks/auto；body {"task_code":"Model_chat_GLM5.2"}，mock上游先后均1/1、未领，返回有效聊天SSE和100/5领奖回执。
+literal output: READY_ROUTE lists=2 accepts=1 chats=1 reports=1 claims=1
+literal output/result: --- FAIL: TestAccountTaskAutoReadyModelChatRouteSkipsRealAction; BASELINE_REGRESSION_EXIT=1; exit status 1（预期复现旧缺陷）。
+log evidence/baseline-regression.log。所有请求均mock，不是新增真实聊天/积分。
+
+MODIFIED
+exact command: go test -race ./internal/panel -run '^TestAccountTaskAutoReadyModelChatRouteSkipsRealAction$' -count=1 -v
+input: 与BASELINE完全相同的测试与mock任务状态/响应，执行修改版真实handler。
+literal output: READY_ROUTE lists=2 accepts=0 chats=0 reports=0 claims=1
+literal output/result: PASS; exit status 0.
+log evidence/modified-regression.log。
+exact focused command: go test -race ./internal/panel -run 'TestAccountTaskAuto(Ready|ClaimedOrInactive|NotReady)' -count=1 -v
+input: Web/MP、失败回读、资格撤销、正/零/失败回执、claimed/locked、未达标fixtures。
+literal output/result: PASS; exit status 0. log evidence/modified-focused.log。
+exact full command: bash scripts/verify.sh
+input: 修改版全项目确定性fixtures；node语法、bash语法、go vet ./...、go test -race ./...、go build ./...。
+literal output/result: ACCEPTANCE PASS; MODIFIED_VERIFY_EXIT=0; exit status 0.
+log evidence/modified-verify.log。
+exact clean/rollback command: bash maintenance/v9-original-oneclick/evidence/run-isolated.sh
+input: 基线干净archive正向补丁、完整gate、隔离回滚、完整gate、同输入回归。
+literal output/result: ISOLATED_GATES_PASS; exit status 0.
+clean gate literal output: ACCEPTANCE PASS; CLEAN_VERIFY_EXIT=0; exit status 0. log evidence/clean-verify.log。
+
+ROLLBACK
+exact command: bash maintenance/v9-original-oneclick/ROLLBACK.sh "$CLEAN"
+input: evidence/clean-path.txt所记绝对隔离副本，原为修改态两个文件；当前维护工作区不变。
+literal output/result: ROLLBACK PASS: c4fd2ab source restored; 2 hashes/absences matched; exit status 0.
+exact restored gate command: bash scripts/verify.sh
+input: 回滚副本+原fixtures。
+literal output/result: ACCEPTANCE PASS; ROLLBACK_VERIFY_EXIT=0; exit status 0.
+exact restored regression command: go test -race ./internal/panel -run '^TestAccountTaskAutoReadyModelChatRouteSkipsRealAction$' -count=1 -v
+input: 同一个REGRESSION_INPUT再次临时复制入回滚副本，运行后移除以恢复ABSENT。
+literal output: READY_ROUTE lists=2 accepts=1 chats=1 reports=1 claims=1
+literal result: FAIL; ROLLBACK_REGRESSION_EXIT=1; exit status 1（旧缺陷随源码恢复）。
+restored behavior/status: 回滚恢复旧已达标重做动作，源码hash/测试absence匹配；维护工作区仍为修复版。
+logs evidence/rollback-verify.log、rollback-regression.log、maintained-hashes.log。
+
+独立审查与回归
+repo_explorer两路只读审计；implementer限定autotask.go单函数/新测试；reviewer独立审查无blocker。
+建议的MP ready回归、zero no_reward与failed claim_error断言均加入并复核关闭。root额外执行全gate和同输入基线/回滚，不以子代理“完成”等同验收。
+Web ready保证不重复accept/chat/report但保留原一次claim；MP ready验证default列表回退、miniprogram readback和chat host领奖，不访问Web host。
+先达标后撤销/回读失败不领；已领/锁定不动作；零/错误回执不标claimed或skipped，不绕过UI错误处理。
+旧25动作、既有v8 workflow及API异常/超时/限流/授权/凭据日志等全项目测试继续通过；本轮未声称改造所有旧动作。
+
+本地部署与真实操作边界
+已执行go build -buildvcs=false -o data/local-dev/wb2api.next ./cmd/server，exit0。
+新binary SHA e00ce9604de100b6b2220d81252c1798af435252a07fe6b38dc10590e07ae4b0；备份before-v9 SHA144c62bd...。
+二进制另一副本拷贝回滚+cmp：BINARY_COPY_ROLLBACK PASS，exit0。
+本地服务已重启到新binary，首次running状态早于TCP就绪，overview连接被拒（退出1），随后TCP_READY、overview200、检查exit0；未重复部署/业务任务。
+真实只读overview200，8schedule关闭/global关闭，config与auth哈希相同，所有chat/report/enroll/claim POST均0。见DEPLOY.txt/evidence/deploy-summary.json。
+未追加真实聊天、上报、报名、领奖、协议、领养；v8剩余4次未续耗。
+
+未完成
+旧事件报告端点当前是否实际计分、本轮修复在真实达标账号上的领取到账、全量任务自动完成及新增活动执行器仍未验收。
+专家部分成功返回、仅ID聊天成功定义等已知问题继续列待办，不将客户端GUI/让用户代做当默认前提，不用虚构进度填补证据。
+本轮是原实现审计+已复现状态分支修复，不是整个项目完成，也不是旧全部功能已恢复的承诺。

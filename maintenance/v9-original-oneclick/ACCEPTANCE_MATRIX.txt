@@ -1,0 +1,13 @@
+本轮验收矩阵（确定性mock；不执行真实账号动作）
+原理审计：核实原提交/单项/批量/chat_5/专家/领奖原调用链；与25动作既有矩阵比对，旧event-only和新genuine chat不混作等价测试。
+缺陷同输入：已达标Model_chat_GLM5.2，在基线单项入口观察动作调用>0，新版必须0，保持原claim调用一次。
+已达标且回读仍有效：0chat/accept/report，真实handler/真实runModelChat + mock transport，领奖正回执保留。
+回读资格撤销或查询失败：0动作/0claim，不依据旧快照领奖。
+领奖未知/零回执/错误：不设置claimed/skipped绕过UI错误分支。
+已claimed/锁定：0动作/0claim；未知进度不是CanClaimReward真值；未达标依旧原动作入口运行（仅mock）。
+原25动作与v8工作流回归：bash scripts/verify.sh；Node语法/Go vet/-race/build。
+回滚：独立干净副本应用补丁、完整gate、反向补丁、恢复hash/absence、同输入bug恢复；当前工作区保持修复版。
+凭据/日志：公开工件无真实账号/令牌/payload；没有真实聊天/事件/报名/领奖/协议等新增写入。
+部署：本地binary备份+独立副本拷贝回滚/只读本地overview；global关闭、8schedule关闭、凭据及config哈希不变。
+Git：小提交，origin维护分支，原PR2；不向main/upstream推送，不强推，不公开发版。
+完整任务自动完成及旧事件端点实际记分仍未验收，不能以本轮mock成功替代。

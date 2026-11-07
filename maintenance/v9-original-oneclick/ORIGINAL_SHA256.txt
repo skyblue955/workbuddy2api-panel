@@ -1,0 +1,2 @@
+196efb03f78477f889fd6e128d2dbd04e9a297c08a5d3ba3a745387f0571166f  internal/panel/autotask.go
+ABSENT  internal/panel/autotask_ready_skip_test.go

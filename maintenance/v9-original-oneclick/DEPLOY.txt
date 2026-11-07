@@ -1,0 +1,17 @@
+本地维护版部署（已执行，不是生产发布）
+面板 http://127.0.0.1:7863/panel/
+构建命令：go build -buildvcs=false -o data/local-dev/wb2api.next ./cmd/server；exit0。
+当前binary SHA e00ce9604de100b6b2220d81252c1798af435252a07fe6b38dc10590e07ae4b0
+备份 /Users/jinyanya/Code/Codex/workbuddy/data/local-dev/wb2api.before-v9
+备份SHA 144c62bdef2145425078671e147f37ed2e43ad359999953b5270efec0903058e
+停旧launchctl service并等待PID退出，替换wb2api，再bootstrap原service.plist。
+进程running早于TCP bind导致首次overview检查ConnectionRefused；有界TCP就绪检查通过后overview200，未重复部署/执行任何任务。
+最终8计划关闭/global=false/config-auth哈希相同；没有开启后台任务、聊天、上报、报名或领奖。
+
+源码回滚（已在独立副本验证）：
+bash maintenance/v9-original-oneclick/ROLLBACK.sh /absolute/isolated/source-copy
+随后在副本bash scripts/verify.sh。脚本拒绝当前维护工作区；恢复autotask.go原hash并删除本轮新增测试。
+回滚恢复旧“已达标仍执行动作”的行为；当前工作区保持修复态。回滚不是声称旧缺陷消失。
+二进制回滚（独立副本已拷贝+cmp验证）：停止服务并确认旧PID退出，复制wb2api.before-v9覆盖wb2api，再启动同service.plist。
+保留所有凭据、config和task-workflow日志；不撤销/重放远端聊天或奖励。
+新环境构建与配置沿用README、config.example.json；Go按go.mod，Node用fnm，Python用uv；先bash scripts/verify.sh。

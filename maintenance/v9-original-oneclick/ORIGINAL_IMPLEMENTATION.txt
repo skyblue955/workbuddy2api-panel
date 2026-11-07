@@ -1,0 +1,59 @@
+原仓库「一键完成」实际实现（代码审计，不是当前真实账号成功证明）
+2026-11-07；原仓库缓存refs/remotes/upstream/main = 73a7560efc7a88ebd9865db4c71ae7f6d85859f8。
+本报告只针对这个已核实的提交，不声称联网核验了当下最新远端HEAD。
+用户提供原仓库 https://github.com/linguo2625469/workbuddy2api-panel
+
+结论先行
+旧版不是统一“发聊天就完成任务”。它有25个按task_code分派的动作，不同任务调用不同旧接口/事件链；外层再查询成长任务及领奖。
+其中17个仅上报事件，8个混合真实API与上报；分类沿用已验收maintenance/v6-full-task-acceptance/TASK_MATRIX.tsv，不重复执行账号写入。
+上一轮v8真聊天不涨chat_5计数，并不证明原runChat5链路本身坏了：两条链路不同，不能互作等价回归。
+也不能从旧源码注释“几账号实测”推定今天仍会计分；HTTP200只证明接口响应，未证明真实产品操作、进度或奖励。
+
+一、入口与调度
+前端任务行点击一键完成，POST /panel/api/accounts/{uid}/tasks/auto，body包含task_code。
+后端accountTaskAuto -> autoActionFor -> autoActions中对应run函数 -> 回读task -> 达标才claim。
+全量按钮POST /panel/api/accounts/{uid}/tasks/auto_all -> accountTaskAutoAll -> runAutoAll。
+runAutoAll先default/MP分别报名，再按动作表顺序执行；已有claimed或claimable的任务直接跳过动作并尝试补领。
+成长队列runGrowthQueued/task_sweep是另外的调度路径，不是前端单任务handler的别名。
+原提交位置：internal/panel/autotask.go autoActions约49；accountTaskAuto628；runAutoAll1135；accountTaskAutoAll1271。
+
+二、chat_5原实现（原autotask.go:766起）
+runChat5先读当前target/current，计算差额，再调用Upstream.ReportChatActivity，不调用模型聊天接口。
+报告通过/v2/report发送chat_request_send事件；事件成功返回“已补报”，是否真正达标由外层后续任务回读判断。
+原函数与本轮基线的任务执行体未改；本轮也不调整事件字段、指纹或补造实际未发生的对话记录。
+因此不能把“最多5次deepseek真聊天”称作原runChat5的原样测试；v8记录已明确其独立genuine workflow性质。
+
+三、专家/专家团（原autotask.go:1085起）
+expert_5 -> runExpertUse -> runExpertBatch(agent,5)。
+Expert_team_use_3 -> runExpertTeamUse -> runExpertBatch(team,3)。
+链路是：查询专家市场 -> 召唤事件 -> DesktopChatWithExpert实际聊天并提取服务端request ID -> 使用事件 -> 外层回读/领奖。
+不是客户端GUI自动化，也不是只填专家名字的普通网关聊天。
+已知局限：DesktopChatWithExpert的id成功不等于完整回答；runExpertBatch部分成功仍返回nil error。
+这些已有v5/v6证据，本轮不冒充新发现，不为点亮任务而增强未发生的使用事件。
+
+四、其他动作
+资料库、模板、灵感、自动化、Buddy应用等多项旧动作只发送对应行为事件，不实际阅读、使用模板、创建自动化等。
+Model_chat_GLM5.2是accept+真实模型对话+模型对齐报告；first_buddy还会接受协议并领养；外观动作还调用设置API。
+小程序专属任务使用miniprogram口径，不能只因默认列表有相似字段就跨口径领奖。
+本轮不运行全量auto_all，避免把报名、聊天、协议、领养、报告等不同副作用一起执行。
+
+五、维护版相对原版已有修复（不重复重做）
+- 原HTTP200读完/读错SSE也可能上报；v6改完整回答校验，v8修空function_call占位误判。
+- 原批量报名和动作返回值容易被标done；现有版依据任务回读标unconfirmed/verified。
+- 原0/0回执被当此前已领；现有ClaimReceipt区分正奖励、明确already_claimed、未知空回执。
+- 重复任务码/锁定/到期保护已有回归覆盖。
+命令：git diff 73a7560efc7a88ebd9865db4c71ae7f6d85859f8 c4fd2ab -- internal/panel/autotask.go internal/upstream/tasks.go
+
+六、本轮可独立复现的新修复点
+单任务accountTaskAuto只跳过Claimed，已达标但未领取仍先act.run；全量runAutoAll与成长队列已有“达标直接领奖”保护。
+后果：已达标的模型/专家任务仍可能重复真实聊天、报名或其他动作；动作失败还会阻断原本可进行的领奖。
+修复原则：只有before.CanClaimReward()为真时跳过动作，仍保留同口径回读和原领奖资格/回执判断；不把过期/锁定/未知进度当达标。
+作用是避免重复操作，不让未达标任务凭空完成；单项action跳过也不等于顶层skipped（避免UI绕开领奖失败判断）。
+具体baseline/modified/rollback同输入证据见VERIFICATION.txt。
+
+开放项
+旧事件端点目前是否实际记分仍未被本轮真实验证；原17个event-only不能按“产品真实完成”验收。
+6个新增任务动作无handler、专家部分成功/完整流语义等仍保持待适配，未宣称恢复。
+当前只回查/保存源码，不续耗v8剩余4次额度，也不执行真实领奖。
+
+函数级比对：runChat5、runExpertBatch、ReportChatActivityModel、MarketExpertList四个函数与原提交逐字hash一致；DesktopChatWithExpert不同只因既有凭据/响应debug打印删除（功能链未改），见evidence/original-function-hashes.json及既有Git diff。本轮不恢复不安全debug。

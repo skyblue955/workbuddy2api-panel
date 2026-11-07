@@ -1,0 +1,35 @@
+=== RUN   TestAccountTaskAutoReadyModelChatSkipsActionAndClaims
+2026/11/07 20:38:02 panel: 任务动作 uid=u1 code=Model_chat_GLM5.2 progress 1/1 -> 1/1 claimable=true claimed=true
+--- PASS: TestAccountTaskAutoReadyModelChatSkipsActionAndClaims (0.01s)
+=== RUN   TestAccountTaskAutoReadyModelChatRouteSkipsRealAction
+2026/11/07 20:38:02 panel: 任务动作 uid=u1 code=Model_chat_GLM5.2 progress 1/1 -> 1/1 claimable=true claimed=true
+    autotask_ready_skip_test.go:94: READY_ROUTE lists=2 accepts=0 chats=0 reports=0 claims=1
+--- PASS: TestAccountTaskAutoReadyModelChatRouteSkipsRealAction (0.00s)
+=== RUN   TestAccountTaskAutoReadyReadbackFailureDoesNotClaim
+2026/11/07 20:38:02 panel: 任务动作 uid=u1 code=Model_chat_GLM5.2 progress 1/1 ->  claimable=false claimed=<nil>
+--- PASS: TestAccountTaskAutoReadyReadbackFailureDoesNotClaim (0.00s)
+=== RUN   TestAccountTaskAutoReadyClaimReceiptDoesNotGreenwash
+=== RUN   TestAccountTaskAutoReadyClaimReceiptDoesNotGreenwash/zero
+2026/11/07 20:38:02 panel: 任务动作 uid=u1 code=Model_chat_GLM5.2 progress 1/1 -> 1/1 claimable=true claimed=<nil>
+=== RUN   TestAccountTaskAutoReadyClaimReceiptDoesNotGreenwash/failure
+2026/11/07 20:38:02 panel: 任务动作 uid=u1 code=Model_chat_GLM5.2 progress 1/1 -> 1/1 claimable=true claimed=<nil>
+--- PASS: TestAccountTaskAutoReadyClaimReceiptDoesNotGreenwash (0.01s)
+    --- PASS: TestAccountTaskAutoReadyClaimReceiptDoesNotGreenwash/zero (0.00s)
+    --- PASS: TestAccountTaskAutoReadyClaimReceiptDoesNotGreenwash/failure (0.00s)
+=== RUN   TestAccountTaskAutoReadyMPRouteSkipsActionAndUsesMPClaim
+2026/11/07 20:38:02 panel: 任务动作 uid=u1 code=Sequential_Tasks_1 progress 1/1 -> 1/1 claimable=true claimed=true
+--- PASS: TestAccountTaskAutoReadyMPRouteSkipsActionAndUsesMPClaim (0.00s)
+=== RUN   TestAccountTaskAutoReadyReadbackRevokedDoesNotClaim
+2026/11/07 20:38:02 panel: 任务动作 uid=u1 code=Model_chat_GLM5.2 progress 1/1 -> 0/1 claimable=false claimed=<nil>
+--- PASS: TestAccountTaskAutoReadyReadbackRevokedDoesNotClaim (0.00s)
+=== RUN   TestAccountTaskAutoClaimedOrInactiveSkipsAction
+=== RUN   TestAccountTaskAutoClaimedOrInactiveSkipsAction/claimed
+=== RUN   TestAccountTaskAutoClaimedOrInactiveSkipsAction/inactive
+--- PASS: TestAccountTaskAutoClaimedOrInactiveSkipsAction (0.00s)
+    --- PASS: TestAccountTaskAutoClaimedOrInactiveSkipsAction/claimed (0.00s)
+    --- PASS: TestAccountTaskAutoClaimedOrInactiveSkipsAction/inactive (0.00s)
+=== RUN   TestAccountTaskAutoNotReadyStillRunsAction
+2026/11/07 20:38:02 panel: 任务动作 uid=u1 code=Model_chat_GLM5.2 progress 0/1 -> 0/1 claimable=false claimed=<nil>
+--- PASS: TestAccountTaskAutoNotReadyStillRunsAction (0.00s)
+PASS
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/panel	1.543s

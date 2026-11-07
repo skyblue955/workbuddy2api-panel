@@ -1,0 +1,9 @@
+=== RUN   TestAccountTaskAutoReadyModelChatRouteSkipsRealAction
+2026/11/07 20:38:31 panel: 任务动作 uid=u1 code=Model_chat_GLM5.2 progress 1/1 -> 1/1 claimable=true claimed=true
+    autotask_ready_skip_test.go:94: READY_ROUTE lists=2 accepts=1 chats=1 reports=1 claims=1
+    autotask_ready_skip_test.go:96: outbound counts lists=2 accepts=1 chats=1 reports=1 claims=1
+--- FAIL: TestAccountTaskAutoReadyModelChatRouteSkipsRealAction (0.01s)
+FAIL
+FAIL	github.com/linguo2625469/workbuddy2api-panel/internal/panel	0.569s
+FAIL
+BASELINE_REGRESSION_EXIT=1
