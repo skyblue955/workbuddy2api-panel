@@ -1,0 +1,9 @@
+c1aa5315ce76f183bd7e122d3b3df5a0fd4e641ae7d4568499373393e4639354  internal/panel/app.js
+32e165957a38198d4db644ba7b8fede2587ca2c9b3e47436ae6d8c0a064a4c2c  internal/panel/panel.go
+47c62300d3c8e9b5c8be8f1b307e98a641cb9a7eddbdc928d2a24be24b5baceb  internal/panel/model_chat_completion.go
+287971d5584ce21e1735eb1e9b9b7f46ef5938101ba8601e2da911d92159ec62  internal/panel/model_chat_completion_test.go
+ABSENT  internal/panel/task_workflow.go
+ABSENT  internal/panel/task_workflow_test.go
+ABSENT  internal/panel/task_workflow_ui_test.go
+ABSENT  internal/upstream/task_workflow.go
+ABSENT  internal/upstream/task_workflow_test.go

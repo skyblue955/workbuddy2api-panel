@@ -1,0 +1,21 @@
+本地部署（已执行，非生产发布）
+面板：http://127.0.0.1:7863/panel/；刷新后积分任务中可见「检查真实自动化条件」「尝试真实自动化」。
+使用本地现有API key登录，不在聊天或Git记录中发送凭据。chat_5目前真实计数未增长；不要反复点击消耗预算。
+已执行：go build -buildvcs=false -o data/local-dev/wb2api.next ./cmd/server （exit0）
+备份：/Users/jinyanya/Code/Codex/workbuddy/data/local-dev/wb2api.before-v8
+旧SHA a5820d588f94e5bb2f2617b75276192da8d7a214d49124bf53999f3d2ee4a1d3
+新SHA 144c62bdef2145425078671e147f37ed2e43ad359999953b5270efec0903058e
+停旧服务并等待旧PID退出，再将.next替换wb2api，launchctl bootstrap gui/$(id -u) data/local-dev/service.plist。
+服务已运行；嵌入JS、overview、workflow plan只读HTTP全部200，plan=19项，config/auth哈希未改，8计划关闭/global关闭。
+首次检查脚本误读schedules字段，只有检查失败；实际配置为schedule.*_enabled，修正后只读检查通过，未重复部署/执行付费。
+
+新环境：准备Go（版本见go.mod）、Node（fnm）、uv；按现有config.example.json配置独立本地config与auth_dir。
+bash scripts/verify.sh 是不含真实账号操作的完整验收；go build ./cmd/server 构建；按README维护本地配置与运行方式。
+不要把既有data/local-dev复制到公开环境；凭据、账号、完整SSE及操作日志仅在忽略目录data内保存。
+
+源码回滚（已在独立干净副本执行）：
+bash maintenance/v8-task-workflow/ROLLBACK.sh /absolute/isolated/source-copy
+随后在副本运行bash scripts/verify.sh。维护工作区保持新版；该脚本拒绝当前工作区。
+二进制回滚（已验证独立副本拷贝与hash；未对真实聊天/奖励做反向写入）：
+停本地service，等待PID退出；将wb2api.before-v8拷贝到wb2api，再启动相同service.plist。
+此操作恢复旧路由/旧空占位解析状态，不回退上游聊天计费或真实奖励；保留auth_dir/task-workflows日志，不删除pending后重发。

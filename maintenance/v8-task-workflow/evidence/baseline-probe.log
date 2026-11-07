@@ -1,0 +1,5 @@
+=== RUN   TestV8RouteProbe
+ROUTE_PROBE HTTP=404 READS=0 CHAT=0 CLAIM=0
+--- PASS: TestV8RouteProbe (0.00s)
+PASS
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/panel	0.545s
