@@ -28,6 +28,9 @@ func TestChatValidationRejectsInvalidBodiesBeforeUpstream(t *testing.T) {
 		`{"messages":[]}`, `{"model":"  ","messages":[]}`,
 		`{"model":7,"messages":[]}`, `{"model":"m"}`,
 		`{"model":"m","messages":null}`, `{"model":"m","messages":"text"}`,
+		`{"model":"m","messages":[null]}`, `{"model":"m","messages":[7]}`, `{"model":"m","messages":[[]]}`,
+		`{"model":"m","messages":[],"stream":null}`, `{"model":"m","messages":[],"stream":"yes"}`,
+		`{"model":"m","messages":[],"stream":1}`, `{"model":"m","messages":[],"stream":[]}`, `{"model":"m","messages":[],"stream":{}}`,
 	} {
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body)))

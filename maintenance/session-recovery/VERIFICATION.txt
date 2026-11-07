@@ -1,0 +1,106 @@
+Enterprise-context personal-session recovery verification
+Branch: maintenance/v1-compat-rewards
+Baseline commit: 5166bc9c0d0c7b10f31abd44c5271d8460d97c76
+Changed branch/fields: loginSession.reauthorizeUID/processing; login/start.reauthorize_uid; login/poll.session_kind; overview.accounts[].enterprise_session; task scan growth_error. Existing enterprise enforcement remains active.
+
+Artifacts (absolute):
+MODIFIED_FILE: /Users/jinyanya/Code/Codex/workbuddy/maintenance/session-recovery/MODIFIED_FILE.go.txt (snapshot of modified internal/panel/login.go)
+DIFF_FILE: /Users/jinyanya/Code/Codex/workbuddy/maintenance/session-recovery/DIFF_FILE.patch
+VERIFICATION: /Users/jinyanya/Code/Codex/workbuddy/maintenance/session-recovery/VERIFICATION.txt
+ROLLBACK: /Users/jinyanya/Code/Codex/workbuddy/maintenance/session-recovery/ROLLBACK.sh (executable)
+Original SHA256: ORIGINAL_SHA256.txt; verified all six original files after rollback.
+
+BASELINE
+Input: clean git archive of baseline, deterministic fixtures only, no private data.
+Working directory: /private/tmp/workbuddy-session-baseline
+Exact command:
+GOTOOLCHAIN=local GOCACHE=/private/tmp/workbuddy-gocache GOMODCACHE=/Users/jinyanya/go/pkg/mod /Users/jinyanya/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.3.darwin-arm64/bin/go test ./internal/auth ./internal/panel ./internal/pool
+Literal output:
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/auth	0.482s
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/panel	5.242s
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/pool	0.550s
+Exit status: 0.
+Earlier attempts: default Go attempted unavailable network toolchain download; explicit cached toolchain resolved. Sandboxed panel mock listener lacked loopback permission; reviewed local-test escalation resolved. Those failed attempts were not accepted as passes.
+
+MODIFIED
+Input: modified project source; all original tests plus 12 top-level focused recovery/guard/UI tests and candidate rejection subcases. No real credentials/upstream requests.
+Working directory: /Users/jinyanya/Code/Codex/workbuddy
+Exact command:
+PATH=/Users/jinyanya/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.3.darwin-arm64/bin:$PATH GOTOOLCHAIN=local GOMODCACHE=/Users/jinyanya/go/pkg/mod GOCACHE=/private/tmp/workbuddy-gocache bash scripts/verify.sh
+Literal output:
+?   	github.com/linguo2625469/workbuddy2api-panel/cmd/credit	[no test files]
+ok  	github.com/linguo2625469/workbuddy2api-panel/cmd/login	(cached)
+ok  	github.com/linguo2625469/workbuddy2api-panel/cmd/openapi	(cached)
+ok  	github.com/linguo2625469/workbuddy2api-panel/cmd/server	(cached)
+?   	github.com/linguo2625469/workbuddy2api-panel/cmd/signin	[no test files]
+?   	github.com/linguo2625469/workbuddy2api-panel/cmd/trial	[no test files]
+?   	github.com/linguo2625469/workbuddy2api-panel/data/live-acceptance	[no test files]
+?   	github.com/linguo2625469/workbuddy2api-panel/data/live-acceptance/chat	[no test files]
+?   	github.com/linguo2625469/workbuddy2api-panel/data/live-acceptance/checkin	[no test files]
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/activities	(cached)
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/auth	(cached)
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/credithist	(cached)
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/httpauth	(cached)
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/livecfg	(cached)
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/logfmt	(cached)
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/panel	15.914s
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/pool	(cached)
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/prompt	(cached)
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/redisstore	(cached)
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/reqlog	(cached)
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/scheduler	(cached)
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/server	(cached)
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/session	(cached)
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/upstream	(cached)
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/usage	(cached)
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/workbuddyopen	(cached)
+ACCEPTANCE PASS
+Exit status: 0.
+Focused command:
+GOTOOLCHAIN=local GOMODCACHE=/Users/jinyanya/go/pkg/mod GOCACHE=/private/tmp/workbuddy-gocache /Users/jinyanya/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.3.darwin-arm64/bin/go test -race ./internal/panel -run 'Test(Reauthor|EnterpriseSessionTask|AddAccountButton)' -count=1
+Literal result: ok github.com/linguo2625469/workbuddy2api-panel/internal/panel 2.019s
+Exit status: 0.
+Node provided by fnm v22.21.1; Go cached toolchain 1.27.3.
+
+ROLLBACK
+Input: independent clean source copy at /private/tmp/workbuddy-session-rollback, then forward-applied DIFF_FILE.patch. Production worktree/binary were not rolled back.
+Exact command:
+bash /Users/jinyanya/Code/Codex/workbuddy/maintenance/session-recovery/ROLLBACK.sh /private/tmp/workbuddy-session-rollback
+Literal output: ROLLBACK PASS: source patch reversed; baseline behavior restored
+Exit status: 0.
+Then, in that copy:
+shasum -a 256 -c /Users/jinyanya/Code/Codex/workbuddy/maintenance/session-recovery/ORIGINAL_SHA256.txt
+Literal output:
+internal/panel/login.go: OK
+internal/panel/panel.go: OK
+internal/panel/app.js: OK
+internal/panel/autotask.go: OK
+internal/panel/taskcenter.go: OK
+internal/panel/index.html: OK
+Exit status: 0.
+Exact restored-source test command:
+GOTOOLCHAIN=local GOCACHE=/private/tmp/workbuddy-gocache GOMODCACHE=/Users/jinyanya/go/pkg/mod /Users/jinyanya/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.3.darwin-arm64/bin/go test ./internal/auth ./internal/panel ./internal/pool
+Literal output:
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/auth	0.520s
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/panel	5.222s
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/pool	0.547s
+Exit status: 0.
+Restored behavior/status: original file hashes and original guard/UI restored in disposable copy; original regression passes. New worktree and running local binary remain modified. For committed code prefer git revert of the repair commit; do not force-reset shared history. Rebuild/restart after source rollback; original local binary retained privately as data/local-dev/wb2api.before-session-recovery.
+
+LOCAL DEPLOYMENT / actual readonly smoke
+Built replacement native binary and backed up original. Restarted existing project-local launchd job local.workbuddy.manualtest, listen 127.0.0.1:7863 only. Automatic schedules remain disabled and account auth file untouched.
+Old binary SHA256: cbc78be724cb1596f6c2e81f6cbdfaceb0875be323d50d71816b932bf31ff63a
+Modified binary SHA256: 8f5df6ebd12a737e7b5665788cb46e4dc20b49d22d727ca01628e9239b4caf71
+Exact smoke command:
+UV_CACHE_DIR=/private/tmp/uv-workbuddy-cache uv run --no-project python data/local-dev/session-readonly-smoke.py
+Literal output (excluding uv advisory):
+OVERVIEW_HTTP=200
+ACCOUNT_COUNT=1
+CONTEXT_FIELD_PRESENT=True
+ENTERPRISE_SWITCH_RECOVERY_REQUIRED=True
+PANEL_HTTP=200
+PERSONAL_REAUTH_NOTICE_PRESENT=True
+READONLY_SMOKE_PASS
+Exit status: 0. First immediate post-restart probe returned503; subsequent ready-service probe passed. No reward or chat was submitted.
+
+NOT COMPLETED: live personal reauthorization and subsequent readonly identity/task eligibility validation. Browser user must select same-account personal login. This report does not claim restored task completion/payout. If upstream still issues enterprise-switch context or denies task qualification, preserve original account and record actual upstream result.

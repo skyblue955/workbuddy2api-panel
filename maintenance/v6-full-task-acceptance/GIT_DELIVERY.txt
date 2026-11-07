@@ -1,0 +1,16 @@
+2026-11-07 checkpoint before committing this receipt
+branch maintenance/v1-compat-rewards
+origin https://github.com/skyblue955/workbuddy2api-panel.git
+source 1c44e757e91c6877463f52f7fdefd370cd19413f
+source 4dd5aab1cffb2544b479395ea40142c5609fe787
+records 8ece4e37b1bb26c169d2e4864438f2d233d4724d
+command git push origin maintenance/v1-compat-rewards
+literal 70dcd40..8ece4e3 maintenance/v1-compat-rewards -> maintenance/v1-compat-rewards ; exit0
+command git ls-remote origin refs/heads/maintenance/v1-compat-rewards
+result 8ece4e37b1bb26c169d2e4864438f2d233d4724d ; exit0 ; local/remote equal
+command gh pr view 2 --repo skyblue955/workbuddy2api-panel --json url,state,headRefName,baseRefName,headRefOid
+result OPEN, fork main <- fork maintenance/v1-compat-rewards, headRefOid 8ece4e37b1bb26c169d2e4864438f2d233d4724d ; exit0
+PR https://github.com/skyblue955/workbuddy2api-panel/pull/2
+acceptance comment https://github.com/skyblue955/workbuddy2api-panel/pull/2#issuecomment-6705922794
+tracked data/live-v6 files=0; worktree clean at checkpoint; no main/upstream/force/release/production operation.
+This receipt is historical observed evidence; its later commit does not change accepted code or claim future head verification.

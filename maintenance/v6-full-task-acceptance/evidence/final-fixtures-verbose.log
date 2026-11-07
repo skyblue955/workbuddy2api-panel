@@ -1,0 +1,116 @@
+=== RUN   TestFullLegacyActionFixtures
+    full_action_acceptance_test.go:124: chat_5 | event-only | requests=1 [GET /v2/activity/growth/tasks] | error: upstream server (http 502): 
+    full_action_acceptance_test.go:124: first_buddy | product+event | requests=1 [POST /v2/report] | error: 前置上报: upstream server (http 502): 
+2026/11/07 18:54:40 panel: accept Model_chat_GLM5.2: upstream server (http 502): （继续走行为链路）
+2026/11/07 18:54:40 WARN: [upstream] chat_stream acct=fixture(fixture-): upstream 502 server body=
+    full_action_acceptance_test.go:124: Model_chat_GLM5.2 | product+event | requests=2 [POST /v2/activity/growth/tasks/accept POST /v2/chat/completions] | error: 对话请求: upstream server (http 502): 
+    full_action_acceptance_test.go:124: RichMeow_Chat | event-only | requests=1 [POST /v2/report] | error: upstream server (http 502): 
+    full_action_acceptance_test.go:124: Buddy_App | event-only | requests=1 [POST /v2/report] | error: upstream server (http 502): 
+    full_action_acceptance_test.go:124: Buddy_App_QQ | event-only | requests=1 [POST /v2/report] | error: upstream server (http 502): 
+    full_action_acceptance_test.go:124: automation_1 | event-only | requests=1 [POST /v2/report] | error: upstream server (http 502): 
+    full_action_acceptance_test.go:124: Library_read | event-only | requests=1 [POST /v2/report] | error: upstream server (http 502): 
+    full_action_acceptance_test.go:124: template_5 | event-only | requests=1 [POST /v2/report] | message
+    full_action_acceptance_test.go:124: playbook_prompt | event-only | requests=1 [POST /v2/report] | error: upstream server (http 502): 
+    full_action_acceptance_test.go:124: create_canvas | event-only | requests=1 [POST /v2/report] | error: upstream server (http 502): 
+    full_action_acceptance_test.go:124: expert_5 | product+event | requests=1 [POST /portal/operation-platform/market/expert/list] | error: 拉取专家列表: upstream server (http 502): 
+    full_action_acceptance_test.go:124: Expert_team_use_3 | product+event | requests=1 [POST /portal/operation-platform/market/expert/list] | error: 拉取专家列表: upstream server (http 502): 
+    full_action_acceptance_test.go:124: Hp_Appearance | product+event | requests=1 [POST /v2/user-asset/appearance/set] | error: 设置主题: upstream server (http 502): 
+    full_action_acceptance_test.go:124: skill_1 | product+event | requests=1 [POST /v2/chat/completions] | error: 真实对话: chat http 502: 
+    full_action_acceptance_test.go:124: Expert_lighthouse | product+event | requests=2 [POST /portal/operation-platform/market/expert/list POST /v2/report] | error: 召唤链: upstream server (http 502): 
+    full_action_acceptance_test.go:124: black_cat | product+event | requests=0 [] | message
+    full_action_acceptance_test.go:124: school_season | event-only | requests=1 [GET /v2/activity/growth/tasks] | error: upstream server (http 502): 
+    full_action_acceptance_test.go:124: Sequential_Tasks_1 | event-only | requests=1 [GET /v2/activity/growth/tasks] | error: upstream server (http 502): 
+    full_action_acceptance_test.go:124: Sequential_Tasks_2 | event-only | requests=1 [GET /v2/activity/growth/tasks] | error: upstream server (http 502): 
+    full_action_acceptance_test.go:124: Sequential_Tasks_3 | event-only | requests=1 [GET /v2/activity/growth/tasks] | error: upstream server (http 502): 
+    full_action_acceptance_test.go:124: Sequential_Tasks_4 | event-only | requests=1 [GET /v2/activity/growth/tasks] | error: upstream server (http 502): 
+    full_action_acceptance_test.go:124: Sequential_Tasks_5 | event-only | requests=1 [GET /v2/activity/growth/tasks] | error: upstream server (http 502): 
+    full_action_acceptance_test.go:124: Sequential_Tasks_6 | event-only | requests=1 [GET /v2/activity/growth/tasks] | error: upstream server (http 502): 
+    full_action_acceptance_test.go:124: Sequential_Tasks_7 | event-only | requests=1 [GET /v2/activity/growth/tasks] | error: upstream server (http 502): 
+--- PASS: TestFullLegacyActionFixtures (0.01s)
+=== RUN   TestFullLegacyActionNormalFixtures
+    full_action_acceptance_test.go:227: chat_5 | normal non-complete | first=/v2/activity/growth/tasks requests=2 paths=[GET /v2/activity/growth/tasks POST /v2/report]
+    full_action_acceptance_test.go:227: first_buddy | normal non-complete | first=/v2/report requests=3 paths=[POST /v2/report POST /activity/growth/buddy/agreement POST /activity/growth/buddy/first]
+    full_action_acceptance_test.go:227: Model_chat_GLM5.2 | normal non-complete | first=/v2/activity/growth/tasks/accept requests=3 paths=[POST /v2/activity/growth/tasks/accept POST /v2/chat/completions POST /v2/report]
+    full_action_acceptance_test.go:227: RichMeow_Chat | normal non-complete | first=/v2/report requests=1 paths=[POST /v2/report]
+    full_action_acceptance_test.go:227: Buddy_App | normal non-complete | first=/v2/report requests=1 paths=[POST /v2/report]
+    full_action_acceptance_test.go:227: Buddy_App_QQ | normal non-complete | first=/v2/report requests=1 paths=[POST /v2/report]
+    full_action_acceptance_test.go:227: automation_1 | normal non-complete | first=/v2/report requests=1 paths=[POST /v2/report]
+    full_action_acceptance_test.go:227: Library_read | normal non-complete | first=/v2/report requests=1 paths=[POST /v2/report]
+    full_action_acceptance_test.go:227: template_5 | normal non-complete | first=/v2/report requests=5 paths=[POST /v2/report POST /v2/report POST /v2/report POST /v2/report POST /v2/report]
+    full_action_acceptance_test.go:227: playbook_prompt | normal non-complete | first=/v2/report requests=1 paths=[POST /v2/report]
+    full_action_acceptance_test.go:227: create_canvas | normal non-complete | first=/v2/report requests=1 paths=[POST /v2/report]
+    full_action_acceptance_test.go:227: expert_5 | normal non-complete | first=/portal/operation-platform/market/expert/list requests=4 paths=[POST /portal/operation-platform/market/expert/list POST /v2/report POST /v2/chat/completions POST /v2/report]
+    full_action_acceptance_test.go:227: Expert_team_use_3 | normal non-complete | first=/portal/operation-platform/market/expert/list requests=4 paths=[POST /portal/operation-platform/market/expert/list POST /v2/report POST /v2/chat/completions POST /v2/report]
+    full_action_acceptance_test.go:227: Hp_Appearance | normal non-complete | first=/v2/user-asset/appearance/set requests=2 paths=[POST /v2/user-asset/appearance/set POST /v2/report]
+    full_action_acceptance_test.go:227: skill_1 | normal non-complete | first=/v2/chat/completions requests=2 paths=[POST /v2/chat/completions POST /v2/report]
+    full_action_acceptance_test.go:227: Expert_lighthouse | normal non-complete | first=/portal/operation-platform/market/expert/list requests=4 paths=[POST /portal/operation-platform/market/expert/list POST /v2/report POST /v2/chat/completions POST /v2/report]
+    full_action_acceptance_test.go:227: black_cat | normal non-complete | first= requests=0 paths=[]
+    full_action_acceptance_test.go:227: school_season | normal non-complete | first=/v2/activity/growth/tasks requests=4 paths=[GET /v2/activity/growth/tasks POST /v2/report GET /v2/activity/growth/tasks GET /v2/activity/growth/tasks]
+    full_action_acceptance_test.go:227: Sequential_Tasks_1 | normal non-complete | first=/v2/activity/growth/tasks requests=4 paths=[GET /v2/activity/growth/tasks POST /v2/report GET /v2/activity/growth/tasks GET /v2/activity/growth/tasks]
+    full_action_acceptance_test.go:227: Sequential_Tasks_2 | normal non-complete | first=/v2/activity/growth/tasks requests=5 paths=[GET /v2/activity/growth/tasks POST /portal/operation-platform/market/expert/list POST /v2/report GET /v2/activity/growth/tasks GET /v2/activity/growth/tasks]
+    full_action_acceptance_test.go:227: Sequential_Tasks_3 | normal non-complete | first=/v2/activity/growth/tasks requests=4 paths=[GET /v2/activity/growth/tasks POST /v2/report GET /v2/activity/growth/tasks GET /v2/activity/growth/tasks]
+    full_action_acceptance_test.go:227: Sequential_Tasks_4 | normal non-complete | first=/v2/activity/growth/tasks requests=4 paths=[GET /v2/activity/growth/tasks POST /v2/report GET /v2/activity/growth/tasks GET /v2/activity/growth/tasks]
+    full_action_acceptance_test.go:227: Sequential_Tasks_5 | normal non-complete | first=/v2/activity/growth/tasks requests=5 paths=[GET /v2/activity/growth/tasks POST /v2/report GET /v2/activity/growth/tasks POST /v2/report GET /v2/activity/growth/tasks]
+    full_action_acceptance_test.go:227: Sequential_Tasks_6 | normal non-complete | first=/v2/activity/growth/tasks requests=4 paths=[GET /v2/activity/growth/tasks POST /v2/report GET /v2/activity/growth/tasks GET /v2/activity/growth/tasks]
+    full_action_acceptance_test.go:227: Sequential_Tasks_7 | normal non-complete | first=/v2/activity/growth/tasks requests=5 paths=[GET /v2/activity/growth/tasks POST /v2/report GET /v2/activity/growth/tasks POST /v2/report GET /v2/activity/growth/tasks]
+--- PASS: TestFullLegacyActionNormalFixtures (3.59s)
+=== RUN   TestRunModelChatRequiresCompleteAssistantStream
+=== RUN   TestRunModelChatRequiresCompleteAssistantStream/valid
+=== RUN   TestRunModelChatRequiresCompleteAssistantStream/errorframe
+=== RUN   TestRunModelChatRequiresCompleteAssistantStream/truncated
+=== RUN   TestRunModelChatRequiresCompleteAssistantStream/readerror
+=== RUN   TestRunModelChatRequiresCompleteAssistantStream/idonly
+=== RUN   TestRunModelChatRequiresCompleteAssistantStream/empty
+=== RUN   TestRunModelChatRequiresCompleteAssistantStream/reasoningonly
+=== RUN   TestRunModelChatRequiresCompleteAssistantStream/oversize
+=== RUN   TestRunModelChatRequiresCompleteAssistantStream/malformed
+=== RUN   TestRunModelChatRequiresCompleteAssistantStream/event-error
+=== RUN   TestRunModelChatRequiresCompleteAssistantStream/error-after-done
+=== RUN   TestRunModelChatRequiresCompleteAssistantStream/nonassistant
+=== RUN   TestRunModelChatRequiresCompleteAssistantStream/no-space
+=== RUN   TestRunModelChatRequiresCompleteAssistantStream/empty-finish
+=== RUN   TestRunModelChatRequiresCompleteAssistantStream/stop-eof
+=== RUN   TestRunModelChatRequiresCompleteAssistantStream/filtered-done
+=== RUN   TestRunModelChatRequiresCompleteAssistantStream/tool-done
+=== RUN   TestRunModelChatRequiresCompleteAssistantStream/multi-choice-done
+=== RUN   TestRunModelChatRequiresCompleteAssistantStream/bare-cr
+=== RUN   TestRunModelChatRequiresCompleteAssistantStream/multiline-data
+=== RUN   TestRunModelChatRequiresCompleteAssistantStream/comment-heartbeat
+=== RUN   TestRunModelChatRequiresCompleteAssistantStream/role-flip
+=== RUN   TestRunModelChatRequiresCompleteAssistantStream/empty-role
+=== RUN   TestRunModelChatRequiresCompleteAssistantStream/function-request
+=== RUN   TestRunModelChatRequiresCompleteAssistantStream/empty-finish-eof
+=== RUN   TestRunModelChatRequiresCompleteAssistantStream/tool-finish-only
+--- PASS: TestRunModelChatRequiresCompleteAssistantStream (0.04s)
+    --- PASS: TestRunModelChatRequiresCompleteAssistantStream/valid (0.00s)
+    --- PASS: TestRunModelChatRequiresCompleteAssistantStream/errorframe (0.00s)
+    --- PASS: TestRunModelChatRequiresCompleteAssistantStream/truncated (0.00s)
+    --- PASS: TestRunModelChatRequiresCompleteAssistantStream/readerror (0.00s)
+    --- PASS: TestRunModelChatRequiresCompleteAssistantStream/idonly (0.00s)
+    --- PASS: TestRunModelChatRequiresCompleteAssistantStream/empty (0.00s)
+    --- PASS: TestRunModelChatRequiresCompleteAssistantStream/reasoningonly (0.00s)
+    --- PASS: TestRunModelChatRequiresCompleteAssistantStream/oversize (0.01s)
+    --- PASS: TestRunModelChatRequiresCompleteAssistantStream/malformed (0.00s)
+    --- PASS: TestRunModelChatRequiresCompleteAssistantStream/event-error (0.00s)
+    --- PASS: TestRunModelChatRequiresCompleteAssistantStream/error-after-done (0.00s)
+    --- PASS: TestRunModelChatRequiresCompleteAssistantStream/nonassistant (0.00s)
+    --- PASS: TestRunModelChatRequiresCompleteAssistantStream/no-space (0.00s)
+    --- PASS: TestRunModelChatRequiresCompleteAssistantStream/empty-finish (0.00s)
+    --- PASS: TestRunModelChatRequiresCompleteAssistantStream/stop-eof (0.00s)
+    --- PASS: TestRunModelChatRequiresCompleteAssistantStream/filtered-done (0.00s)
+    --- PASS: TestRunModelChatRequiresCompleteAssistantStream/tool-done (0.00s)
+    --- PASS: TestRunModelChatRequiresCompleteAssistantStream/multi-choice-done (0.00s)
+    --- PASS: TestRunModelChatRequiresCompleteAssistantStream/bare-cr (0.00s)
+    --- PASS: TestRunModelChatRequiresCompleteAssistantStream/multiline-data (0.00s)
+    --- PASS: TestRunModelChatRequiresCompleteAssistantStream/comment-heartbeat (0.00s)
+    --- PASS: TestRunModelChatRequiresCompleteAssistantStream/role-flip (0.00s)
+    --- PASS: TestRunModelChatRequiresCompleteAssistantStream/empty-role (0.00s)
+    --- PASS: TestRunModelChatRequiresCompleteAssistantStream/function-request (0.00s)
+    --- PASS: TestRunModelChatRequiresCompleteAssistantStream/empty-finish-eof (0.00s)
+    --- PASS: TestRunModelChatRequiresCompleteAssistantStream/tool-finish-only (0.00s)
+=== RUN   TestRunModelChatPreservesChatRequest
+--- PASS: TestRunModelChatPreservesChatRequest (0.00s)
+=== RUN   TestRunModelChatCompleteRequestContract
+--- PASS: TestRunModelChatCompleteRequestContract (0.00s)
+PASS
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/panel	6.234s

@@ -1,0 +1,8 @@
+package upstream
+import("bytes";"fmt";"io";"net/http";"testing";"github.com/linguo2625469/workbuddy2api-panel/internal/auth")
+type codeFirstRT struct{status int; body string}
+func(r codeFirstRT)RoundTrip(*http.Request)(*http.Response,error){return &http.Response{StatusCode:r.status,Header:make(http.Header),Body:io.NopCloser(bytes.NewBufferString(r.body))},nil}
+func TestCodeFirstBaselineEvidence(t *testing.T){
+ for _,tc:=range []struct{name,body string;status int}{{"valid",`{"code":0,"data":{"credit":100,"energy":5}}`,200},{"missing_code",`{"data":{"credit":100}}`,200},{"null_code",`{"code":null,"data":{"credit":100}}`,200},{"redirect",`{"code":0,"data":{"credit":100}}`,302}}{ c:=New();c.HTTP=&http.Client{Transport:codeFirstRT{tc.status,tc.body}};c.WebBaseCN="https://fixture.invalid";receipt,err:=c.ClaimRewardReceipt(&auth.Auth{UID:"fixture",AccessToken:"fixture"},"fixture");fmt.Printf("CLAIM %s accepted=%t credit=%d energy=%d\n",tc.name,err==nil,receipt.Credit,receipt.Energy) }
+ c:=New();c.HTTP=&http.Client{Transport:codeFirstRT{200,"data: {\"id\":\"cmb-0123456789abcdef0123456789abcdef\"}\n\n"}};c.ChatBaseCN="https://fixture.invalid";_,id,err:=c.DesktopChatWithExpert(&auth.Auth{UID:"fixture",AccessToken:"fixture"},"fixture-expert");fmt.Printf("EXPERT truncated_id_only accepted=%t has_id=%t\n",err==nil,id!="")
+}

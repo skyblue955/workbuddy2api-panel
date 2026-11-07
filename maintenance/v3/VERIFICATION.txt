@@ -1,0 +1,104 @@
+Maintenance v3 acceptance record refreshed —2026-11-07; real acceptance commands/results remain dated 2026-11-04. Domestic-only WorkBuddy,V5.9.3,bundlecom.tencent.workbuddy.mac; no real global/WorkBuddyAI chat/task/claim testing. WorkBuddyAI was initially inspected read-only then stopped after user correction.
+Branch maintenance/v1-compat-rewards; baseline93ce125; source commits c0c1f27 + 1a62232.
+Changed branch/fields: authenticated POST /panel/api/accounts/{uid}/tasks/claim_ready; execute defaultfalse, task_codes explicit1..10; boundedstrictduplicateJSONrejection; selected/readiness/claims/status/reason/receipt_reward_reported/upstream_claimed/reward_received/complete; sharedaccountlock now also covers manual accept/accept_all/claim. No autoaccept/report/chat/Buddy/MPactions added. No schedules enabled.
+
+Four artifacts:
+MODIFIED_FILE=/Users/jinyanya/Code/Codex/workbuddy/maintenance/v3/MODIFIED_FILE.go.txt
+DIFF_FILE=/Users/jinyanya/Code/Codex/workbuddy/maintenance/v3/DIFF_FILE.patch
+VERIFICATION=/Users/jinyanya/Code/Codex/workbuddy/maintenance/v3/VERIFICATION.txt
+ROLLBACK=/Users/jinyanya/Code/Codex/workbuddy/maintenance/v3/ROLLBACK.sh
+Snapshot exactclaimready.go; patch5code/testfiles; ORIGINAL_SHA256.txt baselinehashes/ABSENT. Documentation/audit retained bycopyrollback.
+
+Environment for allgate/probecommands:
+PATH=/Users/jinyanya/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.3.darwin-arm64/bin:$PATH GOTOOLCHAIN=local GOCACHE=/private/tmp/workbuddy-gocache GOMODCACHE=/Users/jinyanya/go/pkg/mod
+Node22/fnm; Pythonhelpers UV_CACHE_DIR=/private/tmp/uv-workbuddy-cache uv run --no-project python. No globalconfig/modelsetting/dependency change.
+
+BASELINE
+Directory/private/tmp/workbuddy-v3-baseline, git archive93ce125 clean source.
+Command: bash scripts/verify.sh
+Input: baselinecode/deterministicfixtures. Literaloutput ACCEPTANCE PASS ; BASELINE_EXIT=0. Exit0. evidence/baseline-verify.log.
+Probe setup: copy PROBE_test.go.txt to internal/panel/v3_evidence_test.go, remove aftertest.
+Exactcommand: go test -v ./internal/panel -run '^TestV3BehaviorEvidence$' -count=1
+Input1 literal {"task_codes":["Library_read"]}; input2 literal {"task_codes":["Library_read"],"execute":false,"execute":true}; fixturecredential/readytask, no network.
+Literaloutputs: HTTP=404 UPSTREAM_WRITES=0 ; HTTP=404 UPSTREAM_WRITES=0 ; PASS. Exit0. evidence/baseline-probe.log.
+
+MODIFIED
+Directory/Users/jinyanya/Code/Codex/workbuddy.
+Command: bash scripts/verify.sh
+Input: modifiedcode/deterministicfixtures only. Literaloutput ACCEPTANCE PASS ; MODIFIED_FINAL_EXIT=0. Exit0. evidence/modified-verify.log. Includes Node/shellsyntax,go vet ./...,go test -race ./...,go build ./....
+Sameprobecommand/inputs on isolatedbaseline+forwardpatch: HTTP=200 UPSTREAM_WRITES=0 ; HTTP=400 UPSTREAM_WRITES=0 ; PASS. Exit0. evidence/modified-probe.log.
+Targeted extra command: go test -race ./internal/panel -run '^TestClaimReadySafety' -count=1. Literalresult ok github.com/linguo2625469/workbuddy2api-panel/internal/panel ; exit0.
+
+ROLLBACK
+Directory/private/tmp/workbuddy-v3-rollback-final, baselinearchive+forwardpatch, NOT realworktree.
+Exactcommand: bash /Users/jinyanya/Code/Codex/workbuddy/maintenance/v3/ROLLBACK.sh /private/tmp/workbuddy-v3-rollback-final
+Literaloutput ROLLBACK PASS: v3 claim-only code restored to 93ce125 ; exit0.
+Sameprobecommand/input now: HTTP=404 UPSTREAM_WRITES=0 ; HTTP=404 UPSTREAM_WRITES=0 ; PASS ; exit0.
+Command: bash scripts/verify.sh inrolledbackcopy. Literaloutput ACCEPTANCE PASS ; ROLLBACK_EXIT=0 ; exit0. evidence/rollback-verify.log.
+SHA256/absenceassertion5files: ROLLBACK_ORIGINAL_HASH_PASS files=5 ; exit0. Restoredbaseline routeabsence/manual-lock behavior; actualproject retains fixes. Does not reverse remote task/credit effects.
+
+Acceptance matrix
+PASS deterministic originalcore+frontend/auth/regression completegate.
+PASS newendpoint dryrunoneGET/zeroPOST; explicitallowlist/arbitrarynewcode; missing/locked/claimed/MP/Buddy/expired/ambiguous/unknownprogress filters; no extramutationroutes.
+PASS auth401/missing404/global+enterprise422/busy409; sourcehintJWTaloneallowed withoutfalseenterpriseidentity; manualmutatorssameaccountlock.
+PASS malformed/null/nonbool/unknown/trailing/duplicateexecute+taskcodes/>8KiB inclvalidJSON+whitespace ->400/zerooutbound.
+PASS exactoneclaimattempt/oneconfirmationread; negative/HTTPfailure/readfailure/duplicatepoststate/unclaimedpoststate do not become confirmedreward; zeroeligibleexplicitno_op, no fallbackmutation.
+PASS independentsecurityreview and rootremediation; see REVIEW.txt. Reviewer sourceinspectiononly; actualtestresults obtained bycoordinator.
+PASS cleanarchivepatchapply/isolatedrollback/fullgate; nativebinarybuild/localHTTPsmoke. No freshDockerimage orWindowsruntimeacceptance claimed thisround.
+
+Authorized real acceptance (manualoneoff, NOT automatedCI)
+Private source/data/results remain under gitignored data/live-v3(0700/0600). Only aggregate/redacted evidence committed. Never rerun markers oroldapprovalbudgets.
+1. Initial domestic taskread: ./data/live-v3/preflight/probe ; exit0; exactoneGET /v2/activity/growth/tasks HTTP200/code0;18tasks/0ready. No mutations. Counts alone not entitlement.
+2. ./data/live-v3/chat/probe -execute-approved ; exit1. FirstCNPOST /v2/chat/completions,hy4-preview-f,max16/thinkingdisabled,HTTP200 butreasoningonly/no finalcontent: FAILED. No autoretry,streamcaseaborted. This failedrecord retained.
+3. ./data/live-v3/chat-stream/probe -execute-approved ; exit0. Separate remainingsecondcase only: deepseek-v4-flash,stream,HTTP200/OK/schema/DONE/no reasoning; PASS. ExactonePOST,max16,strictCNhostallowlist.
+4. Afterfreshadditionaluserapproval: ./data/live-v3/chat-nonstream/probe -execute-approved ; exit0. ExactoneadditionalCNnonstream deepseek-v4-flash,max16,HTTP200/OK/schema/no reasoning; PASS.
+Totalchatattempts3,successfulacceptedcases2,initialfailedcase1; no claimallmodels/hy4restored. Knownmodel+positivecanDisableThinking chosen after omittedcapabilityproved insufficient. Codepathrealgatewayhandlerin-memory with realupstream transport, not a syntheticreply; deployedlistenerseparatelysmoked locally.
+5. Useractuallyread Library_read intro inofficialdomesticclient andconfirmed officialtaskcard可领取. ControlledAPIacceptonce: ./data/live-v3/accept/probe -execute-approved ; exit0/HTTP200, butsubsequentread didnotconfirmregistration/qualification. HTTP200notdeclaredtaskcomplete. No retry/eventfabrication.
+6. Newclaim-only preview ./data/live-v3/claim/probe ; exit0; domesticGETHTTP200,0selected/0claimPOST beforeclaim. Legacyreadiness disagreedwith officialUI. NewguardNOTloosened.
+7. Userapproved once-onlyspecificLibrary_readclaim andsubsequentlyconfirmed officialUIready. Separate existingclientAPItest(commandbelow) used UI-confirmedeligibility, NOT bypass ofnewclaim_ready filter. Samevisible domesticaccount matched locally withoutloggingUID. Itenforced sharedO_EXCLclaimmarker, exactonePOST https://www.workbuddy.cn/activity/growth/tasks/Library_read/claim, no retries/redirects/othermutations, onelegacyGETafter, pre/postresourcequeryoneattemptperphase withnontransientfailurewrapping. Strictcapturedreceiptobjects/duplicatekeys/types/nonnegative/code checked independentlyoflegacyparser.
+Exactcommand: ./data/live-v3/claim-ui-confirmed/probe -execute-approved -official-ui-ready-confirmed
+Input: currentprivatecredential, specificallyapprovedtaskcodeLibrary_read, humanconfirmedofficialUIqualification. No codes/secrets inarguments/output.
+Literalresult: attempted_claim_requests=1 ; claim_http_status=200 ; business_code=0 ; receipt_schema_valid=true ; claim_status=awarded ; observed_reward_credit=100 ; observed_reward_energy=5 ; balance_queries=2 ; balance_before_valid=true ; balance_after_valid=true ; observed_credit_delta=100 ; legacy_matching_tasks=1 ; legacy_task_claimed=true ; claim_automatic_retries=0 ; other_state_changing_calls=0. Exit0.
+This is server-reported100credits/5energy plus observed+100balanceinterval, not proof excluding unrelated concurrentactivity. Absoluteamounts/UID/tokens notstored incommitted evidence. No secondclaim performed.
+8. Postclaim read-only preview: outcomeaddedbelow aftercompletion; never runexecuteagain withtheconsumedclaimallowance.
+
+Limits / incomplete
+- Automatic preclaim eligibility discovery for this real Library_read task remains unverified/failed: legacy progress didnotreflect theofficialUIready state beforeclaim. Successful UI-qualified directclaim doesNOTcomplete autonomousqualification/scheduledclaim acceptance. Keepthisremainingitem, do notfakeprogress orclaimfulldevelopmentcomplete.
+- hy4-preview-f tiny-budget/no-thinking request failed; onlyDeepseeknormal+stream passed. Tools/othermodels/newfreeclaimchannels not liveaccepted.
+- LegacyClaimReward productionparser remains permissive on receiptmissing/null/duplicatefields. Newendpoint requires nonnegativeamounts+postclaimedstate forreward_received; privateoneoffstrictreceipt/balancevalidation doesnotchangeproductionparsercontract. No distributed/crash-safeexactlyonce guarantee forlegacyclaim; no automaticretry uncertainoutcomes.
+- All live operationcounts refer to transport-gated scripts. Officialdesktop navigation was not network-instrumented; rotating taskbanner was not used as proof ofsign-in/reward. No deliberate signin/drawing/Buddy/agreement action was included inapproval orcalled byscripts. OverseasUIinspection doesnotcount as overseas realaccountacceptance.
+- Originalordinaryaccount route remains primary, nodeveloperapp registration needed. Optional officialOpenAPIredemption separate/unexecuted. No newactivityqualification invented.
+- Existing schedules remain off locally; no release/main/upstream/forcepush/imagepublication. Rollbackcode/binary cannotundoapprovedaccountsideeffects.
+
+Localdeployment
+Previous native data/local-dev/wb2api.before-v3 SHA256 c73c377602740c53a022cbfa72a83ee2cc2df0a8633b2c5ea52b25050da52d0a.
+Intermediate restored fallback binary SHA256 6466493084135ddaec8e131b671b942a8e9077f62e3c54c5345e85a30561485c.
+Current native data/local-dev/wb2api SHA256 e1ca68c7d359ec2ed77d6d2cc7373cf4237017a3112608ef56e14beb14681671.
+Buildcommand: go build -buildvcs=false -o data/local-dev/wb2api.next ./cmd/server ; exit0.
+Controls: bash data/local-dev/service.sh stop ; mv nextbinary towb2api ; bash data/local-dev/service.sh start ; exit0. Backupretained.
+Privatehelpercommands(uvrunprefixasabove): python data/local-dev/auth-status-smoke.py ; python data/local-dev/v3-smoke.py.
+Literalresults: OVERVIEW_HTTP=200 ; AUTHORIZATION_STATE=valid ; AUTHORIZED_BUTTON=green ; JS_AND_CSS_STATES=PASS ; CREDENTIAL_AND_CONFIG_UNCHANGED=true ; READONLY_SMOKE_PASS ; NATIVE_CLAIM_ROUTE_HTTP400_DUPLICATE_NULL_OVERSIZE=PASS ; NATIVE_CLAIM_ROUTE_UNAUTH401_MISSING404=PASS ; UPSTREAM_OR_REWARD_CALLS=0 ; V3_LOCAL_SMOKE_PASS. Each exit0. These localwiretests reject beforeupstream, separatefromapprovedrealclaim.
+
+
+Continuation evidence (recorded 2026-11-07; no new live chat/registration/reward mutations)
+Postclaim read-only preview command: python data/local-dev/v3-live-preview.py (local deployed readonly preview). Input: consumed Library_read claim state; execute=false; no account mutation. Literal result: HTTP 200; claims=0; selected=0; reason=already_claimed; upstream_claimed=true; new_reward=false; POSTCLAIM_NO_DUPLICATE_MUTATION_PASS. Exit 0.
+
+Native deployment state
+Final service observation from the 2026-11-04 run: running PID 87242. The first state-fix deployment attempt failed during bootstrap; fallback restored binary 646649 PID 86794; after the old PID exited during the grace wait, retry passed and current binary e1ca68c7d359ec2ed77d6d2cc7373cf4237017a3112608ef56e14beb14681671 was installed. Failed bootstrap, fallback restoration, old-PID exit, and successful retry are observed; “shutdown race” is an inference only.
+
+Source final hashes
+claimready.go 034935acbb195f15bc151a065ae3f6a1a9048f8b4f3c9fdf291e1f45e5d1ad67
+claimready_safety_test.go 59d7fa23d5943d5c41f692d28a8c198837f59cfda5e08c9807d6ff4498d3542a
+tasks.go 0500718b1778a922d2d9862d306ca8826872e31f89e58e87716f95bc731e22f9
+
+Release caveats
+Autonomous preclaim eligibility discovery remains incomplete because legacy progress disagreed with official UI readiness; no guard loosening or fabricated progress is recorded. The production legacy receipt parser remains permissive. No distributed/crash-safe exactly-once guarantee is claimed.
+
+2026-11-07 measured continuation (historical live outcomes remain2026-11-04)
+Current source commits c0c1f27+1a62232 were pushed to origin/maintenance/v1-compat-rewards; SOURCE_PUSH_EXIT=0. PR2 remainsOPEN targeting forkmain. Final docscommit/remoteSHA checked at delivery.
+Exact gate command/environment as above: bash scripts/verify.sh, directory /Users/jinyanya/Code/Codex/workbuddy ; literal ACCEPTANCE PASS ; NOV7_MODIFIED_EXIT=0 ; exit0. evidence/nov7-modified-verify.log.
+Fresh archive copy /private/tmp/workbuddy-v3-recheck-20261107.KfBx1C: git archive93ce125, forwardpatch source5files equal actualsource; scriptreverse restores5original hashes/absence. Literal NOV7_FORWARD_PATCH_SOURCE_MATCH files=5 ; ROLLBACK PASS: v3 claim-only code restored to 93ce125 ; NOV7_ROLLBACK_ORIGINAL_HASH_PASS files=5 ; exit0.
+Exact gate command inthatrestoredcopy: bash scripts/verify.sh ; literal ACCEPTANCE PASS ; NOV7_ROLLBACK_EXIT=0 ; exit0. evidence/nov7-rollback-verify.log. Actual source remains modified relativebaseline and committed; rollback never ran onactualworktree.
+The combined test/healthcheck shell initially exited7 ONLY because localhostwasunregistered, after both test gates exit0. Separate local health recovery evidence/nov7-local-health.txt records statusfailure, configuration assertions, successful bootstrap and health200/exit0. No new paid inference, registration, signin or reward grant was reused.
+Current nativehash remains e1ca68c7d359ec2ed77d6d2cc7373cf4237017a3112608ef56e14beb14681671. Currentlocalservice observedrunning pid14540,all8schedulesoff/globaloff,credential+config bytes unchanged. Localvalidmetadata/liveness is NOT fresh live API acceptance.
+Qualification source audit remains hypotheses only; see QUALIFICATION_RESEARCH.txt. No guardloosened and no new activity channel or official growthcontract invented.

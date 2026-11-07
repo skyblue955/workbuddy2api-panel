@@ -1,0 +1,25 @@
+{
+  "automatic_retries": 0,
+  "balance_delta": 0,
+  "balance_reads": 0,
+  "balance_verified": false,
+  "chat_posts": 1,
+  "claim_posts": 0,
+  "config_auth_unchanged": true,
+  "enrollment_posts": 0,
+  "event_posts": 0,
+  "local_http": 200,
+  "max_output_tokens": 16,
+  "progress_after": 0,
+  "progress_before": 0,
+  "receipt_reward_reported": false,
+  "reward_received": false,
+  "status": "chat_failed",
+  "task_reads": 2,
+  "upstream_claimed": false,
+  "upstream_http_statuses": [
+    200,
+    200,
+    200
+  ]
+}

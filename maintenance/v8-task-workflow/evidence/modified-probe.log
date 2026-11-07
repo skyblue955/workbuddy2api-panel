@@ -1,0 +1,8 @@
+=== RUN   TestV8EmptyFunctionProbe
+EMPTY_FUNCTION_PROBE COMPLETE=true CHAT=0 CLAIM=0
+--- PASS: TestV8EmptyFunctionProbe (0.00s)
+=== RUN   TestV8RouteProbe
+ROUTE_PROBE HTTP=200 READS=2 CHAT=0 CLAIM=0
+--- PASS: TestV8RouteProbe (0.00s)
+PASS
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/panel	0.538s

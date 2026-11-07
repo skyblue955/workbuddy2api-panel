@@ -1,0 +1,10 @@
+2026-11-07 全量积分任务验收队列（最新）
+基线70dcd40；维护分支maintenance/v1-compat-rewards。
+F1 DONE 旧25/current19联合31行矩阵；重合13，旧12未下发，新6无handler；不假定MP是默认超集。
+F2 DONE 原25正常+25失败mock入口回归、资格/重复/到期/异常/领奖边界旧用例完整gate通过；黑猫为当前日间guard、专家单目录为partial，mock不等于真实完成。
+F3 DONE 一次真实GET默认/MP，各200/code0，18+12去重19；0可领/3已领。10差异仅jump_url，资格冲突0；私有保存两views。
+F4 PARTIAL 明确14项仅报名授权已执行：默认13+MP1，各一次accept，前后4GET，14/14回读confirmed；目标chat/template5，其余1。chat/event/领奖/实际公众号关注/协议/领养/连接器/自动化创建0，无重试。
+F5 PENDING 真实产品动作、达标及奖励到账未验收；现仍0eligible/claimed3不变；不执行虚构事件，不把报名叫任务完成，GUI非默认前置。
+F6 DONE 修复已复现runModelChat错误SSE仍report，source1c44e75；全量tests4dd5aab；独立审查整改、最终完整门禁/隔离rollback/4hash恢复、本地native部署与binarycopyrollbackPASS；fork/PR保存验收记录。
+权限账面：原8次专家短对话已用2剩6，本轮聊天0；两个专家各一次达标后领取尚未用。本轮14项授权仅报名回读，不扩成完成/领奖授权。
+OPEN 31行各项真实完成；12旧码可用性后续下发；6新码真实动作契约与明确规则/权限；无需让用户代做客户端任务来替代代码验收。

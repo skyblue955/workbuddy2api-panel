@@ -1,0 +1,37 @@
+{
+  "account_login": "PASS",
+  "balance": {
+    "amounts_redacted": true,
+    "passed": true,
+    "values_valid": true
+  },
+  "credential_values_redacted": true,
+  "gateway_models": {
+    "http_status": 200,
+    "model_count": 18,
+    "passed": true,
+    "schema_valid": true
+  },
+  "gateway_unauthorized_rejected": true,
+  "model_inference_calls": 0,
+  "state_changing_reward_calls": 0,
+  "time": "2026-11-02T21:05:27+08:00",
+  "token_refresh_calls": 0,
+  "upstream_calls": [
+    {
+      "http_status": 200,
+      "operation": "model_capabilities",
+      "transport_error": false
+    },
+    {
+      "http_status": 200,
+      "operation": "model_catalog",
+      "transport_error": false
+    },
+    {
+      "http_status": 200,
+      "operation": "balance",
+      "transport_error": false
+    }
+  ]
+}

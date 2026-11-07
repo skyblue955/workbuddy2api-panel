@@ -1,0 +1,21 @@
+Qualification follow-up — source audit2026-11-07; historical live observations2026-11-04
+Status: UNRESOLVED, not a restored automatic qualification feature.
+
+Observed
+- Official domestic client task card was reported ready by the user after actual reading. The authorized direct claim later succeeded100credits/5energy, observed balanceinterval+100 and unique legacy post-state claimed=true.
+- Legacy preclaim default-list data didnot establish positive progress; one acceptHTTP200 also didnot confirmregistration. Newguard skipped progress_unknown instead of guessing or mutating.
+- internal/upstream/tasks.go:146-207 parses a fixed taskshape; unknown response fields are ignored. Claimable is derived from target>0,current>=target,notclaimed. There is no represented authoritative qualification field.
+- Nestedprogress only replacesflatvalues when a parsed value is positive. claim_ready uses defaultlist only; other UI/task paths may merge MP lists with defaultentry precedence. This batch didnot fetch/spoof MPcontext to manufacture eligibility.
+
+Hypotheses, NOT conclusions
+A genuine authoritative readiness field could be discarded; the officialclient could use a different endpoint/context; default/MP duplicateprecedence could conceal richer metadata; delayed registration/progress could differ from officialUI. Available redacted evidence cannot identify which explanation is correct.
+Do not equate accepted/completed status or target0 with entitlement. Do not mark the compatibility gap fixed from one successful UI-qualified claim.
+
+Next admissible work
+1. Obtain a current documented contract or explicitly authorized officialdomestic-client schema capture for list/registration/readiness, without cookies, Authorization, access/refresh tokens, seedtokens, accountIDs, private taskcontents, or personal requestpayloads in logs/repository.
+2. Produce manually reviewed deterministic redacted fixtures preserving fieldtypes/absence/provenance and compare before/after state. Capture no additional reward mutations as part of schema research.
+3. Add tri-state qualification/provenance only when the field semantics are evidenced. Keep unknown/contradictory/expired/locked/duplicate records non-mutating. Reconcile default/MP duplicates explicitly rather than always preferring one source.
+4. Test parser absent/null/zero/nestedprogress, status-without-qualification, differing source duplicates, and dryrun zeroPOST; then independentreview/fullgate/isolatedrollback.
+5. A further live chat/registration/claim needs fresh specific authorization: this round's three chat calls, one registration attempt and one approved reward claim are consumed. 'Continue' is not a new allowance.
+
+No code or guard bypass was added for these hypotheses. Ordinary account login remains primary; this research doesnot require developer registration by default and doesnot recertify private growth endpoints as official public APIs.

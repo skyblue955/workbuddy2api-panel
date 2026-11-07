@@ -1,0 +1,32 @@
+task_code	title	implementation	currently_returned	fixture_result	live_result	note
+chat_5	和 AI 聊天 5 次	event-only	yes	PASS_NORMAL_AND_FAILURE	REGISTRATION_CONFIRMED_ONLY	已授权通过原报名接口单次登记并回读确认；任务尚未实际完成，不代表奖励到账；旧event-only动作仍只在mock验收
+first_buddy	领取一只 Buddy	hybrid	yes	PASS_NORMAL_AND_FAILURE	ALREADY_CLAIMED_NO_REPLAY	已领取标记只读存在，不重复动作或领取；不算本轮新增到账
+Model_chat_GLM5.2		hybrid	no	PASS_NORMAL_AND_FAILURE	NOT_RETURNED	当前默认/MP均未下发；不推定永久失效，不调用旧动作；已复现并修复异常SSE仍上报完成，正常请求不改
+RichMeow_Chat	桌面端对话1次	event-only	yes	PASS_NORMAL_AND_FAILURE	ALREADY_CLAIMED_NO_REPLAY	已领取标记只读存在，不重复动作或领取；不算本轮新增到账；旧动作只有事件，不等于真实产品操作，live不执行
+Buddy_App	体验 WorkBuddy 「发现应用」	event-only	yes	PASS_NORMAL_AND_FAILURE	REGISTRATION_CONFIRMED_ONLY	已授权通过原报名接口单次登记并回读确认；任务尚未实际完成，不代表奖励到账；旧event-only动作仍只在mock验收
+Buddy_App_QQ		event-only	no	PASS_NORMAL_AND_FAILURE	NOT_RETURNED	当前默认/MP均未下发；不推定永久失效，不调用旧动作；旧动作只有事件，不等于真实产品操作，live不执行
+automation_1	设置自动化任务	event-only	yes	PASS_NORMAL_AND_FAILURE	REGISTRATION_CONFIRMED_ONLY	已授权通过原报名接口单次登记并回读确认；任务尚未实际完成，不代表奖励到账；旧event-only动作仍只在mock验收
+Library_read	体验「资料库」	event-only	yes	PASS_NORMAL_AND_FAILURE	ALREADY_CLAIMED_NO_REPLAY	已领取标记只读存在，不重复动作或领取；不算本轮新增到账；旧动作只有事件，不等于真实产品操作，live不执行
+template_5	使用 5 个模板	event-only	yes	PASS_NORMAL_AND_FAILURE	REGISTRATION_CONFIRMED_ONLY	已授权通过原报名接口单次登记并回读确认；任务尚未实际完成，不代表奖励到账；旧event-only动作仍只在mock验收
+playbook_prompt	探索优秀灵感	event-only	yes	PASS_NORMAL_AND_FAILURE	REGISTRATION_CONFIRMED_ONLY	已授权通过原报名接口单次登记并回读确认；任务尚未实际完成，不代表奖励到账；旧event-only动作仍只在mock验收
+create_canvas		event-only	no	PASS_NORMAL_AND_FAILURE	NOT_RETURNED	当前默认/MP均未下发；不推定永久失效，不调用旧动作；旧动作只有事件，不等于真实产品操作，live不执行
+expert_5	召唤 5 次专家	hybrid	yes	PASS_SINGLE_ENTRY_PARTIAL_AND_FAILURE	ACCEPTED_UNQUALIFIED	已有报名，真实未达标；v5一次原聊天未提高进度，本轮没有追加对话/领取
+Expert_team_use_3	召唤 3 次专家团	hybrid	yes	PASS_SINGLE_ENTRY_PARTIAL_AND_FAILURE	ACCEPTED_UNQUALIFIED	已有报名，真实未达标；v5一次原聊天未提高进度，本轮没有追加对话/领取
+Hp_Appearance		hybrid	no	PASS_NORMAL_AND_FAILURE	NOT_RETURNED	当前默认/MP均未下发；不推定永久失效，不调用旧动作
+skill_1	尝鲜热门技能	hybrid	yes	PASS_NORMAL_AND_FAILURE	REGISTRATION_CONFIRMED_ONLY	已授权通过原报名接口单次登记并回读确认；任务尚未实际完成，不代表奖励到账
+Expert_lighthouse	体验「腾讯轻量云」专家	hybrid	yes	PASS_NORMAL_AND_FAILURE	REGISTRATION_CONFIRMED_ONLY	已授权通过原报名接口单次登记并回读确认；任务尚未实际完成，不代表奖励到账
+black_cat		hybrid	no	PASS_DAYTIME_GUARD_AND_FAILURE	NOT_RETURNED	当前默认/MP均未下发；不推定永久失效，不调用旧动作；当前日间仅验证窗口guard，真实夜间分支未测
+school_season		event-only	no	PASS_NORMAL_AND_FAILURE	NOT_RETURNED	当前默认/MP均未下发；不推定永久失效，不调用旧动作；旧动作只有事件，不等于真实产品操作，live不执行
+Sequential_Tasks_1	完成 1 次对话	event-only	yes	PASS_NORMAL_AND_FAILURE	REGISTRATION_CONFIRMED_ONLY	已授权通过原报名接口单次登记并回读确认；任务尚未实际完成，不代表奖励到账；旧event-only动作仍只在mock验收
+Sequential_Tasks_2		event-only	no	PASS_NORMAL_AND_FAILURE	NOT_RETURNED	当前默认/MP均未下发；不推定永久失效，不调用旧动作；旧动作只有事件，不等于真实产品操作，live不执行
+Sequential_Tasks_3		event-only	no	PASS_NORMAL_AND_FAILURE	NOT_RETURNED	当前默认/MP均未下发；不推定永久失效，不调用旧动作；旧动作只有事件，不等于真实产品操作，live不执行
+Sequential_Tasks_4		event-only	no	PASS_NORMAL_AND_FAILURE	NOT_RETURNED	当前默认/MP均未下发；不推定永久失效，不调用旧动作；旧动作只有事件，不等于真实产品操作，live不执行
+Sequential_Tasks_5		event-only	no	PASS_NORMAL_AND_FAILURE	NOT_RETURNED	当前默认/MP均未下发；不推定永久失效，不调用旧动作；旧动作只有事件，不等于真实产品操作，live不执行
+Sequential_Tasks_6		event-only	no	PASS_NORMAL_AND_FAILURE	NOT_RETURNED	当前默认/MP均未下发；不推定永久失效，不调用旧动作；旧动作只有事件，不等于真实产品操作，live不执行
+Sequential_Tasks_7		event-only	no	PASS_NORMAL_AND_FAILURE	NOT_RETURNED	当前默认/MP均未下发；不推定永久失效，不调用旧动作；旧动作只有事件，不等于真实产品操作，live不执行
+WorkBuddy_Valorant	体验「无畏契约拼豆专家」	new-no-handler	yes	N/A_NO_ACTION_HANDLER	REGISTRATION_CONFIRMED_ONLY	已授权通过原报名接口单次登记并回读确认；任务尚未实际完成，不代表奖励到账
+expert_use_bowangwang	体验「直播电商教练」	new-no-handler	yes	N/A_NO_ACTION_HANDLER	REGISTRATION_CONFIRMED_ONLY	已授权通过原报名接口单次登记并回读确认；任务尚未实际完成，不代表奖励到账
+expert_use_douyinyin	体验「抖音策略师」	new-no-handler	yes	N/A_NO_ACTION_HANDLER	REGISTRATION_CONFIRMED_ONLY	已授权通过原报名接口单次登记并回读确认；任务尚未实际完成，不代表奖励到账
+expert_use_maidehao	体验「中国电商运营专家」	new-no-handler	yes	N/A_NO_ACTION_HANDLER	REGISTRATION_CONFIRMED_ONLY	已授权通过原报名接口单次登记并回读确认；任务尚未实际完成，不代表奖励到账
+expert_use_shangjia_xuanchuan	体验「商家宣传页与海报设计师」	new-no-handler	yes	N/A_NO_ACTION_HANDLER	REGISTRATION_CONFIRMED_ONLY	已授权通过原报名接口单次登记并回读确认；任务尚未实际完成，不代表奖励到账
+wb_wechat_oa_subscribe_task	关注「腾讯 WorkBuddy」官方公众号	new-no-handler	yes	N/A_NO_ACTION_HANDLER	REGISTRATION_CONFIRMED_ONLY	已授权通过原报名接口单次登记并回读确认；任务尚未实际完成，不代表奖励到账

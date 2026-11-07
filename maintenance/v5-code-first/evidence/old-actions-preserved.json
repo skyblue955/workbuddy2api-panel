@@ -1,0 +1,17 @@
+{
+  "internal/upstream/desktop.go": {
+    "unchanged": true,
+    "baseline_sha256": "6e10080759277b7ead2be8ed61beb85ced9ee8bacc7de39c0e4d8a8275b3811a",
+    "current_sha256": "6e10080759277b7ead2be8ed61beb85ced9ee8bacc7de39c0e4d8a8275b3811a"
+  },
+  "internal/upstream/client.go": {
+    "unchanged": true,
+    "baseline_sha256": "5a1ccebfca7f71b41b7c5061c19d2c0066414df60bf9b79d711e8dc23dfc15f7",
+    "current_sha256": "5a1ccebfca7f71b41b7c5061c19d2c0066414df60bf9b79d711e8dc23dfc15f7"
+  },
+  "internal/panel/autotask.go": {
+    "unchanged": true,
+    "baseline_sha256": "886f4d52e6c33a641893b57763920e56a4ea256f4c605a96e1b88b132b6d87a9",
+    "current_sha256": "886f4d52e6c33a641893b57763920e56a4ea256f4c605a96e1b88b132b6d87a9"
+  }
+}

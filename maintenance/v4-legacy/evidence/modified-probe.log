@@ -1,0 +1,37 @@
+=== RUN   TestV4LegacyReceiptEvidence
+RECEIPT valid accepted=true credit=100 energy=5
+RECEIPT already accepted=true credit=0 energy=0
+RECEIPT empty accepted=false credit=0 energy=0
+RECEIPT null accepted=false credit=0 energy=0
+RECEIPT negative accepted=false credit=0 energy=0
+RECEIPT duplicate accepted=false credit=0 energy=0
+RECEIPT null_marker_positive accepted=false credit=0 energy=0
+PROGRESS valid claimable=true
+PROGRESS locked claimable=false
+PROGRESS expired claimable=false
+PROGRESS nested_zero claimable=false
+PROGRESS nested_null claimable=false
+--- PASS: TestV4LegacyReceiptEvidence (0.00s)
+PASS
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/upstream	0.497s
+=== RUN   TestV4LegacySweepEvidence
+=== RUN   TestV4LegacySweepEvidence/valid
+2026/11/07 12:01:16 panel: 任务补领清扫：1 个账号（跳过 0）· 接受 0 · 领奖 1 · +100 分 +5 能 · 出错 0
+SWEEP valid claim_requests=1 new_claimed_count=1 credits=100
+=== RUN   TestV4LegacySweepEvidence/already
+SWEEP already claim_requests=1 new_claimed_count=0 credits=0
+=== RUN   TestV4LegacySweepEvidence/locked
+SWEEP locked claim_requests=0 new_claimed_count=0 credits=0
+=== RUN   TestV4LegacySweepEvidence/expired
+SWEEP expired claim_requests=0 new_claimed_count=0 credits=0
+=== RUN   TestV4LegacySweepEvidence/duplicate
+2026/11/07 12:01:16 panel: 任务补领清扫：1 个账号（跳过 0）· 接受 0 · 领奖 0 · +0 分 +0 能 · 出错 1
+SWEEP duplicate claim_requests=0 new_claimed_count=0 credits=0
+--- PASS: TestV4LegacySweepEvidence (0.01s)
+    --- PASS: TestV4LegacySweepEvidence/valid (0.00s)
+    --- PASS: TestV4LegacySweepEvidence/already (0.00s)
+    --- PASS: TestV4LegacySweepEvidence/locked (0.00s)
+    --- PASS: TestV4LegacySweepEvidence/expired (0.00s)
+    --- PASS: TestV4LegacySweepEvidence/duplicate (0.00s)
+PASS
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/panel	0.504s

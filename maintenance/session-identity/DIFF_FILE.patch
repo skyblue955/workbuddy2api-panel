@@ -1,0 +1,424 @@
+diff --git a/internal/auth/auth.go b/internal/auth/auth.go
+index 56de61c..8d1528b 100644
+--- a/internal/auth/auth.go
++++ b/internal/auth/auth.go
+@@ -210,27 +210,22 @@ func (a *Auth) IsGlobal() bool { return a.Realm() == "global" }
+ // 无需加锁——Realm() 加锁是因为 realm/Domain 会被 RefreshToken 在锁内改写。
+ func (a *Auth) IsEnterprise() bool { return strings.TrimSpace(a.EnterpriseID) != "" }
+ 
+-// IsEnterpriseSession 报告当前凭证是否处于「企业上下文」：
+-// 账号本身是企业版（IsEnterprise），或 AccessToken 签发自**企业切换会话**
+-// （JWT payload 带 token_source=enterprise_switch——浏览器在企业空间状态下
+-// 完成 OAuth 授权时签发）。
+-//
+-// 为什么单独一站：企业切换会话与真企业版的上游表现**不同**（实测 2026-10-12，
+-// 同一时刻与个人号 A/B 对照）——成长任务列表 / 额度查询 / 领养 Buddy 等**读端点
+-// 与直连 API 照常**，但 /v2/report 行为事件**返回 200 却被静默丢弃**（15 个成长
+-// 任务全部 0/x，重跑并 90s 内逐 15s 回读进度从不跳动），连登 / 签到同样无效。
+-// 即「读得见、记不上账」：不跳过则队列每轮白跑全部任务（含真实对话配额）且
+-// 无任何报错。因此行为类任务（活跃上报 / 连登 / 旅行 / 夜猫子 / 成长任务执行）
+-// 的门控应使用本方法；签到与任务列表扫描不在此列（签到失败是显式报错，
+-// 列表扫描实测可用）。额度查询 / 选号 / 保活照常（按 IsEnterprise 口径）。
+-//
+-// 每次现解码 JWT 而非 Parse 时缓存：RefreshToken 会整体换发 token，
+-// 企业切换状态可能随重新授权翻转，缓存会读到过期形态。解码成本仅一次
+-// base64 + 小 JSON（每调度轮每账号数次），可忽略。
++// IsEnterpriseSession 是沿用旧名称的保守自动化门控，不是账号身份或权益判断。
++// IsEnterprise() 使用账号响应中的 enterpriseId；JWT token_source=enterprise_switch
++// 仅表示令牌来源。上游未公开该字段的身份契约，个人登录也不能仅因此被拒绝。
++// 原项目在 2026-10-12 记录过此来源下行为上报不计进度，因此保留自动化门控，
++// 避免未验证的任务执行；不能把历史观察当作当前账号无个人权益的证据。
++// 每次读取当前 token，避免刷新后缓存的来源提示过期。
+ func (a *Auth) IsEnterpriseSession() bool {
+ 	if a.IsEnterprise() {
+ 		return true
+ 	}
++	return a.HasEnterpriseSwitchSource()
++}
++
++// HasEnterpriseSwitchSource reports only the token_source diagnostic hint.
++// It intentionally does not imply enterprise entitlement.
++func (a *Auth) HasEnterpriseSwitchSource() bool {
+ 	return jwtTokenSource(a.AccessTokenValue()) == "enterprise_switch"
+ }
+ 
+diff --git a/internal/auth/enterprise_session_test.go b/internal/auth/enterprise_session_test.go
+index 84342ed..f589785 100644
+--- a/internal/auth/enterprise_session_test.go
++++ b/internal/auth/enterprise_session_test.go
+@@ -12,8 +12,8 @@ func mustJWT(t *testing.T, payload string) string {
+ 	return "hdr." + base64.RawURLEncoding.EncodeToString([]byte(payload)) + ".sig"
+ }
+ 
+-// TestIsEnterpriseSession 企业切换会话判定：JWT token_source=enterprise_switch
+-// 视为企业上下文；无该声明 / 非 JWT / 空 token 一律否（老凭证零回归）；
++// TestIsEnterpriseSession 验证旧版自动化门控，而非账号身份判断。
++// token_source 来源提示仍触发保守门控；无该声明 / 非 JWT / 空 token 一律否；
+ // enterpriseId 非空短路为真（与 IsEnterprise 同口径）。
+ func TestIsEnterpriseSession(t *testing.T) {
+ 	cases := []struct {
+@@ -52,3 +52,21 @@ func TestIsEnterpriseSession(t *testing.T) {
+ 		}
+ 	})
+ }
++
++func TestEnterpriseSwitchSourceIsSeparateFromAccountIdentity(t *testing.T) {
++	for _, tc := range []struct {
++		name, enterpriseID, payload string
++		source, enterprise          bool
++	}{
++		{"source_only", "", `{"token_source":"enterprise_switch"}`, true, false},
++		{"enterprise_without_hint", "organization", `{"token_source":"personal"}`, false, true},
++		{"no_hint", "", `{}`, false, false},
++	} {
++		t.Run(tc.name, func(t *testing.T) {
++			a := &Auth{EnterpriseID: tc.enterpriseID, AccessToken: mustJWT(t, tc.payload)}
++			if a.HasEnterpriseSwitchSource() != tc.source || a.IsEnterprise() != tc.enterprise {
++				t.Fatal("token source and account identity were conflated")
++			}
++		})
++	}
++}
+diff --git a/internal/panel/app.js b/internal/panel/app.js
+index e007d6f..8c87601 100644
+--- a/internal/panel/app.js
++++ b/internal/panel/app.js
+@@ -435,7 +435,7 @@ function renderAccounts(list) {
+     const usageTitle = '最近一次：' + req + ' 次 / ' + totalTok + ' / 延迟 ' + latency + ' / ' + rate;
+     return '<tr class="' + cls + '" title="uid: ' + esc(s.uid) + '">' +
+       '<td class="mark" aria-hidden="true"><i></i></td>' +
+-      '<td class="who"><div class="nm">' + remarkName(s.uid, s.nickname ? esc(s.nickname) : '<span style="color:var(--ink-3)">未命名</span>') + (s.realm === 'global' ? ' <span class="realm-tag">国际版</span>' : '') + (s.enterprise ? ' <span class="realm-tag">企业版</span>' : (s.enterprise_session ? ' <span class="realm-tag">企业会话·需个人授权</span>' : '')) + '</div><div class="id">' + esc(short) + '</div></td>' +
++      '<td class="who"><div class="nm">' + remarkName(s.uid, s.nickname ? esc(s.nickname) : '<span style="color:var(--ink-3)">未命名</span>') + (s.realm === 'global' ? ' <span class="realm-tag">国际版</span>' : '') + (s.enterprise ? ' <span class="realm-tag">企业版</span>' : (s.enterprise_switch_source ? ' <span class="realm-tag">登录来源待核实</span>' : '')) + '</div><div class="id">' + esc(short) + '</div></td>' +
+       '<td>' + tag + note + rateLimits + '</td>' +
+       '<td class="cred" title="' + esc(credTip) + '"><div class="n">' + cred + '</div><div class="bar"><i style="width:' + pct + '%"></i></div></td>' +
+       '<td class="num">' + (s.success_count || 0) + ' <span style="color:var(--ink-3)">/</span> <span style="color:var(--bad)">' + (s.err_total || 0) + '</span></td>' +
+@@ -448,7 +448,7 @@ function renderAccounts(list) {
+       '</span></td>' +
+       '<td class="num" style="color:var(--ink-3)">' + ago(s.last_success) + '</td>' +
+       '<td class="acts">' +
+-        (s.enterprise_session && !s.enterprise ? '<button class="xs primary" data-a="reauthorize" data-u="' + esc(s.uid) + '" data-r="' + esc(s.realm || 'cn') + '" title="浏览器退出企业会话后，以个人身份重新授权">个人身份重新授权</button>' : '') +
++        (s.enterprise_session && !s.enterprise ? '<button class="xs primary" data-a="reauthorize" data-u="' + esc(s.uid) + '" data-r="' + esc(s.realm || 'cn') + '" title="更新同一账号凭证；来源字段不决定账号身份">更新登录授权</button>' : '') +
+         // 企业版无个人成长体系（签到 400「企业账号不支持该操作」/ 成长任务 403）：
+         // 不渲染「签到」「任务」按钮，只留「额度」——点它走 /balance，企业额度由
+         // upstream 的 get-enterprise-user-usage 口径填充。
+@@ -1296,7 +1296,7 @@ function openAdd(targetUID, targetRealm) {
+   });
+   document.querySelectorAll('#addTabs .tab').forEach(x => { x.disabled = !!reauthUID && x.dataset.tab === 'import'; });
+   $('addReauthNote').hidden = !reauthUID;
+-  $('addReauthNote').textContent = reauthUID ? '请在官方授权页面选择同一账号的个人身份；若仍自动进入企业身份，请先退出官方网页的企业会话再授权。原账号无需移除；本次仅更新凭证，不签到、不领取奖励，不保证任务资格。' : '';
++  $('addReauthNote').textContent = reauthUID ? '请在官方授权页面登录同一账号。原账号无需移除；本次仅更新凭证，不签到、不领取奖励。token_source 是来源提示，不用于拒绝同账号且未返回企业标识的新凭证，也不保证任务资格。' : '';
+   $('addPoll').textContent = '等待授权完成，自动检测中';
+ }
+ function switchAddTab(tab) {
+@@ -1338,7 +1338,7 @@ async function pollLogin() {
+       stopPoll();
+       $('addReady').hidden = true;
+       $('addDone').hidden = false;
+-      $('addDone').textContent = (r.session_kind === 'personal_reauthorization' ? '个人身份重新授权完成：' : '已添加 ') + (r.nickname || r.uid) + (r.session_kind === 'personal_reauthorization' ? '（未执行签到或奖励操作）' : (r.realm === 'global' ? '（国际版）' : '') + (r.credits >= 0 ? ' · 积分 ' + r.credits + (r.credits_total > 0 ? '/' + r.credits_total : '') : '') + '，账号已载入池中');
++      $('addDone').textContent = (r.session_kind === 'personal_reauthorization' ? '登录授权已更新：' : '已添加 ') + (r.nickname || r.uid) + (r.session_kind === 'personal_reauthorization' ? '（未执行签到或奖励操作）' + (r.enterprise_switch_source ? ' · 登录来源提示仍在，但不代表企业账号；任务资格待核验' : '') : (r.realm === 'global' ? '（国际版）' : '') + (r.credits >= 0 ? ' · 积分 ' + r.credits + (r.credits_total > 0 ? '/' + r.credits_total : '') : '') + '，账号已载入池中');
+       setTimeout(() => { closeAdd(); loadOverview(true); }, 1600);
+     }
+   } catch (e) {
+@@ -1701,7 +1701,7 @@ async function loadTasks() {
+         : t.locked ? '<span class="tag mute">未解锁</span>'
+         : t.accept_status === 'accepted' ? '<span class="tag mute">进行中</span>'
+         : '<span class="tag mute">未接受</span>';
+-      const acted = taskSessionBlocked() ? '<span class="hint">需个人身份重新授权</span>' : t.claimed || t.locked ? ''
++      const acted = taskSessionBlocked() ? '<span class="hint">自动化尚未验证</span>' : t.claimed || t.locked ? ''
+         : t.claimable ? '<button class="xs primary" data-t="claim" data-c="' + esc(t.task_code) + '">领取</button>'
+         : AUTO_TASKS[t.task_code] ? '<button class="xs primary" data-t="auto" data-c="' + esc(t.task_code) + '" title="' + esc(AUTO_TASKS[t.task_code]) + '">一键完成</button>'
+         : t.accept_status === 'accepted' ? ''
+@@ -1716,7 +1716,7 @@ async function loadTasks() {
+         '<td class="acts">' + acted + '</td></tr>';
+     }).join('');
+     st.hidden = !taskSessionBlocked();
+-    if (taskSessionBlocked()) st.textContent = '当前为企业上下文，仅展示官方任务记录；请返回账号列表完成个人身份重新授权。';
++    if (taskSessionBlocked()) st.textContent = '当前登录来源提示尚未核实，旧版任务自动化暂未验证；仅展示官方任务记录。这不等于企业账号，也不证明缺少个人权益。';
+     tb.hidden = false;
+   } catch (e) {
+     st.className = 'state err';
+diff --git a/internal/panel/autotask.go b/internal/panel/autotask.go
+index cfbf722..0a3e177 100644
+--- a/internal/panel/autotask.go
++++ b/internal/panel/autotask.go
+@@ -631,13 +631,11 @@ func (p *Panel) accountTaskAuto(w http.ResponseWriter, r *http.Request) {
+ 	if a == nil {
+ 		return
+ 	}
+-	// 企业上下文门控（企业版 / 企业切换会话）：行为事件会被上游静默丢弃或
+-	// 直接 403，执行任何成长任务都是零收益白跑（含真实对话配额）——直接拒绝
+-	// 并给出修复路径，不再让用户对着「已上报但进度 0/x」猜原因
+-	// （见 auth.IsEnterpriseSession）。
++	// 保留旧版自动化保护：真实企业标识或未经核验的来源提示均不自动执行。
++	// token_source 本身不证明企业身份或当前权益；只读任务列表仍保留。
+ 	if a.IsEnterpriseSession() {
+ 		writeErr(w, http.StatusUnprocessableEntity,
+-			"当前凭证处于企业上下文，成长任务执行已暂停；无需移除账号，请返回账号列表点击「个人身份重新授权」，在官方授权页选择同一账号的个人身份。重新授权不保证任务资格，任务进度以官方记录为准")
++			"企业标识或登录来源提示触发了旧版自动化保护，成长任务自动执行尚未验证；token_source 不等于企业账号身份，无需移除账号或反复重新授权。官方任务记录可只读查看，资格和进度以官方记录为准")
+ 		return
+ 	}
+ 	var body struct {
+@@ -1274,12 +1272,10 @@ func (p *Panel) accountTaskAutoAll(w http.ResponseWriter, r *http.Request) {
+ 	if a == nil {
+ 		return
+ 	}
+-	// 企业上下文门控：与 accountTaskAuto 同口径（企业版 / 企业切换会话下成长任务
+-	// 行为事件被上游静默丢弃，跑全量只会白耗真实对话配额）。「一键完成全部」与
+-	// 单任务入口共用同一套动作，必须一并挡上（下游 fork 吸收本 PR 时发现的缺口）。
++	// 与单任务入口共用保守保护，不因身份展示纠正而开启未验证的自动化。
+ 	if a.IsEnterpriseSession() {
+ 		writeErr(w, http.StatusUnprocessableEntity,
+-			"当前凭证处于企业上下文，成长任务执行已暂停；无需移除账号，请返回账号列表点击「个人身份重新授权」，在官方授权页选择同一账号的个人身份。重新授权不保证任务资格，任务进度以官方记录为准")
++			"企业标识或登录来源提示触发了旧版自动化保护，成长任务自动执行尚未验证；token_source 不等于企业账号身份，无需移除账号或反复重新授权。官方任务记录可只读查看，资格和进度以官方记录为准")
+ 		return
+ 	}
+ 	// per-account 互斥（与单任务动作共用一把锁）：重复点击 409。
+diff --git a/internal/panel/login.go b/internal/panel/login.go
+index 3fc2d3a..dac8ad8 100644
+--- a/internal/panel/login.go
++++ b/internal/panel/login.go
+@@ -141,7 +141,7 @@ func (p *Panel) loginStart(w http.ResponseWriter, r *http.Request) {
+ 		}
+ 		found := p.cfg.Pool.AuthByUID(reauthorizeUID)
+ 		if found == nil || found.Realm() != realm || !found.IsEnterpriseSession() || found.IsEnterprise() {
+-			writeErr(w, http.StatusBadRequest, "该账号当前不是可重新授权的企业切换会话，请先保持同一账号与版本")
++			writeErr(w, http.StatusBadRequest, "该账号不满足当前凭证更新条件，请刷新账号列表并核对同一账号与版本")
+ 			return
+ 		}
+ 	}
+@@ -261,11 +261,12 @@ func (p *Panel) loginPoll(w http.ResponseWriter, r *http.Request) {
+ 		return
+ 	}
+ 	if sess.reauthorizeUID != "" {
+-		if reauthCurrent == nil || acct.UID != sess.reauthorizeUID || acct.EnterpriseID != "" || (&auth.Auth{AccessToken: tok.AccessToken}).IsEnterpriseSession() {
++		log.Printf("panel: reauthorization result same_account=%t enterprise_id_present=%t enterprise_switch_source=%t", acct.UID == sess.reauthorizeUID, strings.TrimSpace(acct.EnterpriseID) != "", (&auth.Auth{AccessToken: tok.AccessToken}).HasEnterpriseSwitchSource())
++		if reauthCurrent == nil || acct.UID != sess.reauthorizeUID || acct.EnterpriseID != "" {
+ 			p.loginMu.Lock()
+ 			delete(p.logins, state)
+ 			p.loginMu.Unlock()
+-			writeErr(w, http.StatusBadRequest, "此次授权仍是企业身份或不是原账号，原凭证已保留；请在官方页面选择同一账号的个人身份后重新授权")
++			writeErr(w, http.StatusBadRequest, "此次授权不是原账号或上游返回了企业标识，原凭证已保留；请核对官方授权页的账号与身份")
+ 			return
+ 		}
+ 	}
+@@ -332,7 +333,10 @@ func (p *Panel) loginPoll(w http.ResponseWriter, r *http.Request) {
+ 	remain := int64(-1)
+ 	total := int64(0)
+ 	if sess.reauthorizeUID != "" {
+-		checkinMsg = "个人身份重新授权完成；未执行奖励或签到操作"
++		checkinMsg = "授权已更新；未执行签到或奖励操作"
++		if a.HasEnterpriseSwitchSource() {
++			checkinMsg += "；token_source仅为来源提示，不代表企业账号；任务资格尚未验证"
++		}
+ 	} else if sess.realm == "global" {
+ 		// 注册激活（幂等）：region required 时自动补地区（白名单首个，HK）后重新激活。
+ 		// 失败不阻断登录结果（auth 已落盘），只在返回字段里体现。
+@@ -368,11 +372,9 @@ func (p *Panel) loginPoll(w http.ResponseWriter, r *http.Request) {
+ 	delete(p.logins, state)
+ 	p.loginMu.Unlock()
+ 	log.Printf("panel: 新账号已热加载 uid=%s nickname=%q realm=%s（免重启生效）", acct.UID, acct.Nickname, sess.realm)
+-	// 企业切换会话预警：该形态下 /v2/report 行为事件被上游静默丢弃（200 不计分），
+-	// 成长任务全部无法点亮（签到/列表/额度/领养照常）。当场给出修复路径，
+-	// 避免用户事后对着「已上报但进度 0/x」排查（见 auth.IsEnterpriseSession）。
+-	if a.IsEnterpriseSession() && !a.IsEnterprise() {
+-		log.Printf("panel: WARN uid=%s 的凭证为企业切换会话（token_source=enterprise_switch）：成长任务行为事件会被上游静默丢弃；请在浏览器退出企业会话后使用个人身份重新授权", acct.UID)
++	// 来源字段不等于账号身份；保留保守自动化门控，但不要求反复登出重登。
++	if a.HasEnterpriseSwitchSource() && !a.IsEnterprise() {
++		log.Printf("panel: 登录凭证包含 enterprise_switch 来源提示；该提示不证明企业身份，旧版成长任务自动化仍待验证")
+ 	}
+ 	writeJSON(w, http.StatusOK, map[string]any{
+ 		"done":            true,
+@@ -388,6 +390,8 @@ func (p *Panel) loginPoll(w http.ResponseWriter, r *http.Request) {
+ 			}
+ 			return "new_login"
+ 		}(),
++		"enterprise":               a.IsEnterprise(),
++		"enterprise_switch_source": a.HasEnterpriseSwitchSource(),
+ 	})
+ }
+ 
+diff --git a/internal/panel/login_reauthorization_test.go b/internal/panel/login_reauthorization_test.go
+index 2b5a146..c304716 100644
+--- a/internal/panel/login_reauthorization_test.go
++++ b/internal/panel/login_reauthorization_test.go
+@@ -109,7 +109,6 @@ func TestReauthorizationRejectsInvalidCandidateWithoutOverwrite(t *testing.T) {
+ 		expires                                       int64
+ 	}{
+ 		{"wrong_uid", "other", "personal", "", "copilot.tencent.com", "refresh", 3600},
+-		{"enterprise_switch", "uid-1", enterpriseSwitchToken(), "", "copilot.tencent.com", "refresh", 3600},
+ 		{"enterprise_id", "uid-1", "personal", "organization", "copilot.tencent.com", "refresh", 3600},
+ 		{"wrong_realm", "uid-1", "personal", "", "www.workbuddy.ai", "refresh", 3600},
+ 		{"zero_expiry", "uid-1", "personal", "", "copilot.tencent.com", "refresh", 0},
+@@ -279,12 +278,13 @@ func TestReauthorizationOverviewReportsContextWithoutCredentials(t *testing.T) {
+ 		Accounts []struct {
+ 			Enterprise bool `json:"enterprise"`
+ 			Session    bool `json:"enterprise_session"`
++			SourceHint bool `json:"enterprise_switch_source"`
+ 		}
+ 	}
+ 	if err := json.Unmarshal(rec.Body.Bytes(), &data); err != nil {
+ 		t.Fatal(err)
+ 	}
+-	if len(data.Accounts) != 1 || data.Accounts[0].Enterprise || !data.Accounts[0].Session {
++	if len(data.Accounts) != 1 || data.Accounts[0].Enterprise || !data.Accounts[0].Session || !data.Accounts[0].SourceHint {
+ 		t.Fatalf("incorrect context: %s", rec.Body)
+ 	}
+ 	if strings.Contains(rec.Body.String(), old.AccessToken) {
+@@ -332,3 +332,55 @@ func TestReauthorizationGlobalUsesMatchingEndpointsAndDomain(t *testing.T) {
+ 		t.Fatalf("global recovery failed status=%d calls=%d", rec.Code, calls)
+ 	}
+ }
++
++// A personal-login token may retain this source hint. It must not cause an
++// endless reject-and-retain-old-credential loop when account identity matches.
++func TestReauthorizationAcceptsSourceHintWithoutAssertingEnterprise(t *testing.T) {
++	p, old := reauthPanel(t, "uid-1", "uid-1")
++	old.DeviceToken = "fixture-device"
++	if err := old.SaveAtomic(); err != nil {
++		t.Fatal(err)
++	}
++	p.cfg.Pool.Disable(old.UID, "preserve-disabled")
++	p.cfg.Pool.SetCredits(old.UID, 70, 100)
++	fresh := "hdr." + base64.RawURLEncoding.EncodeToString([]byte(`{"token_source":"enterprise_switch","fixture":"fresh-login"}`)) + ".sig"
++	withLoginTransport(t, old.UID, fresh)
++	p.logins["source-hint"] = loginSession{created: time.Now(), realm: "cn", reauthorizeUID: old.UID}
++	rec := httptest.NewRecorder()
++	p.loginPoll(rec, httptest.NewRequest("GET", "/?state=source-hint", nil))
++	if rec.Code != 200 {
++		t.Fatalf("source-hint login rejected: status=%d body=%s", rec.Code, rec.Body)
++	}
++	got := p.cfg.Pool.AuthByUID(old.UID)
++	if got == old || got.AccessTokenValue() != fresh || got.AccessTokenValue() == old.AccessTokenValue() || got.FilePath != old.FilePath || got.DeviceToken != old.DeviceToken {
++		t.Fatal("fresh source-hint credential not persisted with original account path/device")
++	}
++	b, err := os.ReadFile(old.FilePath)
++	if err != nil {
++		t.Fatal(err)
++	}
++	saved, err := auth.Parse(b)
++	if err != nil || saved.AccessTokenValue() != fresh {
++		t.Fatal("credential file did not contain new source-hint token")
++	}
++	if got.IsEnterprise() || !got.HasEnterpriseSwitchSource() || !got.IsEnterpriseSession() {
++		t.Fatal("source hint must not assert enterprise identity or remove existing automation gate")
++	}
++	st, _ := p.cfg.Pool.Status(old.UID)
++	if !st.Disabled || st.Credits != 70 {
++		t.Fatal("source-hint reauthorization reset runtime/balance state")
++	}
++	var response struct {
++		Done       bool   `json:"done"`
++		Enterprise bool   `json:"enterprise"`
++		Source     bool   `json:"enterprise_switch_source"`
++		Message    string `json:"checkin_message"`
++	}
++	if json.Unmarshal(rec.Body.Bytes(), &response) != nil || !response.Done || response.Enterprise || !response.Source || !strings.Contains(response.Message, "不代表企业账号") {
++		t.Fatalf("misleading response: %s", rec.Body)
++	}
++	if _, ok := p.logins["source-hint"]; ok {
++		t.Fatal("successful state not consumed")
++	}
++	// No Upstream configured: any automatic checkin/reward/balance call would panic.
++}
+diff --git a/internal/panel/panel.go b/internal/panel/panel.go
+index 95c2377..76f31d5 100644
+--- a/internal/panel/panel.go
++++ b/internal/panel/panel.go
+@@ -265,12 +265,13 @@ func (p *Panel) overview(w http.ResponseWriter, r *http.Request) {
+ 	}
+ 	type accountView struct {
+ 		pool.Status
+-		EnterpriseSession bool `json:"enterprise_session"`
++		EnterpriseSession      bool `json:"enterprise_session"`
++		EnterpriseSwitchSource bool `json:"enterprise_switch_source"`
+ 	}
+ 	accountViews := make([]accountView, 0)
+ 	for _, account := range p.cfg.Pool.List() {
+ 		a := p.cfg.Pool.AuthByUID(account.UID)
+-		accountViews = append(accountViews, accountView{Status: account, EnterpriseSession: a != nil && a.IsEnterpriseSession()})
++		accountViews = append(accountViews, accountView{Status: account, EnterpriseSession: a != nil && a.IsEnterpriseSession(), EnterpriseSwitchSource: a != nil && a.HasEnterpriseSwitchSource()})
+ 	}
+ 	writeJSON(w, http.StatusOK, map[string]any{
+ 		"version":         p.cfg.Version,
+diff --git a/internal/panel/session_recovery_ui_test.go b/internal/panel/session_recovery_ui_test.go
+index 6ea6032..bd92aad 100644
+--- a/internal/panel/session_recovery_ui_test.go
++++ b/internal/panel/session_recovery_ui_test.go
+@@ -33,7 +33,7 @@ func TestEnterpriseSessionTaskRoutesRejectBeforeMutation(t *testing.T) {
+ 			t.Fatalf("%s status=%d body=%s", path, rec.Code, rec.Body.String())
+ 		}
+ 		body := rec.Body.String()
+-		if !strings.Contains(body, "无需移除账号") || !strings.Contains(body, "个人身份重新授权") {
++		if !strings.Contains(body, "无需移除账号") || !strings.Contains(body, "不等于企业账号身份") {
+ 			t.Fatalf("%s recovery guidance missing: %s", path, body)
+ 		}
+ 	}
+@@ -49,7 +49,7 @@ func TestEnterpriseSessionTaskScanRejectsBeforeUpstream(t *testing.T) {
+ 	req.Header.Set("Authorization", "Bearer fixture-key")
+ 	rec := httptest.NewRecorder()
+ 	p.ServeHTTP(rec, req)
+-	if rec.Code != 200 || !strings.Contains(rec.Body.String(), "growth_error") || !strings.Contains(rec.Body.String(), "个人身份重新授权") {
++	if rec.Code != 200 || !strings.Contains(rec.Body.String(), "growth_error") || !strings.Contains(rec.Body.String(), "不代表企业账号") {
+ 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+ 	}
+ }
+@@ -91,3 +91,26 @@ process.stdout.write('ok');`
+ 		t.Fatalf("UI harness failed: %v output=%s", err, out)
+ 	}
+ }
++
++func TestAccountRowAndReauthorizationCopyUseIdentityNeutralLanguage(t *testing.T) {
++	src, err := os.ReadFile("app.js")
++	if err != nil {
++		t.Fatal(err)
++	}
++	text := string(src)
++	// The rendered row must not turn a source hint into an enterprise identity.
++	for _, required := range []string{
++		"s.enterprise ? ' <span class=\"realm-tag\">企业版</span>' : (s.enterprise_switch_source ? ' <span class=\"realm-tag\">登录来源待核实</span>' : '')",
++		"更新登录授权",
++		"当前登录来源提示尚未核实，旧版任务自动化暂未验证；仅展示官方任务记录。这不等于企业账号",
++	} {
++		if !strings.Contains(text, required) {
++			t.Fatalf("app.js missing identity-neutral contract: %q", required)
++		}
++	}
++	for _, forbidden := range []string{"浏览器退出企业会话后，以个人身份重新授权", "退出企业会话后，再次使用个人身份登录"} {
++		if strings.Contains(text, forbidden) {
++			t.Fatalf("app.js retained stale reauthorization instruction: %q", forbidden)
++		}
++	}
++}
+diff --git a/internal/panel/taskcenter.go b/internal/panel/taskcenter.go
+index 2ca21ea..e9aaf3f 100644
+--- a/internal/panel/taskcenter.go
++++ b/internal/panel/taskcenter.go
+@@ -83,7 +83,7 @@ func (p *Panel) tasksScanAll(w http.ResponseWriter, r *http.Request) {
+ 				return
+ 			}
+ 			if a.IsEnterpriseSession() {
+-				it.GrowthErr = "当前凭证处于企业上下文，成长任务已跳过；无需移除账号，请在账号列表点击「个人身份重新授权」"
++				it.GrowthErr = "登录来源提示触发旧版自动化保护，成长任务自动执行尚未验证；该提示不代表企业账号，无需移除账号或反复重新授权"
+ 				return
+ 			}
+ 			if tasks, err := p.cfg.Upstream.ListTasks(a); err != nil {
+@@ -226,16 +226,13 @@ func (p *Panel) startGrowthQueue(concurrency int, growth bool) (started bool, to
+ 			if a.IsGlobal() {
+ 				return
+ 			}
+-			// 企业版门控：同上（企业版无个人成长体系，任务端点上游一律 403）。
+-			// 企业切换会话（token_source=enterprise_switch）同跳：任务列表读得到，
+-			// 但执行后行为事件被上游静默丢弃（200 不计分）——每项都是零收益白跑
+-			// （含 expert_5 等真实对话配额），故不入队并给出重登指引（见
+-			// auth.IsEnterpriseSession）。
++			// 企业标识按既有规则门控；来源提示则只代表旧版自动化尚未核验。
++			// 不把 token_source 当作企业身份，也不要求反复重新授权。
+ 			if a.IsEnterprise() {
+ 				return
+ 			}
+ 			if a.IsEnterpriseSession() {
+-				log.Printf("panel: WARN 队列跳过 uid=%s nickname=%q：凭证为企业切换会话（token_source=enterprise_switch），成长任务已跳过；无需移除账号，请从账号列表发起「个人身份重新授权」，在官方授权页选择同一账号的个人身份", a.UID, a.Nickname)
++				log.Printf("panel: WARN 队列跳过 uid=%s nickname=%q：凭证包含来源提示 token_source=enterprise_switch，旧版成长任务自动化尚未验证，已跳过；该提示不代表企业身份，无需移除账号或反复重新授权", a.UID, a.Nickname)
+ 				return
+ 			}
+ 			if growth {

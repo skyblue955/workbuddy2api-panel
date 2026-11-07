@@ -1,0 +1,40 @@
+{
+  "actual_chat_requests": 2,
+  "authorization": "user explicitly approved two short requests",
+  "automatic_retries_allowed": false,
+  "credential_values_redacted": true,
+  "model": "deepseek-v4-flash",
+  "reply_text_redacted": true,
+  "state_changing_reward_calls": 0,
+  "tests": [
+    {
+      "content_nonempty": true,
+      "elapsed_ms": 1835,
+      "http_status": 200,
+      "passed": true,
+      "reasoning_output_absent": true,
+      "reply_matches_ok": true,
+      "requested_max_output_tokens": 16,
+      "schema_valid": true,
+      "stream": false,
+      "terminal_done": false
+    },
+    {
+      "content_nonempty": true,
+      "elapsed_ms": 2112,
+      "http_status": 200,
+      "passed": true,
+      "reasoning_output_absent": true,
+      "reply_matches_ok": true,
+      "requested_max_output_tokens": 16,
+      "schema_valid": true,
+      "stream": true,
+      "terminal_done": true
+    }
+  ],
+  "time": "2026-11-02T21:10:13+08:00",
+  "upstream_chat_statuses": [
+    200,
+    200
+  ]
+}

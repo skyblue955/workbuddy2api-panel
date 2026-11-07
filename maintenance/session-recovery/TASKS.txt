@@ -1,0 +1,8 @@
+Enterprise-context recovery task queue
+Baseline: 5166bc9c0d0c7b10f31abd44c5271d8460d97c76
+Observed private metadata only: enterpriseId absent, token_source enterprise_switch, realm cn, credential unexpired. No token/account identifier persisted here.
+Root cause: overview exposed only the enterpriseId-derived enterprise flag, whereas task execution checks enterprise-session context. UI presented tasks without a recovery action; error unnecessarily instructed account deletion.
+Scope: explicit same-account personal reauthorization; preserve account/state/path; reject wrong identity/enterprise candidate; no automatic reward or billing operation during reauthorization. Keep eligibility enforcement and original account credentials on rejection.
+Official reference checked 2026-11-02: https://www.codebuddy.cn/docs/workbuddy/FirstTask states personal users choose personal login, enterprise users enterprise login. Public documentation found does not define token_source or guarantee growth-task qualification after reauthorization. Claim decoding is a local diagnostic, not proof of subscription or qualification.
+Acceptance: baseline relevant tests; new deterministic reauth + guard + frontend regressions; full verify; independent review/remediation; reverse patch on disposable source copy + baseline behavior; local binary deployment and readonly smoke. Manual personal OAuth required for live recovery; no account rewards/chat requests authorized by this task.
+Status: implementation, deterministic testing, independent review, rollback and local deployment passed. Pending: manual same-account personal OAuth and readonly follow-up verification. Prior account is retained. No task completion or reward was submitted.

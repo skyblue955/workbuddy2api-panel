@@ -1,0 +1,37 @@
+[
+  {
+    "path": "internal/panel/autotask.go",
+    "function": "runChat5",
+    "original_sha256": "6d4cda15103807b2f511dc4c3dc94a02eb15df81a3167bd0f2197fa07508ce10",
+    "maintained_sha256": "6d4cda15103807b2f511dc4c3dc94a02eb15df81a3167bd0f2197fa07508ce10",
+    "identical": true
+  },
+  {
+    "path": "internal/panel/autotask.go",
+    "function": "runExpertBatch",
+    "original_sha256": "cfd40b628b52a000c3b0ad09d957fb0852b355a898c7ea09102449f6d8d2041d",
+    "maintained_sha256": "cfd40b628b52a000c3b0ad09d957fb0852b355a898c7ea09102449f6d8d2041d",
+    "identical": true
+  },
+  {
+    "path": "internal/upstream/report.go",
+    "function": "ReportChatActivityModel",
+    "original_sha256": "336c73453de6383d75e63c177e03cda2eb3bab1038ea078c583565660ca70bea",
+    "maintained_sha256": "336c73453de6383d75e63c177e03cda2eb3bab1038ea078c583565660ca70bea",
+    "identical": true
+  },
+  {
+    "path": "internal/upstream/desktop.go",
+    "function": "DesktopChatWithExpert",
+    "original_sha256": "e0187f9e689030cee577bda00e9659141f73827261cd228b733e716535993547",
+    "maintained_sha256": "b40de1ed6d0505d2d0697050c7392b48aed1fb4f8da507000bf3c5422f37df9a",
+    "identical": false
+  },
+  {
+    "path": "internal/upstream/desktop.go",
+    "function": "MarketExpertList",
+    "original_sha256": "2d907a5478cf01d69078b4ad0edf7a8721b5a2e921f60b125c0b5fb7497a17c8",
+    "maintained_sha256": "2d907a5478cf01d69078b4ad0edf7a8721b5a2e921f60b125c0b5fb7497a17c8",
+    "identical": true
+  }
+]

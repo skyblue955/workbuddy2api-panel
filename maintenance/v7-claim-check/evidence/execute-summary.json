@@ -1,0 +1,52 @@
+{
+  "local_calls": [
+    {
+      "method": "GET",
+      "route": "overview",
+      "status": 200
+    },
+    {
+      "method": "POST",
+      "route": "balance",
+      "status": 200
+    },
+    {
+      "method": "POST",
+      "route": "claim_ready",
+      "status": 200
+    },
+    {
+      "method": "POST",
+      "route": "claim_ready",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "route": "tasks",
+      "status": 200
+    },
+    {
+      "method": "POST",
+      "route": "balance",
+      "status": 200
+    }
+  ],
+  "tasks_checked": 19,
+  "execute_batches": 2,
+  "selected": 0,
+  "upstream_claim_attempts": 0,
+  "rewards_confirmed": 0,
+  "reason_counts": {
+    "not_ready": 15,
+    "already_claimed": 3,
+    "missing_task": 1
+  },
+  "before_claimed": 3,
+  "after_claimed": 3,
+  "balance_delta_observed": 0,
+  "config_auth_unchanged": true,
+  "chat_calls": 0,
+  "event_calls": 0,
+  "enrollment_calls": 0,
+  "automatic_claim_retries": 0
+}

@@ -1,0 +1,12 @@
+Baseline ec78db5; SHA256 or ABSENT before modification.
+f155aa086262c9f6bdc1c436ba444404b25ba09b8caefa41b259b128df5f28aa  internal/panel/app.js
+55d6eadd9109d3330e8a3f87f9fd8eb40d924e87a02ffc49dda7b31e42af7a4e  internal/panel/autotask.go
+ABSENT  internal/panel/legacy_queue_integrity_test.go
+ABSENT  internal/panel/legacy_result_ui_test.go
+ABSENT  internal/panel/legacy_reward_integrity_test.go
+203ed341f06b47dd3614c991add3f10126a661a0e0652b5025e4243acc86e8cc  internal/panel/taskcenter.go
+0500718b1778a922d2d9862d306ca8826872e31f89e58e87716f95bc731e22f9  internal/panel/tasks.go
+336b068b2764098cbcfd11134320ff2b24e448d9818dc0005304ade5bb10d475  internal/panel/tasksweep.go
+be5e1f08938e878347947752d11785cb7994e18b9db45f387d2d175342b2826c  internal/panel/tasksweep_test.go
+0fbd6f25619784feca9fc1e6e8b3e7d7566bb95177b192bc815dfffe18400832  internal/upstream/tasks.go
+ABSENT  internal/upstream/tasks_integrity_test.go

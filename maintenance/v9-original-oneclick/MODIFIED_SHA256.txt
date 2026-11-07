@@ -1,0 +1,2 @@
+f305c7803f6892be3863c3022de485e3ea7b50dcb7ed3d7865d61a2ddb42db67  internal/panel/autotask.go
+94040ef88449a96927e167872480851a0dbb6b24ecd40b694c0e87a624172431  internal/panel/autotask_ready_skip_test.go

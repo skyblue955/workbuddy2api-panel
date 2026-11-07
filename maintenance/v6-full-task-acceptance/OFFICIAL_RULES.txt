@@ -1,0 +1,16 @@
+2026-11-07 官方资料核验（仅公开文档，不替代当前账号任务回读）
+
+https://www.workbuddy.cn/docs/workbuddy/From-Beginner-to-Expert-Guide/Function-Description/Expert-Center
+专家代表角色与方法，专家团代表实际协作；带Skill/MCP的外部能力仍按需授权。推论：普通聊天HTTP200或header有expert id，不足以证明角色/团队完成或成长计分。
+
+https://www.workbuddy.cn/docs/workbuddy/From-Beginner-to-Expert-Guide/Function-Description/Design-Idea
+设计创意成长奖励以成长计划细则为准。首次使用涉及Ardot连接授权，之后可读写与同步云端画布。旧create_canvas函数只发事件，不等同实际创建画布；本轮未把“全量验收开始”解释为新增Ardot授权或云端资产操作。
+
+https://open.workbuddy.cn/docs/openapi
+当前公开能力目录含OAuth、资料、本地助理、云端任务、ACP/产物和兑换码核销；未在该目录找到旧成长任务自动完成的开放契约。此结论仅限所查文档，不等于声称私有接口不存在。
+这是可选第三方应用集成的文档；普通账号旧任务/余额查询仍沿用原账号登录，不要求用户注册开发者账号，也不把OAuth令牌与旧客户端凭据混用。
+
+https://www.workbuddy.cn/docs/workbuddy/From-Beginner-to-Expert-Guide/Function-Description/Setting
+成长计划、活动入口与套餐积分为不同入口；任务发奖须按对应活动规则与真实资格，不把任意事件200算完成。
+
+本轮不抄录官方大段文本；以上为摘要与明确标示的工程推论。真实账户的活动是否下发/锁定/失效/可领由一次只读快照记录，不由搜索结果猜测。

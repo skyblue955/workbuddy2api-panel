@@ -1,0 +1,16 @@
+2026-11-07 v8 代码入口真实任务自动化（工程交付完成，真实任务完成未通过）
+基线9c8b77a07e1f920de238f72092890b3d9aeb9d24；分支maintenance/v1-compat-rewards；接续PR2。
+DONE S1 原代码/context调查；不重复已验收25动作fixtures/14报名。
+DONE S2 upstream上下文绑定、严格schema、无redirect、单次请求、短聊天、余额/回执旧入口复用。
+DONE S3 经过鉴权的plan/execute，chat_5独立真实执行器、逐次增长回读、资格变化停止、同ID持久化预约/去重、default/MP分离。
+DONE S4 桌面按钮、付费/领奖独立确认、双击/切账号/异常复查/奖励真值VM测试；旧chat_5上报按钮不再默认使用。
+DONE S5 独立security_reviewer审查与整改；廉价角色usage限制后root接管写入，未改全局配置。
+DONE S6 baseline/modified/clean/rollback完整gate、路由/空function_call探针、9文件hash/absence、二进制副本回滚。
+DONE S7 真实授权仅用1/5次chat；原始handler chat_failed（HTTP200，空function_call占位误判）；已停止付费。定位最小fix，脱敏fixture与原始capture离线回放PASS，不新发请求。
+DONE S8 真任务只读回读19项/已领3/可领0，chat_5仍0/5；真实API聊天未证明能计入成长任务，本轮claims0/events0/报名0；4次未使用，不自动补发或换ID续跑。
+DONE S9 本地面板更新为144c62bd...，只读plan19项/3HTTP200；8计划关闭/global关闭/auth与config哈希相同。
+DONE S10 小提交a1b32ae/fce9f6b/2b27384已推fork；PR2 OPEN且head一致，验收comment已追加，见GIT_DELIVERY.txt。
+OPEN G1 真正完成chat_5并获得一次符合资格的奖励：尚未通过，不能将聊天成功等同任务计数增长。
+OPEN G2 其余18项真实动作/新增活动执行器尚未逐项验证；旧17事件上报不构成真实完成证据；无官方可核实契约的新渠道不接入。
+OPEN G3 移动版新增UI、跨不同operation_id全局exactly-once、pending自动恢复不在本轮实现；日志保守阻断重发。
+新授权账本真实chat尝试1/5、claim0/1；旧专家授权实际2/8剩6不混用。本轮不追加未经确认的消耗/领养/协议/兑换/连接器/定时操作。

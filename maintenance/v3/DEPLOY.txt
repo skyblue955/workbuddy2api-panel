@@ -1,0 +1,52 @@
+Maintenance v3 — domestic WorkBuddy acceptance and explicit claim-only API
+Date2026-11-07 documentation refresh; live acceptance evidence dated 2026-11-04. Domestic app: /Applications/WorkBuddy.app, bundle com.tencent.workbuddy.mac,V5.9.3. WorkBuddy AI/global real testing is excluded.
+Source commits: c0c1f27 (claim-only route) + 1a62232 (preserve claimed state in read-only previews).
+
+Build/test
+Use project Go1.27.3, Node22(fnm); Pythonhelpers uv. No global Codex/model setting changed.
+  bash scripts/verify.sh
+  go build -buildvcs=false -o /PRIVATE/workbuddy-next ./cmd/server
+Only update local manualtest after fullgate and independentreview; keep private config/auth unchanged and existing schedules off. Native service127.0.0.1:7863/panel/; not a release/proddeploy.
+
+Explicit claim-only route
+  POST /panel/api/accounts/ACCOUNT_UID/tasks/claim_ready
+  Authorization: Bearer LOCAL_PANEL_KEY
+  Content-Type: application/json
+Default preview(no claim):
+  {"task_codes":["Library_read"],"execute":false}
+After separate approval for that exactaccount/tasks/rewardeffect:
+  {"task_codes":["Library_read"],"execute":true}
+Pass key locally via a private client/config, not commandarguments/chat/logs. Generic example is not a credential or liveexecution instruction.
+
+- Requires1..10 unique nonblank exactrequestedcodes. Malformed/unknown/duplicateJSONkeys/trailingJSON/nulltypes/>8KiB are rejected400 before upstream. Missingaccount404; unauth401; busy409; global/concreteenterprise422. Token-source hint alone is not enterprise identity.
+- Uses only existing default task list. No accepting tasks, behavior reports, chat, agreement/Buddy actions, MP headers/fallbacks, cron enablement, or invented progress.
+- Only selects uniquelylisted, unclaimed, unlocked tasks with target>0,current>=target and Claimable. Buddy-reward and MP tasks and explicit inactive status are skipped. Unknown progress is unknown, never a completed task. Caller allowlist is independent of legacy autoAction registry.
+- Execute attempts each selected task once and makes one final default-list confirmation. Uncertain outcomes are not automatically retried. This is per-request/process locking, NOT distributed/crash-safe exactly-once. Existing manual accept/accept_all/claim now share the task lock; no behavior removed.
+- 'claims' counts attempted POSTs, not awards. 'confirmed' requires a unique claimed post-state; reward_received additionally requires a positive nonnegative parsed receipt. receipt_reward_reported is a receipt observation, not independent balance proof. submitted_unverified/uncertain/claimed_outcome_uncertain and ok=false/complete=false are not success. no_op=true means no execution needed, NOT task completion/payout.
+- Existing upstream ClaimReward parser remains permissive about missing/null/duplicate receipt fields. Do not describe it as strict schema validation. The separate live one-off uses strict receipt decoding and independent balance reads; that does not silently change the production parser.
+- API remains legacy_unverified, not an official public growth-task contract. Official UI eligibility and legacy list can disagree; retain the guard and surface the discrepancy instead of claiming recovery. Official UI/user-observed readiness does not justify manufacturing backend progress.
+
+Current live tests are manual one-off opt-in runs, NOT automated CI tests. All actual account source/evidence remain private under gitignored data/live-v3,0700 directories/0600 files. Transport allowlists/oneoff markers enforce task/method/host/requestcount bounds. Never rerun an execute marker or consume old grants; seek fresh specific approval for extra calls.
+
+Rollback
+  bash maintenance/v3/ROLLBACK.sh /ABSOLUTE/ISOLATED_SOURCE_COPY
+Reverses only5code/testfiles in this batch to93ce125; keep audit/docs. Verified in a separate archive copy with hashchecks and fullgate. Real workingtree keeps changes.
+For Git source rollback, revert source commitc0c1f27 on a taskbranch, rerun gate; no reset/forcepush/upstream/mainpush.
+For local manualtest binary rollback:
+  bash data/local-dev/service.sh stop
+  cp -p data/local-dev/wb2api.before-v3 data/local-dev/wb2api
+  bash data/local-dev/service.sh start
+Preserve private config/auth and optional official redemption journal. Source/binary rollback never reverses upstream taskregistration, consumedchatcredits or any rewardreceipt. No release/tag/imagepublication.
+
+
+Final local deployment observation (recorded 2026-11-07)
+- Native final service state from the Nov 4 run: running, PID 87242. The first state-fix deployment attempt failed during bootstrap; fallback restored 646649 (PID 86794), then the grace wait for old-PID exit and retry passed with current e1ca68c7d359ec2ed77d6d2cc7373cf4237017a3112608ef56e14beb14681671. The shutdown-race explanation is inferred; only the command outcomes and PIDs are observed.
+- Postclaim read-only preview command: `python data/local-dev/v3-live-preview.py`. Input: local deployed service, `task_codes=["Library_read"]`, `execute=false`; no account mutation. Literal output: `DEPLOYED_READONLY_PREVIEW_HTTP=200`; `CLAIM_ATTEMPTS=0 ALREADY_CLAIMED=true NEW_REWARD=false`; `POSTCLAIM_NO_DUPLICATE_MUTATION_PASS`. Exit 0. This corresponds to claims=0, selected=0, reason=already_claimed, upstream_claimed=true, new_reward=false.
+- No new live calls were made during this continuation.
+
+Release-note caveats for coordinator
+- Autonomous preclaim eligibility discovery is still incomplete because the legacy task list can disagree with official UI readiness; this acceptance does not claim scheduled/autonomous qualification.
+- The production legacy receipt parser remains permissive; the strict one-off receipt/balance checks do not change that production contract.
+- No distributed/crash-safe exactly-once guarantee is claimed, and no push/release/tag/image publication is recorded here.
+
+2026-11-07 local recovery: if manualtest service registration was lost, verify all8automatic schedule flags and global.enabled are false before service.sh start. Preserve existing config/auth; never enable schedules as a workaround. Latest localhealth200 doesnot replace fresh authorized account testing. This round's3chat/1registration/1claim allowance is consumed.

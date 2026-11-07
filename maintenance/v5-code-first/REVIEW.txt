@@ -1,0 +1,7 @@
+2026-11-07 独立审查记录
+security_reviewer /root/v5_security_review：公开claim_envelope.go、tasks.go两个领奖调用点与claim_envelope_test.go，未发现新增实质安全问题；HTTPClient共享状态/跳转/401429分类/MP400fallback/重复JSON/code类型/体积/race均验证。实际 go test -race ./internal/upstream -run 'TestClaimEnvelope|TestClaimRewardMPFallsBack' -count=1 PASS exit0。
+reviewer /root/v5_probe_review：独立复核真实Panel入口测试与私有一次性探针。发现summary可覆写、nilBody、ID-only exit0及分包SSE观察边界；root已整改并复核无新增阻断。LoadDir可能realm回写由root发现并改为auth.Parse不保存。固定readonly.marker是本轮一次预算闸，不是通用可重复工具。
+分包完整run fixture：exit3 UNCONFIRMED、真实原helper、chatPOST1、Read1/Close1/后包未读取、hash未变，证明未把ID当完成，也未drain改变原行为。
+最终 go test ./data/live-v5/code-entry-probe -count=1 与 go test -race ./data/live-v5/code-entry-probe -count=1 均exit0。
+reviewer沙箱完整panel测试曾因既有httptest监听权限失败exit1；root在允许本地监听的完整modified/clean/rollback门禁均PASS，不把权限失败当功能缺陷。
+最终公开生产diff只增加领奖响应局部guard；旧桌面、聊天与auto action代码hash保留，独立调查和root实测不以子代理“完成”代替验收。

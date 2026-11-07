@@ -1,0 +1,9 @@
+2026-11-07 local service recovery; NOT a fresh upstream-account acceptance
+Initial curl --max-time5 --fail --silent http://127.0.0.1:7863/healthz: exit7; service not registered after interruption.
+Read-onlylaunchctlstatus: local.workbuddy.manualtest not found,exit1.
+Validated all8schedule enabledflags=false and global.enabled=false beforestart.
+Command: bash data/local-dev/service.sh start ; exit0.
+uv Pythonhelper auth-status-smoke.py before/after: PRIVATE_DEPLOY_SNAPSHOT_SAVED ; OVERVIEW_HTTP=200 ; AUTHORIZATION_STATE=valid ; AUTHORIZED_BUTTON=green ; JS_AND_CSS_STATES=PASS ; CREDENTIAL_AND_CONFIG_UNCHANGED=true ; LOGIN_REWARD_MODEL_CALLS=0 ; READONLY_SMOKE_PASS ; exit0.
+Command: curl --max-time5 --fail --silent http://127.0.0.1:7863/healthz ; exit0.
+Literal output: {"healthy":1,"realm_servable":{"cn":true,"global":false},"service":"workbuddy2api","total":1}
+Local service observed state=running,pid14540. This reflects liveness/local credential metadata, not fresh upstream chat or reward readiness. No inference/registration/claim allowance was reused. Startup background readonly warmup was not network-instrumented.

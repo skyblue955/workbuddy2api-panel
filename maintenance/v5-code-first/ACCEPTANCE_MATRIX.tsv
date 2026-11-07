@@ -1,0 +1,13 @@
+验收项	确定性fixtures/本轮结果	真实账号结果	证据/边界
+旧专家查询与提交入口	新tests在原facf981及当前版本都PASS	目录agent/team各20；原聊天HTTP200/ID/content	原helper提交跟踪契约保留，无完整DONE
+原任务自动动作与状态机	真实Panel route+原runChat5 mock；5/5后领一次、重复无增加、1/5不领、失败不完成	专家1/5、团0/3，延迟GET不变；未领奖	fixture≠真实产品动作；其余任务未全量真实通过
+领奖正常与异常信封	正常100/5保留；missing/null code/302拒绝；MP400fallback PASS	本轮0项合格，不探测性领取	baseline/modified/rollback-probe.log
+API限流	TestRetryAfterGatewayErrors/TestChatSoftCoolsOnRateLimitBody等在完整gate PASS	没有故意制造真实限流	沿用已验收旧实现
+授权过期/401	TestReauthorizationRejectsMismatchAndExpiredWithoutNetwork/TestClaimEnvelopePreservesHTTPErrorClassification PASS	当前有效授权，只读200	未故意使真实凭据过期
+超时/异常/截断	TestIsUpstreamTimeout/TestTruncatedStreamIsNotSuccessOrRetried及claim malformed PASS	原helper未观察DONE，UNCONFIRMED exit3，不重试	无最终回答/任务完成成功声明
+资格/重复/活动到期	TestGrowthProgressAndInactiveEligibility/TestTaskSweepLockedAndExpiredReachedProgressDoesNotMutate/新Panel入口tests PASS	19项0可领，两个已批准任务尚不达标	不代表新活动已有官方接入契约
+签到/重试	既有DailyCheckin transient/business/4xx用例在gate PASS	沿用v1已授权单次签到记录，本轮不重复签到	真实授权不跨轮重放
+凭据/日志	TestDesktopDebugDoesNotLogCredentials/授权overview去敏、race PASS	配置auth哈希不变；public仅匿名状态摘要	私有凭据/完整账号数据/个人payload不入Git
+干净构建	干净archive正向patch完整verify PASS（缓存依赖）	本地原生binary部署、overview200、400/401/404拒绝PASS	8计划off/globalfalse；非生产部署
+回滚	独立副本reverse patch+5hash/absence+完整gate PASS	二进制副本覆盖恢复/cmp/-help PASS	不回滚当前维护树；不撤销账号计费/奖励
+新增积分活动	沿用已有只读catalog与失效规则tests PASS	本轮未证明新的可用官方积分渠道	不能把task_count19当新增渠道适配完成

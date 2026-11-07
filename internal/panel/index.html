@@ -161,6 +161,15 @@ button.ghost { background: transparent; }
 button.danger { color: var(--bad); }
 button.danger:hover:not(:disabled) { border-color: var(--bad); }
 button.xs { padding: 3.5px 9px; font-size: 12.5px; border-radius: 6px; white-space: nowrap; }
+/* Authorization has its own state; source hints, rate limits and manual pauses do not set it. */
+button.auth-action { font-weight: 550; }
+button.auth-idle { color: var(--ink-3); background: var(--surface); border-color: var(--line); }
+button.auth-pending { color: var(--accent-ink); background: var(--accent); border-color: var(--accent); }
+button.auth-valid { color: var(--ok); background: var(--ok-soft); border-color: var(--ok); }
+button.auth-warning { color: var(--warn); background: var(--warn-soft); border-color: var(--warn); }
+button.auth-expired { color: var(--bad); background: var(--bad-soft); border-color: var(--bad); }
+button.auth-pending:disabled, button.auth-valid:disabled { opacity: 1; }
+button.auth-action:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 /* select.xs：header 里的紧凑选择框。通用 input/select 规则是 width:100%（表单页用），
    header 里若不收窄会把同行 note 挤到换行——收成内容宽并压小外观，与 button.xs 同款。 */
 select.xs { width: auto; padding: 3.5px 9px; font-size: 12.5px; border-radius: 6px; }
@@ -1301,6 +1310,7 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
     <div class="body">
       <!-- 浏览器登录 -->
       <div id="addTabLogin" class="tab-panel">
+        <div id="addReauthNote" class="state" hidden></div>
         <div id="addPick">
           <div class="realm-row">
             <span class="hint" style="font-size:12px">版本：</span>

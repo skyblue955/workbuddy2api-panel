@@ -1,0 +1,16 @@
+2026-11-07 observed delivery checkpoint (receipt committed after these observations)
+branch maintenance/v1-compat-rewards
+origin https://github.com/skyblue955/workbuddy2api-panel.git
+source commit 6530d57 (ready action skip + deterministic regression tests)
+records checkpoint b2a14ca16dd9b89b05d176da0fe60177c5d8dc28
+command git push origin maintenance/v1-compat-rewards
+literal output c4fd2ab..b2a14ca maintenance/v1-compat-rewards -> maintenance/v1-compat-rewards ; exit0
+command git ls-remote origin refs/heads/maintenance/v1-compat-rewards
+literal result b2a14ca16dd9b89b05d176da0fe60177c5d8dc28 ; exit0 ; local/remote equal
+command gh pr view 2 --repo skyblue955/workbuddy2api-panel --json url,state,headRefName,baseRefName,headRefOid
+literal result OPEN, main <- maintenance/v1-compat-rewards, headRefOid b2a14ca16dd9b89b05d176da0fe60177c5d8dc28 ; exit0
+PR https://github.com/skyblue955/workbuddy2api-panel/pull/2
+command gh pr comment 2 --repo skyblue955/workbuddy2api-panel --body-file /private/tmp/workbuddy-v9-pr-comment.md
+literal result https://github.com/skyblue955/workbuddy2api-panel/pull/2#issuecomment-6707086078 ; exit0
+tracked data/live-v9-deploy files=0; worktree clean at checkpoint. No main/upstream/force/release/production operation.
+This receipt is historical observed evidence; its later commit does not change accepted code or claim a not-yet-observed head. Final local/remote/PR equality is rechecked after that receipt commit.

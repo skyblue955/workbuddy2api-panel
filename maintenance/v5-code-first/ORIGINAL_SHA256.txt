@@ -1,0 +1,5 @@
+ba9fbafe7cdf818b70c6a0bd56968549def350fdac669471320fc07aaa9293f0  internal/upstream/tasks.go
+ABSENT  internal/upstream/claim_envelope.go
+ABSENT  internal/upstream/claim_envelope_test.go
+ABSENT  internal/upstream/desktop_contract_test.go
+ABSENT  internal/panel/code_entry_regression_test.go

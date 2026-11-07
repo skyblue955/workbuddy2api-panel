@@ -1,0 +1,5 @@
+=== RUN   TestV2BehaviorEvidence
+TRUNCATED_EOF_ACCEPTED_AS_SUCCESS=false
+--- PASS: TestV2BehaviorEvidence (0.00s)
+PASS
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/upstream	0.822s

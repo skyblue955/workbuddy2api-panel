@@ -1,0 +1,103 @@
+2026-11-07 v8 维护交付与真实账号验收（项目整体/全任务自动完成尚未通过）
+当前：chat_5 真实代码工作流 / 工程测试通过、真实任务0/5未增长 / 保留未通过项，不补发事件或追加付费重试。
+分支 maintenance/v1-compat-rewards；基线9c8b77a07e1f920de238f72092890b3d9aeb9d24。
+兼容修复提交a1b32ae；独立工作流/测试提交fce9f6b；审计记录提交另见Git历史和GIT_DELIVERY.txt。
+改变的分支/字段：
+- POST /panel/api/accounts/{uid}/tasks/workflow 默认execute=false；execute=true仅chat_5、明确模型、预算与operation_id。
+- 任务状态看上游current/target/claimed/资格及default来源，不将事件HTTP200当完成。
+- reward_received 必须满足receipt_reward_reported + upstream_claimed + balance_verified + delta==receipt.credit。
+- consumeModelChatCompletion.function_call：仅空对象或name/arguments全空字符串的占位放行；实际调用/未知字段/错误类型仍拒绝。
+- UI付费取消不执行；领奖独立确认；同ID未确认操作只核对不自动换ID重发。
+
+四个真实工件（已重新打开并校验）：
+MODIFIED_FILE /Users/jinyanya/Code/Codex/workbuddy/maintenance/v8-task-workflow/MODIFIED_FILE.txt
+DIFF_FILE /Users/jinyanya/Code/Codex/workbuddy/maintenance/v8-task-workflow/DIFF_FILE.patch
+VERIFICATION /Users/jinyanya/Code/Codex/workbuddy/maintenance/v8-task-workflow/VERIFICATION.txt
+ROLLBACK /Users/jinyanya/Code/Codex/workbuddy/maintenance/v8-task-workflow/ROLLBACK.sh（executable）
+MODIFIED_FILE为当前panel/task_workflow.go的逐字副本；DIFF_FILE包含9个源/测试文件，4旧文件hash+5原先不存在，见ORIGINAL_SHA256.txt。
+补丁不包含凭据、真实账号记录或用户私人输入；完整真实回执仅留忽略目录data。
+
+BASELINE
+exact command: bash scripts/verify.sh
+input: git archive 9c8b77a 的干净隔离副本；确定性fixtures，无真实账号。
+literal output/result: ACCEPTANCE PASS; BASELINE_VERIFY_EXIT=0; exit status 0.
+log: evidence/baseline-verify-final.log。
+exact probe command: go test ./internal/panel -run '^TestV8RouteProbe$' -count=1 -v
+input: ROUTE_PROBE.txt临时复制到隔离副本；POST /panel/api/accounts/fixture/tasks/workflow，Authorization fixture，body {}。
+literal output: ROUTE_PROBE HTTP=404 READS=0 CHAT=0 CLAIM=0; PASS; exit status 0.
+exact bug probe command: go test ./internal/panel -run '^TestV8EmptyFunctionProbe$' -v -count=1
+input: EMPTY_FUNCTION_PROBE.txt的脱敏完整正文/stop/DONE + 空name/arguments尾帧。
+literal output: EMPTY_FUNCTION_PROBE COMPLETE=false CHAT=0 CLAIM=0; PASS; exit status 0.
+这证明原完成流检查存在false negative，不把探针命令PASS误写成原功能正确。
+
+MODIFIED
+exact command: bash scripts/verify.sh
+input: 当前维护版源代码/确定性fixtures；node --check、bash -n、go vet ./...、go test -race ./...、go build ./...。
+literal output/result: ACCEPTANCE PASS; MODIFIED_VERIFY_EXIT=0; exit status 0.
+log: evidence/modified-verify-final.log（首轮修复前工程gate另留modified-verify.log）。
+exact clean command: bash maintenance/v8-task-workflow/evidence/run-isolated.sh
+input: 基线archive干净副本应用DIFF_FILE.patch；完整gate + 同输入探针 + 反向补丁 + 完整gate。
+literal output/result: ISOLATED_GATES_PASS; exit status 0.
+clean log: ACCEPTANCE PASS; CLEAN_VERIFY_EXIT=0; exit status 0.
+exact modified probe command: go test ./internal/panel -run '^TestV8(RouteProbe|EmptyFunctionProbe)$' -count=1 -v
+input: 与baseline相同两个fixture文件，仅临时复制入隔离副本。
+literal output: EMPTY_FUNCTION_PROBE COMPLETE=true CHAT=0 CLAIM=0
+literal output: ROUTE_PROBE HTTP=200 READS=2 CHAT=0 CLAIM=0
+PASS; exit status 0. log evidence/modified-probe.log。
+
+ROLLBACK
+exact command: bash maintenance/v8-task-workflow/ROLLBACK.sh "$CLEAN"
+input: evidence/clean-path.txt记录的绝对隔离副本路径；9文件修改态，当前维护工作区不动。
+literal output/result: ROLLBACK PASS: 9c8b77a source restored; 9 hashes/absences matched; exit status 0.
+exact restored gate command: bash scripts/verify.sh
+input: 同一已回滚隔离副本及原fixtures。
+literal output/result: ACCEPTANCE PASS; ROLLBACK_VERIFY_EXIT=0; exit status 0.
+exact restored probe command: go test ./internal/panel -run '^TestV8(RouteProbe|EmptyFunctionProbe)$' -count=1 -v
+literal output: EMPTY_FUNCTION_PROBE COMPLETE=false CHAT=0 CLAIM=0
+literal output: ROUTE_PROBE HTTP=404 READS=0 CHAT=0 CLAIM=0
+PASS; exit status 0. restored behavior/status: 新路由撤回404、旧空function_call误判恢复、9hash/absence匹配；维护工作区仍是新版本。
+logs: evidence/rollback-verify.log、rollback-manifest-final.log、maintained-hashes.log。
+校验和清单最初单空格不符合shasum -c格式，规范为双空格后9项全部OK；哈希值及源码未改变。
+二进制已在另一副本用before-v8覆盖并cmp验证，BINARY_COPY_ROLLBACK PASS；未对已发出的真实聊天/奖励制造反向账号写入。
+
+模拟验收覆盖（均无真实账号动作）：
+- 原有核心回归：完整项目-race gate与旧25动作fixtures保留。
+- API：withAuth、严格JSON/重复键/null/尾随数据/上下文取消/过期/401/429/502/redirect/错误信封/大小上限/余额溢出。
+- 真工作流：5步各次增长后才继续；预算上限；先增长后停滞；失效/锁定/claimed/target变化立即停；MP-only/冲突不执行。
+- 积分：已领跳过；达标但未授权领奖不领；持久化失败不写；正回执+claimed+余额差才成功；空/错误/未claimed/余额不符不误报；不确定结果同ID不重发。
+- 幂等：先fsync预约后聊天/领奖；same-op同正文零外呼；不同正文/pending409；默认plan不创建journal。
+- UI：cost确认取消0执行、claim确认取消chat-only、双击/账号切换、网络异常同op复查、奖励四旗缺一不成功。
+- 凭据与日志：对外固定错误，不回传上游原始错误；任务代码无path注入；journal0600/目录0700；公开证据仅计数/结构/状态。
+独立security_reviewer两轮最终静态复核未发现遗留且证据充分的问题；其未跑测试/未访问data账号，实际测试由root执行，详REVIEW.txt。
+
+真实授权验收（与模拟PASS分开）
+新授权预算5次deepseek-v4-flash/单次16 tokens/关闭推理/no tools/no retry，仅chat_5达标后一次100credit+5energy；本轮实际请求1次、领取0次，剩余4次不续跑。旧专家预算不混用。
+exact command: data/live-v8-execute/manual-check --execute-authorized
+input: 本地私有token文件解析同一已授权账号；真实Panel handler；task_codes=[chat_5],execute=true,operation_id=v8_chat5_authorized_20261107_01,model=deepseek-v4-flash,max_chat_calls=5,max_output_tokens=16,claim_rewards=true。
+request prompt: Reply only OK.（固定测试输入，非私人payload）
+literal output/result: local_http=200,status=chat_failed,chat_posts=1,claim_posts=0,task_reads=2,upstream_http_statuses=[200,200,200],event_posts=0,enrollment_posts=0,automatic_retries=0,config_auth_unchanged=true; MANUAL_LIVE_EXIT=3; exit status 3.
+余额本轮未查询，balance_verified=false；summary中的balance_delta=0是默认值，不证明未扣费。
+真实流结构：3个JSON帧、无错误帧、存在正文/stop/[DONE]、无思考正文；尾帧function_call.name/arguments为空字符串。
+定位：原消费器错误地一律拒绝非null function_call，导致这次完整文本回答被误判chat_failed；已最小修复并保留实际函数调用拒绝规则。
+exact offline command: go test ./internal/panel -run '^TestV8LocalOfflineReplay$' -count=1 -v
+input: 临时本地纯离线测试读取原始私有SSE，未入Git；不访问账号/网络。
+literal output: OFFLINE_CAPTURE_REPLAY COMPLETE=true NETWORK_CALLS=0; PASS; exit status 0.
+离线修复验证没有重发聊天，也未篡改原journal/原始chat_failed记录。不得把此offline PASS写成第二次真实聊天通过。
+随后通过原本地面板只读入口回读：overview/tasks各200，19任务/3旧已领/0可领；chat_5仍0/5、claimable=false、claimed=false。无新增claim/event/报名。
+结论：这次真回答已被修复版离线识别；但真实API聊天没有计入成长任务。故不继续耗完5次、不合成进度/补报事件、不领取未达标奖励。
+公开证据：evidence/live-summary.json、stream-structure.json、post-task-summary.json、offline-capture-replay.log。
+
+本地交付（已观测）
+运行binary SHA144c62bdef2145425078671e147f37ed2e43ad359999953b5270efec0903058e；before-v8备份a5820d58...。
+URL http://127.0.0.1:7863/panel/；新版JS/overview/workflow plan共3次200；plan覆盖19项，0聊天/0领奖。
+config/auth哈希相同，8计划关闭，global=false。服务首次快照为xpcproxy启动中，随后复核running；详DEPLOY.txt/evidence。
+本地部署检查曾误读schedules导致KeyError（真实字段schedule.*_enabled），修正后只读验收exit0；未重跑付费。
+
+未完成/限制（不是全项目完成）：
+1 真正完成chat_5并确认领取到账：未通过，实测无增长；真实领奖成功仍未验证。
+2 其余18项的真实自动完成、6个新增任务执行器/新活动渠道：未完成；保持明确blocked，不把旧事件上报当真实完成。
+3 mobile新增UI、跨不同operation_id的全局exactly-once、pending自动恢复：本轮未实现。
+4 接入继续标注legacy_unverified，未把私有接口描述为官方Open API，也未申请不必要的开发者账号。
+部署/回滚见DEPLOY.txt；API契约与操作边界见API_WORKFLOW.txt；后续调查从代码/实际进度矛盾开始，不把客户端自动化或让用户代做设为默认前置。
+
+Git交付：代码及记录2b27384已推origin维护分支，PR2 OPEN/head一致，comment6706826837已保存；历史观测详GIT_DELIVERY.txt，后续仅回执文档提交不改已验收源码。

@@ -1,0 +1,114 @@
+[
+  {
+    "task_code": "playbook_prompt",
+    "title": "探索优秀灵感",
+    "target": 1,
+    "reward_credit": 100,
+    "reward_energy": 5,
+    "task_type": "single"
+  },
+  {
+    "task_code": "Expert_lighthouse",
+    "title": "体验「腾讯轻量云」专家",
+    "target": 1,
+    "reward_credit": 100,
+    "reward_energy": 5,
+    "task_type": "single"
+  },
+  {
+    "task_code": "Buddy_App",
+    "title": "体验 WorkBuddy 「发现应用」",
+    "target": 1,
+    "reward_credit": 100,
+    "reward_energy": 5,
+    "task_type": "single"
+  },
+  {
+    "task_code": "wb_wechat_oa_subscribe_task",
+    "title": "关注「腾讯 WorkBuddy」官方公众号",
+    "target": 1,
+    "reward_credit": 100,
+    "reward_energy": 5,
+    "task_type": "single"
+  },
+  {
+    "task_code": "WorkBuddy_Valorant",
+    "title": "体验「无畏契约拼豆专家」",
+    "target": 1,
+    "reward_credit": 100,
+    "reward_energy": 5,
+    "task_type": "single"
+  },
+  {
+    "task_code": "expert_use_maidehao",
+    "title": "体验「中国电商运营专家」",
+    "target": 1,
+    "reward_credit": 50,
+    "reward_energy": 5,
+    "task_type": "single"
+  },
+  {
+    "task_code": "expert_use_douyinyin",
+    "title": "体验「抖音策略师」",
+    "target": 1,
+    "reward_credit": 50,
+    "reward_energy": 5,
+    "task_type": "single"
+  },
+  {
+    "task_code": "expert_use_shangjia_xuanchuan",
+    "title": "体验「商家宣传页与海报设计师」",
+    "target": 1,
+    "reward_credit": 50,
+    "reward_energy": 5,
+    "task_type": "single"
+  },
+  {
+    "task_code": "expert_use_bowangwang",
+    "title": "体验「直播电商教练」",
+    "target": 1,
+    "reward_credit": 50,
+    "reward_energy": 5,
+    "task_type": "single"
+  },
+  {
+    "task_code": "chat_5",
+    "title": "和 AI 聊天 5 次",
+    "target": 5,
+    "reward_credit": 100,
+    "reward_energy": 5,
+    "task_type": "single"
+  },
+  {
+    "task_code": "skill_1",
+    "title": "尝鲜热门技能",
+    "target": 1,
+    "reward_credit": 100,
+    "reward_energy": 5,
+    "task_type": "single"
+  },
+  {
+    "task_code": "template_5",
+    "title": "使用 5 个模板",
+    "target": 5,
+    "reward_credit": 100,
+    "reward_energy": 5,
+    "task_type": "single"
+  },
+  {
+    "task_code": "automation_1",
+    "title": "设置自动化任务",
+    "target": 1,
+    "reward_credit": 100,
+    "reward_energy": 5,
+    "task_type": "single"
+  },
+  {
+    "task_code": "Sequential_Tasks_1",
+    "title": "完成 1 次对话",
+    "target": 1,
+    "reward_credit": 100,
+    "reward_energy": 5,
+    "task_type": "single"
+  }
+]

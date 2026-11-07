@@ -1,0 +1,25 @@
+2026-11-07 独立审查与整改记录
+审查角色 reviewer (/root/v4_acceptance_review) 与 security_reviewer (/root/v4_receipt_security)。只读审查；不以子代理“完成”作为测试通过。
+
+1. 嵌套 progress 缺字段混入旧平铺字段：确认本轮回归，已整改。
+   progress 对象作为原子快照，current/target 必须均明确有效；新增 target-only/current-only/empty/extension-only 反例。整体 progress:null 的旧平铺回退保留。
+2. 队列遗漏 inactive 守卫、已达标仍执行动作、领奖失败静默：已整改。
+   runGrowthQueued 失效/锁定不执行；已达标只领奖；严格回执区分新增/此前已领/零奖励/异常；回读失败或未达标返回错误。
+   acceptPendingTasks 过滤空码、重复全部匹配项及失效任务；报名200日志仅称“已提交，待回读”。
+3. 前端 done&&verifiedfalse 被漏计、claim_error/no_reward 仍绿色：已整改。
+   未确认和未知状态归入未确认，失败领奖不计成功；单项领奖不再无条件提示成功。单项动作“达标”与领奖结果分开。
+4. 测试断言错误：root 核查并整改。
+   旧 busy-account 测试默认 fixture 返回 already_claimedtrue，却期待新增奖励1；改为 Attempted1/AlreadyClaimed1/Claimed0，仍断言实际仅一次POST。
+   新队列 unready fixture 应运行纯stub一次后回读未达标错误，不是禁止未达标动作；locked/expired仍0。另补回读503错误回归。
+5. 小程序队列报名遗漏：独立审查继续报告为已知原有问题，未完成适配。
+   acceptPendingTasks 仍仅默认列表/默认报名；不宣称 MP 队列恢复。17类旧事件-only动作没有真实产品行为，本轮不扩展其报名或伪造事件获奖能力。旧代码和记录保留，没有静默删除。
+
+安全复审确认原 partial-progress P2 已解决，新增队列守卫/回执未见实质安全问题；未发现本轮新增凭证泄漏/鉴权弱化/账号锁回归。根协调者执行完整race gate、干净副本gate、隔离回滚和哈希验证，见 VERIFICATION.txt。
+
+最终 reviewer 复审（整改后）：确认原 queue 守卫/重复动作、claim_error/no_reward/donefalse汇总问题已解决；MP报名为已记录原有限制，不构成本轮引入缺陷；未发现新的本轮实质性回归。root补正unready期望和回读503后实际focused/race/fullgate已通过。
+
+接续私有验收脚本复核（不作为已执行领奖证据）
+root拒收首版准备脚本：余额查询被transport gate漏掉、HTTP/business状态被硬写0、未尝试claim却可能receipt_oktrue、假client测试没覆盖实际transport。要求改用实际Client+RoundTripper fixture补证；尚未达标，脚本没有对真实账号执行claim。
+子代理把两份无凭证helper源码/fixture文件放入提交15a8441；root用31659d7可逆revert取消当前树跟踪，保留本地gitignored副本及历史。该提交只有通用代码和合成fixture，没有令牌/真实账号记录/原始响应。不得把子代理“完成”或其初步PASS当作验收。
+
+私有helper整改后的独立复审：余额查询现为明确的不可重试ErrClient错误；pre/post独立cap各1、1MiB有界读取、对象重复键/尾部拒绝、Accounts非空、与SDK周期/非周期实际所选余额分支一致；回执要求HTTP2xx及显式非null整数code0；未知状态不硬写0、未发claim不报告receipt成功。真实Client+gate fixture覆盖上述反例。独立security_reviewer复审两项P2均解决，未发现新的本轮helper阻塞或凭证泄漏；未执行真实请求。root亲自race补测通过，不以先前子代理初步PASS充作验收。

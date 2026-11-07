@@ -1,0 +1,79 @@
+{
+  "registry": 25,
+  "remote_unique": 19,
+  "overlap": 13,
+  "not_returned": 12,
+  "new_no_handler_codes": [
+    "WorkBuddy_Valorant",
+    "expert_use_bowangwang",
+    "expert_use_douyinyin",
+    "expert_use_maidehao",
+    "expert_use_shangjia_xuanchuan",
+    "wb_wechat_oa_subscribe_task"
+  ],
+  "union": 31,
+  "default_mp_differences": [
+    {
+      "task_code": "Expert_team_use_3",
+      "different_fields": [
+        "jump_url"
+      ]
+    },
+    {
+      "task_code": "RichMeow_Chat",
+      "different_fields": [
+        "jump_url"
+      ]
+    },
+    {
+      "task_code": "WorkBuddy_Valorant",
+      "different_fields": [
+        "jump_url"
+      ]
+    },
+    {
+      "task_code": "automation_1",
+      "different_fields": [
+        "jump_url"
+      ]
+    },
+    {
+      "task_code": "chat_5",
+      "different_fields": [
+        "jump_url"
+      ]
+    },
+    {
+      "task_code": "expert_use_bowangwang",
+      "different_fields": [
+        "jump_url"
+      ]
+    },
+    {
+      "task_code": "expert_use_douyinyin",
+      "different_fields": [
+        "jump_url"
+      ]
+    },
+    {
+      "task_code": "expert_use_maidehao",
+      "different_fields": [
+        "jump_url"
+      ]
+    },
+    {
+      "task_code": "expert_use_shangjia_xuanchuan",
+      "different_fields": [
+        "jump_url"
+      ]
+    },
+    {
+      "task_code": "first_buddy",
+      "different_fields": [
+        "jump_url"
+      ]
+    }
+  ],
+  "qualification_field_conflicts": 0,
+  "differences_are_jump_url_only": true
+}

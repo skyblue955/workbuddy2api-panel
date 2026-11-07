@@ -62,6 +62,11 @@ func (p *Panel) accountTaskAccept(w http.ResponseWriter, r *http.Request) {
 	if a == nil {
 		return
 	}
+	if !p.tryLockAccount(uid) {
+		writeErr(w, http.StatusConflict, "account task operation is busy")
+		return
+	}
+	defer p.unlockAccount(uid)
 	var body struct {
 		TaskCodes []string `json:"task_codes"`
 	}
@@ -89,6 +94,11 @@ func (p *Panel) taskAcceptAll(w http.ResponseWriter, r *http.Request) {
 	if a == nil {
 		return
 	}
+	if !p.tryLockAccount(uid) {
+		writeErr(w, http.StatusConflict, "account task operation is busy")
+		return
+	}
+	defer p.unlockAccount(uid)
 	tasks, err := p.cfg.Upstream.ListTasks(a)
 	if err != nil {
 		writeErr(w, http.StatusBadGateway, "list tasks: "+err.Error())
@@ -156,6 +166,11 @@ func (p *Panel) accountTaskClaim(w http.ResponseWriter, r *http.Request) {
 	if a == nil {
 		return
 	}
+	if !p.tryLockAccount(uid) {
+		writeErr(w, http.StatusConflict, "account task operation is busy")
+		return
+	}
+	defer p.unlockAccount(uid)
 	var body struct {
 		TaskCode string `json:"task_code"`
 	}
@@ -164,22 +179,22 @@ func (p *Panel) accountTaskClaim(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// 小程序口径任务走 chat 域 mp 头领奖（缺头实测不可领）；其余 Web 端接口。
-	var credit, energy int64
-	var err error
-	if isMPTaskCode(body.TaskCode) {
-		credit, energy, err = p.cfg.Upstream.ClaimRewardMP(a, body.TaskCode)
-	} else {
-		credit, energy, err = p.cfg.Upstream.ClaimReward(a, body.TaskCode)
-	}
+	receipt, err := claimTaskRewardReceipt(p, a, body.TaskCode)
 	if err != nil {
-		writeErr(w, http.StatusBadGateway, "claim: "+err.Error())
+		// 解析失败时不把上游响应内容透传给面板。
+		writeErr(w, http.StatusBadGateway, "claim: invalid reward response")
 		return
 	}
-	if credit == 0 && energy == 0 {
+	if receipt.HasReward() {
+		log.Printf("panel: 领取任务奖励 uid=%s code=%s +%d分 +%d能", uid, body.TaskCode, receipt.Credit, receipt.Energy)
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "credit": receipt.Credit, "energy": receipt.Energy, "confirmed": true})
+		return
+	}
+	if receipt.AlreadyClaimedKnown && receipt.AlreadyClaimed {
 		log.Printf("panel: 领取任务奖励 uid=%s code=%s（已领取过，无新增）", uid, body.TaskCode)
-		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "already_claimed": true, "message": "该奖励此前已领取"})
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "already_claimed": true, "confirmed": true, "message": "该奖励此前已领取"})
 		return
 	}
-	log.Printf("panel: 领取任务奖励 uid=%s code=%s +%d分 +%d能", uid, body.TaskCode, credit, energy)
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "credit": credit, "energy": energy})
+	// 明确的零奖励/未知奖励不是“已领取”：保持旧响应字段并标记未确认。
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "no_reward": true, "confirmed": false, "message": "领奖响应未确认新增奖励"})
 }

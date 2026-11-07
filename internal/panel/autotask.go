@@ -25,7 +25,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log"
 	"math/rand/v2"
 	"net/http"
@@ -218,10 +217,17 @@ func isMPTaskCode(code string) bool { return mpTaskCodes[code] }
 // claimTaskReward 按任务码口径领奖：mp 码走 chat 域 mp 端点，其余走 Web 端。
 // claim 幂等（重复领返回 already_claimed → 0 分 0 能）。
 func claimTaskReward(p *Panel, a *auth.Auth, code string) (credit, energy int64, err error) {
+	r, err := claimTaskRewardReceipt(p, a, code)
+	return r.Credit, r.Energy, err
+}
+
+// claimTaskRewardReceipt preserves the upstream distinction between a positive
+// award, an explicit already-claimed response, and a zero/unknown response.
+func claimTaskRewardReceipt(p *Panel, a *auth.Auth, code string) (upstream.ClaimReceipt, error) {
 	if isMPTaskCode(code) {
-		return p.cfg.Upstream.ClaimRewardMP(a, code)
+		return p.cfg.Upstream.ClaimRewardMPReceipt(a, code)
 	}
-	return p.cfg.Upstream.ClaimReward(a, code)
+	return p.cfg.Upstream.ClaimRewardReceipt(a, code)
 }
 
 // taskByCode 拉取任务列表并定位单个任务；未找到返回 nil（不视为错误）。
@@ -232,10 +238,17 @@ func (p *Panel) taskByCode(a *auth.Auth, code string) (*upstream.Task, error) {
 	if err != nil {
 		return nil, err
 	}
+	var found *upstream.Task
 	for i := range tasks {
 		if tasks[i].TaskCode == code {
-			return &tasks[i], nil
+			if found != nil {
+				return nil, fmt.Errorf("ambiguous task code %q", code)
+			}
+			found = &tasks[i]
 		}
+	}
+	if found != nil {
+		return found, nil
 	}
 	if isMPTaskCode(code) {
 		return p.taskByCodeMP(a, code)
@@ -285,12 +298,16 @@ func (p *Panel) taskByCodeMP(a *auth.Auth, code string) (*upstream.Task, error) 
 	if err != nil {
 		return nil, err
 	}
+	var found *upstream.Task
 	for i := range tasks {
 		if tasks[i].TaskCode == code {
-			return &tasks[i], nil
+			if found != nil {
+				return nil, fmt.Errorf("ambiguous task code %q", code)
+			}
+			found = &tasks[i]
 		}
 	}
-	return nil, nil
+	return found, nil
 }
 
 // acceptWithVerifyMP accept 并回读验证登记生效：上游存在 200+OK 但 accept 未真正
@@ -631,13 +648,11 @@ func (p *Panel) accountTaskAuto(w http.ResponseWriter, r *http.Request) {
 	if a == nil {
 		return
 	}
-	// 企业上下文门控（企业版 / 企业切换会话）：行为事件会被上游静默丢弃或
-	// 直接 403，执行任何成长任务都是零收益白跑（含真实对话配额）——直接拒绝
-	// 并给出修复路径，不再让用户对着「已上报但进度 0/x」猜原因
-	// （见 auth.IsEnterpriseSession）。
+	// 保留旧版自动化保护：真实企业标识或未经核验的来源提示均不自动执行。
+	// token_source 本身不证明企业身份或当前权益；只读任务列表仍保留。
 	if a.IsEnterpriseSession() {
 		writeErr(w, http.StatusUnprocessableEntity,
-			"该账号为企业版/企业切换会话（token_source=enterprise_switch），无个人成长体系，成长任务行为事件会被上游忽略；请移除账号后以个人身份重新登录")
+			"企业标识或登录来源提示触发了旧版自动化保护，成长任务自动执行尚未验证；token_source 不等于企业账号身份，无需移除账号或反复重新授权。官方任务记录可只读查看，资格和进度以官方记录为准")
 		return
 	}
 	var body struct {
@@ -672,14 +687,26 @@ func (p *Panel) accountTaskAuto(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	isMP := isMPTaskCode(act.TaskCode)
+	if before.IsInactive() {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "skipped": true, "message": "该任务当前不可用或已锁定"})
+		return
+	}
 	if before.Claimed {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "skipped": true, "message": "该任务已领取过奖励"})
 		return
 	}
-	msg, err := act.run(p, a)
-	if err != nil {
-		writeErr(w, http.StatusBadGateway, "执行失败: "+err.Error())
-		return
+	// A task that is already claimable has completed its upstream work.  Do not
+	// replay the action (some actions send real chat/events); still perform the
+	// normal readback and claim flow below so a ready reward is collected.
+	msg := ""
+	if before.CanClaimReward() {
+		msg = "任务已达标，跳过重复动作"
+	} else {
+		msg, err = act.run(p, a)
+		if err != nil {
+			writeErr(w, http.StatusBadGateway, "执行失败: "+err.Error())
+			return
+		}
 	}
 	// 回读验证：上报 200 ≠ 计分（上游可能静默丢弃 + 计分异步），
 	// 用有界轮询等异步计时落定，再决定是否自动领奖（mp 任务同口径回读）。
@@ -692,36 +719,40 @@ func (p *Panel) accountTaskAuto(w http.ResponseWriter, r *http.Request) {
 	}
 	progressBefore, progressAfter := taskProgressText(before), ""
 	claimable := false
+	progressReadbackOK := false
+	verified := false
 	if aerr == nil && after != nil {
 		progressAfter = taskProgressText(after)
-		claimable = after.Claimable
+		progressReadbackOK = true
+		verified = after.Claimed || after.CanClaimReward()
+		claimable = after.CanClaimReward()
 	}
 	resp := map[string]any{
-		"ok":               true,
-		"message":          msg,
-		"progress_before":  progressBefore,
-		"progress_after":   progressAfter,
-		"claimable":        claimable,
-		"attempt":          act.Attempt,
-		"verify_supported": true,
+		"ok":                   true,
+		"message":              msg,
+		"progress_before":      progressBefore,
+		"progress_after":       progressAfter,
+		"claimable":            claimable,
+		"attempt":              act.Attempt,
+		"verify_supported":     true,
+		"verified":             verified,
+		"progress_readback_ok": progressReadbackOK,
 	}
 	// 达标即自动领奖（Web 端 claim）：把"完成→领奖"收敛成一步，无需用户再点一次。
 	if claimable {
-		var credit, energy int64
-		var cerr error
-		if isMP {
-			credit, energy, cerr = p.cfg.Upstream.ClaimRewardMP(a, act.TaskCode)
-		} else {
-			credit, energy, cerr = p.cfg.Upstream.ClaimReward(a, act.TaskCode)
-		}
+		receipt, cerr := claimTaskRewardReceipt(p, a, act.TaskCode)
 		if cerr == nil {
-			resp["claimed"] = true
-			resp["credit"] = credit
-			resp["energy"] = energy
-			if credit > 0 || energy > 0 {
-				resp["message"] = msg + fmt.Sprintf("；已自动领奖 +%d 分 +%d 能", credit, energy)
-			} else {
+			if receipt.HasReward() {
+				resp["claimed"] = true
+				resp["credit"] = receipt.Credit
+				resp["energy"] = receipt.Energy
+				resp["message"] = msg + fmt.Sprintf("；已自动领奖 +%d 分 +%d 能", receipt.Credit, receipt.Energy)
+			} else if receipt.AlreadyClaimedKnown && receipt.AlreadyClaimed {
+				resp["already_claimed"] = true
 				resp["message"] = msg + "；奖励此前已领取"
+			} else {
+				resp["no_reward"] = true
+				resp["message"] = msg + "；领奖响应未确认新增奖励"
 			}
 		} else {
 			resp["claim_error"] = cerr.Error()
@@ -833,8 +864,11 @@ func runModelChat(p *Panel, a *auth.Auth) (string, error) {
 		rc.Close()
 		return "", fmt.Errorf("对话失败 http=%d: %s", status, truncateStr(string(respBody), 160))
 	}
-	// 读干 SSE（网关对上游强制 flow：不读完会残留连接）
-	_, _ = io.Copy(io.Discard, io.LimitReader(rc, 1<<20))
+	// 读完并校验 SSE；只有真实完整回答才允许触发进度上报。
+	if err := consumeModelChatCompletion(rc); err != nil {
+		rc.Close()
+		return "", fmt.Errorf("对话流未完成: %w", err)
+	}
 	rc.Close()
 	time.Sleep(reportGap)
 	// 3. 对齐模型的上报（触发进度）
@@ -1138,8 +1172,17 @@ func (p *Panel) runAutoAll(a *auth.Auth) []map[string]any {
 	// 阶段 0：批量接受尚未接受的任务（失败不阻塞——行为事件才是进度唯一判据）。
 	if tasks, err := p.cfg.Upstream.ListTasks(a); err == nil {
 		var codes []string
+		counts := map[string]int{}
 		for _, t := range tasks {
-			if !t.Claimed && !t.Locked && t.AcceptStatus != "accepted" && t.AcceptStatus != "completed" {
+			counts[t.TaskCode]++
+		}
+		for code, n := range counts {
+			if n > 1 || code == "" {
+				out = append(out, map[string]any{"task_code": code, "status": "error", "message": "任务码重复或为空，跳过所有匹配项"})
+			}
+		}
+		for _, t := range tasks {
+			if counts[t.TaskCode] == 1 && t.TaskCode != "" && !t.IsInactive() && !t.Claimed && t.AcceptStatus != "accepted" && t.AcceptStatus != "completed" {
 				codes = append(codes, t.TaskCode)
 			}
 		}
@@ -1151,8 +1194,9 @@ func (p *Panel) runAutoAll(a *auth.Auth) []map[string]any {
 				})
 			} else {
 				out = append(out, map[string]any{
-					"task_code": "(批量接受)", "status": "done",
-					"message": fmt.Sprintf("已接受 %d 个任务", len(codes)),
+					"task_code": "(批量接受)", "status": "unconfirmed", "verified": false,
+					"submitted_count": len(codes),
+					"message":         fmt.Sprintf("报名请求已提交 %d 个任务，状态待回读", len(codes)),
 				})
 				time.Sleep(reportGap)
 			}
@@ -1162,8 +1206,17 @@ func (p *Panel) runAutoAll(a *auth.Auth) []map[string]any {
 	// 阶段 0b：小程序口径任务单独接受（默认列表不含 mp 码；失败不阻塞）。
 	if mpTasks, err := p.cfg.Upstream.ListTasksMP(a); err == nil {
 		var mpCodes []string
+		counts := map[string]int{}
 		for _, t := range mpTasks {
-			if !t.Claimed && !t.Locked && t.AcceptStatus != "accepted" && t.AcceptStatus != "completed" {
+			counts[t.TaskCode]++
+		}
+		for code, n := range counts {
+			if n > 1 || code == "" {
+				out = append(out, map[string]any{"task_code": code, "status": "error", "message": "任务码重复或为空，跳过所有匹配项"})
+			}
+		}
+		for _, t := range mpTasks {
+			if counts[t.TaskCode] == 1 && t.TaskCode != "" && !t.IsInactive() && !t.Claimed && t.AcceptStatus != "accepted" && t.AcceptStatus != "completed" {
 				mpCodes = append(mpCodes, t.TaskCode)
 			}
 		}
@@ -1175,8 +1228,9 @@ func (p *Panel) runAutoAll(a *auth.Auth) []map[string]any {
 				})
 			} else {
 				out = append(out, map[string]any{
-					"task_code": "(批量接受-mp)", "status": "done",
-					"message": fmt.Sprintf("已接受 %d 个小程序任务", len(mpCodes)),
+					"task_code": "(批量接受-mp)", "status": "unconfirmed", "verified": false,
+					"submitted_count": len(mpCodes),
+					"message":         fmt.Sprintf("报名请求已提交 %d 个小程序任务，状态待回读", len(mpCodes)),
 				})
 				time.Sleep(reportGap)
 			}
@@ -1198,7 +1252,13 @@ func (p *Panel) runAutoAll(a *auth.Auth) []map[string]any {
 			out = append(out, item)
 			continue
 		}
-		if before.Claimed || before.Current >= before.Target && before.Target > 0 {
+		if before.IsInactive() {
+			item["status"] = "skipped"
+			item["message"] = "该任务当前不可用或已锁定"
+			out = append(out, item)
+			continue
+		}
+		if before.Claimed || before.CanClaimReward() {
 			item["status"] = "skipped"
 			msg := "已完成（" + taskProgressText(before) + "）"
 			// 达标未领：先补领再跳过（issue #174）。经真实对话等链路点亮的
@@ -1208,18 +1268,22 @@ func (p *Panel) runAutoAll(a *auth.Auth) []map[string]any {
 			// 依赖 accept_status=="completed"（回读会短暂转 completed 后回滚，
 			// 据此领奖会误领）。
 			if !before.Claimed {
-				credit, energy, cerr := claimTaskReward(p, a, act.TaskCode)
+				receipt, cerr := claimTaskRewardReceipt(p, a, act.TaskCode)
 				switch {
 				case cerr != nil:
 					item["claim_error"] = cerr.Error()
 					msg += "；补领失败（可在列表手动重试）"
-				case credit > 0 || energy > 0:
+				case receipt.HasReward():
 					item["claimed"] = true
-					item["credit"] = credit
-					item["energy"] = energy
-					msg += fmt.Sprintf("；已补领 +%d 分 +%d 能", credit, energy)
-				default:
+					item["credit"] = receipt.Credit
+					item["energy"] = receipt.Energy
+					msg += fmt.Sprintf("；已补领 +%d 分 +%d 能", receipt.Credit, receipt.Energy)
+				case receipt.AlreadyClaimedKnown && receipt.AlreadyClaimed:
+					item["already_claimed"] = true
 					msg += "；奖励此前已领取"
+				default:
+					item["no_reward"] = true
+					msg += "；领奖响应未确认新增奖励"
 				}
 			}
 			item["message"] = msg
@@ -1239,22 +1303,33 @@ func (p *Panel) runAutoAll(a *auth.Auth) []map[string]any {
 		} else {
 			after, _ = p.taskByCodeWaiting(a, act.TaskCode)
 		}
-		item["status"] = "done"
+		verified := after != nil && (after.Claimed || after.CanClaimReward())
+		item["verified"] = verified
+		item["progress_readback_ok"] = after != nil
+		if verified {
+			item["status"] = "done"
+		} else {
+			item["status"] = "unconfirmed"
+		}
 		item["message"] = msg
 		item["progress_after"] = taskProgressText(after)
 		// 进度达标即自动领奖（mp 任务走 chat 域 mp 口径，其余 Web 端接口）。
 		// 领奖失败不掩盖主流程结果：status 仍为 done，附加 claim_error 供前端提示。
-		if after != nil && after.Claimable {
+		if after != nil && after.CanClaimReward() {
 			item["claimable"] = true
-			credit, energy, cerr := claimTaskReward(p, a, act.TaskCode)
+			receipt, cerr := claimTaskRewardReceipt(p, a, act.TaskCode)
 			if cerr == nil {
-				item["claimed"] = true
-				item["credit"] = credit
-				item["energy"] = energy
-				if credit > 0 || energy > 0 {
-					item["message"] = msg + fmt.Sprintf("；已自动领奖 +%d 分 +%d 能", credit, energy)
-				} else {
+				if receipt.HasReward() {
+					item["claimed"] = true
+					item["credit"] = receipt.Credit
+					item["energy"] = receipt.Energy
+					item["message"] = msg + fmt.Sprintf("；已自动领奖 +%d 分 +%d 能", receipt.Credit, receipt.Energy)
+				} else if receipt.AlreadyClaimedKnown && receipt.AlreadyClaimed {
+					item["already_claimed"] = true
 					item["message"] = msg + "；奖励此前已领取"
+				} else {
+					item["no_reward"] = true
+					item["message"] = msg + "；领奖响应未确认新增奖励"
 				}
 			} else {
 				item["claim_error"] = cerr.Error()
@@ -1274,12 +1349,10 @@ func (p *Panel) accountTaskAutoAll(w http.ResponseWriter, r *http.Request) {
 	if a == nil {
 		return
 	}
-	// 企业上下文门控：与 accountTaskAuto 同口径（企业版 / 企业切换会话下成长任务
-	// 行为事件被上游静默丢弃，跑全量只会白耗真实对话配额）。「一键完成全部」与
-	// 单任务入口共用同一套动作，必须一并挡上（下游 fork 吸收本 PR 时发现的缺口）。
+	// 与单任务入口共用保守保护，不因身份展示纠正而开启未验证的自动化。
 	if a.IsEnterpriseSession() {
 		writeErr(w, http.StatusUnprocessableEntity,
-			"该账号为企业版/企业切换会话（token_source=enterprise_switch），无个人成长体系，成长任务行为事件会被上游忽略；请移除账号后以个人身份重新登录")
+			"企业标识或登录来源提示触发了旧版自动化保护，成长任务自动执行尚未验证；token_source 不等于企业账号身份，无需移除账号或反复重新授权。官方任务记录可只读查看，资格和进度以官方记录为准")
 		return
 	}
 	// per-account 互斥（与单任务动作共用一把锁）：重复点击 409。

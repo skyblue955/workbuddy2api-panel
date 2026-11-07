@@ -1,0 +1,15 @@
+{
+  "sse_json_events": 3,
+  "done_marker": true,
+  "malformed_data_events": 0,
+  "nonempty_content_present": true,
+  "reasoning_content_present": false,
+  "finish_reasons": [
+    "",
+    "",
+    "stop"
+  ],
+  "usage_present": true,
+  "error_event_count": 0,
+  "raw_bytes": 1615
+}

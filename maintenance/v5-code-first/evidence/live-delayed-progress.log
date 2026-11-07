@@ -1,0 +1,34 @@
+{
+  "automatic_retries": 0,
+  "chat_calls": 0,
+  "event_reports": 0,
+  "mode": "read",
+  "operation_ok": true,
+  "reads": 1,
+  "statuses": [
+    200
+  ],
+  "tasks": [
+    {
+      "accept_status": "in_progress",
+      "claimable": false,
+      "claimed": false,
+      "current": 1,
+      "inactive": false,
+      "target": 5,
+      "task_code": "expert_5",
+      "unique_present": true
+    },
+    {
+      "accept_status": "accepted",
+      "claimable": false,
+      "claimed": false,
+      "current": 0,
+      "inactive": false,
+      "target": 3,
+      "task_code": "Expert_team_use_3",
+      "unique_present": true
+    }
+  ],
+  "writes": 0
+}

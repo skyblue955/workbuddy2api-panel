@@ -1,0 +1,13 @@
+{
+  "tasks": 19,
+  "eligible_points_tasks": 0,
+  "already_claimed": 3,
+  "local_http_statuses": [
+    200,
+    200
+  ],
+  "config_auth_unchanged": true,
+  "chat_posts": 0,
+  "event_posts": 0,
+  "reward_posts": 0
+}

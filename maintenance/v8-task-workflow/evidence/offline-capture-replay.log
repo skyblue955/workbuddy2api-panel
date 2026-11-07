@@ -1,0 +1,5 @@
+=== RUN   TestV8LocalOfflineReplay
+OFFLINE_CAPTURE_REPLAY COMPLETE=true NETWORK_CALLS=0
+--- PASS: TestV8LocalOfflineReplay (0.00s)
+PASS
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/panel	0.548s

@@ -1,0 +1,33 @@
+真实任务自动化 API（维护版 v8；legacy_unverified）
+
+默认只读：POST /panel/api/accounts/{UID}/tasks/workflow，JSON {}。
+沿用面板 Authorization: Bearer <本地 API key>；不将普通账号 token 放到请求体或日志。
+只读 plan 返回两口径合并目录、default/mp来源及各任务 blocked/requires_paid_opt_in/ready_to_claim 等判断。
+代码未将旧版一键上报等同于真正使用产品；旧25项入口保留，chat_5桌面行改接新工作流。移动版本轮未新增按钮。
+
+显式执行示例（会请求模型，必须由操作者另行确认费用和领取授权）：
+{
+  "task_codes": ["chat_5"],
+  "execute": true,
+  "operation_id": "USER_UNIQUE_OPERATION_ID",
+  "model": "deepseek-v4-flash",
+  "max_chat_calls": 1,
+  "max_output_tokens": 16,
+  "claim_rewards": false
+}
+UI先只读检查，再确认模型/次数、付费，最后独立确认是否达标后领奖；取消付费不执行，取消领奖仍按已确认的聊天额度执行。
+目前 executor 只支持 chat_5，其余任务返回 no_verified_executor/channel_not_verified 等，不静默删除。
+API上限5次/每次64 tokens（UI固定16）；本次人工授权验收严格16，未采用64。
+不调用 report、不伪造事件、不创建定时任务；每次真聊天消费完整流后回读，最多两次只读轮询；首次无增长/失败/资格变化立即停止。
+预先报名沿用旧入口但不隐式执行。未报名、过期、锁定、Buddy奖励、MP专属或两口径资格冲突均停止。
+
+幂等：AuthDir/task-workflows/ 内0700目录、0600日志；以账号+operation_id的hash索引，正文digest防篡改。
+每次聊天/领奖之前持久化预约并同步目录；同ID同正文完成后原样回放、零外呼；pending/正文冲突409不重做。
+收到网络错误/409/503不得换ID重跑。先用完全相同正文与ID核对，pending由维护者只读调查；本版本不自动清理pending后重发。
+桌面运行内存保留未确认的请求，刷新页面会丢失该副本；服务端日志仍保留，应从日志按原ID核实，不能把刷新理解为原操作没执行。
+该机制不是跨不同操作ID的全局exactly-once；上游同时收到不同操作ID或外部客户端操作仍可能改变任务/余额。
+
+领奖成功需要：明确正奖励回执 + 默认口径claimed回读 + 余额成功回读且差额等于回执credit。
+仅有HTTP200/报名成功/旧已领记录/空回执/未知余额，都不显示新增奖励。
+余额会受外部并发操作和到账延迟影响；不确定即 claim_outcome_uncertain，不重复领。
+本轮实测真聊天并未增加chat_5计数，不能把这个入口称为已恢复任务自动完成。详见VERIFICATION.txt。

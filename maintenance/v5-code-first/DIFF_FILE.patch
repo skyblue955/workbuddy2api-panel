@@ -1,0 +1,652 @@
+diff --git a/internal/upstream/tasks.go b/internal/upstream/tasks.go
+index 18f8eed..7907469 100644
+--- a/internal/upstream/tasks.go
++++ b/internal/upstream/tasks.go
+@@ -155,7 +155,7 @@ func (c *Client) ClaimRewardMPReceipt(a *auth.Auth, taskCode string) (ClaimRecei
+ 	}
+ 	c.BillingHeaders(req, a)
+ 	req.Header.Set("X-Client-Platform", mpPlatform)
+-	data, err := c.doJSON(req)
++	data, err := c.doClaimJSON(req)
+ 	if err != nil {
+ 		// chat 域对该路径 400（部分任务/租户形态）→ Web 域降级（已实测可领）。
+ 		if ue, ok := err.(*Error); ok && ue.Status == http.StatusBadRequest {
+@@ -407,7 +407,7 @@ func (c *Client) ClaimRewardReceipt(a *auth.Auth, taskCode string) (ClaimReceipt
+ 		req.Header.Set("X-Domain", d)
+ 	}
+ 
+-	data, err := c.doJSON(req)
++	data, err := c.doClaimJSON(req)
+ 	if err != nil {
+ 		return ClaimReceipt{}, err
+ 	}
+diff --git a/internal/upstream/claim_envelope.go b/internal/upstream/claim_envelope.go
+new file mode 100644
+index 0000000..0b2f8ee
+--- /dev/null
++++ b/internal/upstream/claim_envelope.go
+@@ -0,0 +1,116 @@
++package upstream
++
++import (
++	"bytes"
++	"encoding/json"
++	"fmt"
++	"io"
++	"net/http"
++)
++
++const claimEnvelopeMaxBody = 1 << 20
++
++// doClaimJSON applies strict envelope validation only to reward claims. The
++// shallow http.Client copy keeps redirect policy local to this request and
++// leaves the shared client (and its transport) untouched.
++func (c *Client) doClaimJSON(req *http.Request) (json.RawMessage, error) {
++	if c.HTTP == nil {
++		return nil, fmt.Errorf("claim request has no http client")
++	}
++	hc := *c.HTTP
++	hc.CheckRedirect = func(_ *http.Request, _ []*http.Request) error {
++		return http.ErrUseLastResponse
++	}
++	resp, err := hc.Do(req)
++	if err != nil {
++		return nil, err
++	}
++	defer resp.Body.Close()
++
++	if resp.StatusCode >= 400 {
++		raw, readErr := io.ReadAll(io.LimitReader(resp.Body, claimEnvelopeMaxBody))
++		if readErr != nil {
++			return nil, fmt.Errorf("read body: %w", readErr)
++		}
++		kind := Classify(resp.StatusCode, string(raw))
++		return nil, &Error{Kind: kind, Status: resp.StatusCode, Msg: truncate(string(raw), 200)}
++	}
++	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
++		return nil, fmt.Errorf("claim response status %d", resp.StatusCode)
++	}
++	raw, err := io.ReadAll(io.LimitReader(resp.Body, claimEnvelopeMaxBody+1))
++	if err != nil {
++		return nil, fmt.Errorf("read body: %w", err)
++	}
++	if len(raw) > claimEnvelopeMaxBody {
++		return nil, fmt.Errorf("claim response too large")
++	}
++	code, msg, data, err := parseClaimEnvelope(raw)
++	if err != nil {
++		return nil, err
++	}
++	if code != 0 {
++		kind := Classify(resp.StatusCode, msg)
++		if kind == ErrNone {
++			kind = ErrClient
++		}
++		return nil, &Error{Kind: kind, Status: resp.StatusCode, Msg: fmt.Sprintf("code=%d", code)}
++	}
++	return data, nil
++}
++
++func parseClaimEnvelope(raw []byte) (int, string, json.RawMessage, error) {
++	dec := json.NewDecoder(bytes.NewReader(raw))
++	tok, err := dec.Token()
++	if err != nil {
++		return 0, "", nil, fmt.Errorf("parse claim envelope: %w", err)
++	}
++	if d, ok := tok.(json.Delim); !ok || d != '{' {
++		return 0, "", nil, fmt.Errorf("claim envelope must be an object")
++	}
++	obj := make(map[string]json.RawMessage)
++	for dec.More() {
++		kt, err := dec.Token()
++		if err != nil {
++			return 0, "", nil, fmt.Errorf("parse claim envelope: %w", err)
++		}
++		key, ok := kt.(string)
++		if !ok {
++			return 0, "", nil, fmt.Errorf("invalid claim envelope key")
++		}
++		if _, exists := obj[key]; exists {
++			return 0, "", nil, fmt.Errorf("duplicate claim envelope key")
++		}
++		var value json.RawMessage
++		if err := dec.Decode(&value); err != nil {
++			return 0, "", nil, fmt.Errorf("parse claim envelope: %w", err)
++		}
++		obj[key] = value
++	}
++	if _, err := dec.Token(); err != nil {
++		return 0, "", nil, fmt.Errorf("parse claim envelope: %w", err)
++	}
++	var trailing any
++	if err := dec.Decode(&trailing); err != io.EOF {
++		return 0, "", nil, fmt.Errorf("trailing claim envelope data")
++	}
++	codeRaw, ok := obj["code"]
++	if !ok || bytes.Equal(bytes.TrimSpace(codeRaw), []byte("null")) {
++		return 0, "", nil, fmt.Errorf("claim envelope code is required")
++	}
++	var code int
++	if err := json.Unmarshal(codeRaw, &code); err != nil {
++		return 0, "", nil, fmt.Errorf("claim envelope code must be an integer")
++	}
++	msg := ""
++	if msgRaw, ok := obj["msg"]; ok {
++		if err := json.Unmarshal(msgRaw, &msg); err != nil {
++			return 0, "", nil, fmt.Errorf("claim envelope msg must be a string")
++		}
++	}
++	data, ok := obj["data"]
++	if !ok {
++		data = nil
++	}
++	return code, msg, data, nil
++}
+diff --git a/internal/upstream/claim_envelope_test.go b/internal/upstream/claim_envelope_test.go
+new file mode 100644
+index 0000000..42d66b7
+--- /dev/null
++++ b/internal/upstream/claim_envelope_test.go
+@@ -0,0 +1,186 @@
++package upstream
++
++import (
++	"errors"
++	"io"
++	"net/http"
++	"net/url"
++	"strings"
++	"sync"
++	"sync/atomic"
++	"testing"
++	"time"
++
++	"github.com/linguo2625469/workbuddy2api-panel/internal/auth"
++)
++
++type claimFixtureTransport struct {
++	status   int
++	body     string
++	location string
++	n        atomic.Int32
++}
++
++func (f *claimFixtureTransport) RoundTrip(*http.Request) (*http.Response, error) {
++	f.n.Add(1)
++	resp := &http.Response{
++		StatusCode: f.status,
++		Header:     make(http.Header),
++		Body:       io.NopCloser(strings.NewReader(f.body)),
++	}
++	if f.location != "" {
++		resp.Header.Set("Location", f.location)
++	}
++	return resp, nil
++}
++
++func claimFixtureClient(f http.RoundTripper) (*Client, *auth.Auth) {
++	return &Client{HTTP: &http.Client{Transport: f}}, &auth.Auth{AccessToken: "fixture", UID: "fixture"}
++}
++
++func TestClaimEnvelopeAcceptsValidAndAlreadyClaimedReceipts(t *testing.T) {
++	for _, tc := range []struct {
++		name, body     string
++		credit, energy int64
++		already        bool
++	}{
++		{"valid", `{"code":0,"data":{"credit":100,"energy":5}}`, 100, 5, false},
++		{"already", `{"code":0,"data":{"credit":0,"energy":0,"already_claimed":true}}`, 0, 0, true},
++		{"zero", `{"code":0,"data":{"credit":0,"energy":0}}`, 0, 0, false},
++	} {
++		t.Run(tc.name, func(t *testing.T) {
++			f := &claimFixtureTransport{status: http.StatusOK, body: tc.body}
++			c, a := claimFixtureClient(f)
++			got, err := c.ClaimRewardReceipt(a, "fixture-task")
++			if err != nil || got.Credit != tc.credit || got.Energy != tc.energy || got.AlreadyClaimed != tc.already {
++				t.Fatalf("receipt=%+v err=%v", got, err)
++			}
++		})
++	}
++}
++
++func TestClaimEnvelopeRejectsMalformedSuccess(t *testing.T) {
++	for _, body := range []string{
++		`{"data":{"credit":100}}`,
++		`{"code":null,"data":{"credit":100}}`,
++		`{"code":0,"code":0,"data":{"credit":100}}`,
++		`{"code":"0","data":{"credit":100}}`,
++		`{"code":0,"data":{"credit":100}} trailing`,
++	} {
++		f := &claimFixtureTransport{status: http.StatusOK, body: body}
++		c, a := claimFixtureClient(f)
++		if got, err := c.ClaimRewardReceipt(a, "fixture-task"); err == nil || got.HasReward() {
++			t.Fatalf("body %q got=%+v err=%v", body, got, err)
++		}
++	}
++	oversized := `{"code":0,"data":{"padding":"` + strings.Repeat("x", claimEnvelopeMaxBody) + `"}}`
++	f := &claimFixtureTransport{status: http.StatusOK, body: oversized}
++	c, a := claimFixtureClient(f)
++	if _, err := c.ClaimRewardReceipt(a, "fixture-task"); err == nil {
++		t.Fatal("oversized envelope accepted")
++	}
++}
++
++func TestClaimEnvelopeRejectsRedirectWithoutFollowing(t *testing.T) {
++	f := &claimFixtureTransport{status: http.StatusFound, location: "https://redirect.invalid", body: `{"code":0,"data":{"credit":100}}`}
++	c, a := claimFixtureClient(f)
++	if _, err := c.ClaimRewardReceipt(a, "fixture-task"); err == nil {
++		t.Fatal("redirect accepted")
++	}
++	if got := f.n.Load(); got != 1 {
++		t.Fatalf("redirect hops=%d", got)
++	}
++}
++
++func TestClaimEnvelopePreservesHTTPErrorClassification(t *testing.T) {
++	for _, status := range []int{http.StatusUnauthorized, http.StatusTooManyRequests} {
++		f := &claimFixtureTransport{status: status, body: `{"code":1,"msg":"fixture"}`}
++		c, a := claimFixtureClient(f)
++		_, err := c.ClaimRewardReceipt(a, "fixture-task")
++		ue, ok := err.(*Error)
++		if !ok || ue.Status != status {
++			t.Fatalf("status=%d err=%T %+v", status, err, err)
++		}
++	}
++}
++
++func TestClaimEnvelopeDoesNotMutateHTTPClient(t *testing.T) {
++	f := &claimFixtureTransport{status: http.StatusOK, body: `{"code":0,"data":{"credit":1}}`}
++	sentinel := errors.New("fixture redirect")
++	checkRedirect := func(*http.Request, []*http.Request) error { return sentinel }
++	jar := &fixtureCookieJar{}
++	hc := &http.Client{Transport: f, CheckRedirect: checkRedirect, Jar: jar, Timeout: 3 * time.Second}
++	c := &Client{HTTP: hc}
++	a := &auth.Auth{AccessToken: "fixture"}
++	for i := 0; i < 8; i++ {
++		if _, err := c.ClaimRewardReceipt(a, "fixture-task"); err != nil {
++			t.Fatal(err)
++		}
++	}
++	if hc.Transport != f || hc.Jar != (http.CookieJar)(jar) || hc.Timeout != 3*time.Second || hc.CheckRedirect == nil || hc.CheckRedirect(nil, nil) != sentinel {
++		t.Fatal("shared http client was mutated")
++	}
++}
++
++type fixtureCookieJar struct{}
++
++func (*fixtureCookieJar) Cookies(*url.URL) []*http.Cookie     { return nil }
++func (*fixtureCookieJar) SetCookies(*url.URL, []*http.Cookie) {}
++
++func TestClaimEnvelopePreservesNonZeroCodeClassification(t *testing.T) {
++	for _, msg := range []string{"session expired 12153", "queue.full.title 6021"} {
++		body := `{"code":1,"msg":"` + msg + `","data":null}`
++		f1 := &claimFixtureTransport{status: http.StatusOK, body: body}
++		c1, _ := claimFixtureClient(f1)
++		req1, _ := http.NewRequest(http.MethodPost, "https://fixture.invalid/claim", nil)
++		_, oldErr := c1.doJSON(req1)
++		f2 := &claimFixtureTransport{status: http.StatusOK, body: body}
++		c2, a2 := claimFixtureClient(f2)
++		_, newErr := c2.ClaimRewardReceipt(a2, "fixture-task")
++		old, oldOK := oldErr.(*Error)
++		got, gotOK := newErr.(*Error)
++		if !oldOK || !gotOK || old.Kind != got.Kind {
++			t.Fatalf("msg=%q old=%T/%v new=%T/%v", msg, oldErr, oldErr, newErr, newErr)
++		}
++	}
++}
++
++func TestClaimEnvelopeConcurrentCallsDoNotMutateHTTPClient(t *testing.T) {
++	f := &claimFixtureTransport{status: http.StatusOK, body: `{"code":0,"data":{"credit":1}}`}
++	hc := &http.Client{Transport: f}
++	c := &Client{HTTP: hc}
++	a := &auth.Auth{AccessToken: "fixture"}
++	var wg sync.WaitGroup
++	for i := 0; i < 16; i++ {
++		wg.Add(1)
++		go func() {
++			defer wg.Done()
++			if _, err := c.ClaimRewardReceipt(a, "fixture-task"); err != nil {
++				t.Errorf("claim: %v", err)
++			}
++		}()
++	}
++	wg.Wait()
++	if hc.Transport != f || hc.CheckRedirect != nil {
++		t.Fatal("shared http client was mutated")
++	}
++}
++
++func TestClaimRewardMPFallsBackOnceOnHTTP400(t *testing.T) {
++	rt := &mpFixtureTransport{}
++	c, a := claimFixtureClient(rt)
++	got, err := c.ClaimRewardMPReceipt(a, "fixture-task")
++	if err != nil || got.Credit != 7 || got.Energy != 2 || rt.n.Load() != 2 {
++		t.Fatalf("receipt=%+v err=%v calls=%d", got, err, rt.n.Load())
++	}
++}
++
++type mpFixtureTransport struct{ n atomic.Int32 }
++
++func (f *mpFixtureTransport) RoundTrip(req *http.Request) (*http.Response, error) {
++	f.n.Add(1)
++	if req.Header.Get("X-Client-Platform") == mpPlatform {
++		return &http.Response{StatusCode: http.StatusBadRequest, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"code":1}`))}, nil
++	}
++	return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"code":0,"data":{"credit":7,"energy":2}}`))}, nil
++}
+diff --git a/internal/upstream/desktop_contract_test.go b/internal/upstream/desktop_contract_test.go
+new file mode 100644
+index 0000000..997b5f4
+--- /dev/null
++++ b/internal/upstream/desktop_contract_test.go
+@@ -0,0 +1,84 @@
++package upstream
++
++import (
++	"bytes"
++	"io"
++	"net/http"
++	"strings"
++	"testing"
++
++	"github.com/linguo2625469/workbuddy2api-panel/internal/auth"
++)
++
++type desktopFixtureTransport func(*http.Request) (*http.Response, error)
++
++func (f desktopFixtureTransport) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
++
++func desktopResponse(status int, contentType, body string) *http.Response {
++	return &http.Response{
++		StatusCode: status,
++		Header:     http.Header{"Content-Type": []string{contentType}},
++		Body:       io.NopCloser(strings.NewReader(body)),
++		Request:    &http.Request{},
++	}
++}
++
++func TestMarketExpertListRequestContract(t *testing.T) {
++	var got *http.Request
++	c := &Client{ChatBaseCN: "https://fixture.invalid", HTTP: &http.Client{Transport: desktopFixtureTransport(func(r *http.Request) (*http.Response, error) {
++		got = r
++		return desktopResponse(200, "application/json", `{"code":0,"data":{"experts":[{"expert_id":"agent-fixture-1","expert_type":"agent","display_name_zh":"测试专家"}]}}`), nil
++	})}}
++	a := &auth.Auth{UID: "uid-fixture", AccessToken: "token-fixture"}
++	experts, err := c.MarketExpertList(a, "agent")
++	if err != nil {
++		t.Fatalf("MarketExpertList() error = %v", err)
++	}
++	if len(experts) != 1 || experts[0].ExpertID != "agent-fixture-1" {
++		t.Fatalf("unexpected experts: %#v", experts)
++	}
++	if got.Method != http.MethodPost || got.URL.Path != "/portal/operation-platform/market/expert/list" {
++		t.Fatalf("request = %s %s", got.Method, got.URL.Path)
++	}
++	body, _ := io.ReadAll(got.Body)
++	for _, field := range []string{`"page":1`, `"page_size":20`, `"sort_by":"reco_rank"`, `"sort_order":"desc"`, `"expert_type":"agent"`} {
++		if !bytes.Contains(body, []byte(field)) {
++			t.Errorf("request body missing %s: %s", field, body)
++		}
++	}
++	if got.Header.Get("Authorization") != "Bearer token-fixture" || got.Header.Get("X-User-Id") != "uid-fixture" {
++		t.Errorf("auth headers not propagated: authorization=%q uid=%q", got.Header.Get("Authorization"), got.Header.Get("X-User-Id"))
++	}
++}
++
++func TestDesktopChatWithExpertRequestAndIDOnlySSE(t *testing.T) {
++	var got *http.Request
++	const serviceID = "cmb-0123456789abcdef0123456789abcdef"
++	c := &Client{ChatBaseCN: "https://fixture.invalid", HTTP: &http.Client{Transport: desktopFixtureTransport(func(r *http.Request) (*http.Response, error) {
++		got = r
++		return desktopResponse(200, "text/event-stream", "data: {\"id\":\""+serviceID+"\"}\n\n"), nil
++	})}}
++	a := &auth.Auth{UID: "uid-fixture", AccessToken: "token-fixture"}
++	conv, requestID, err := c.DesktopChatWithExpert(a, "expert-fixture-1")
++	if err != nil {
++		t.Fatalf("DesktopChatWithExpert() error = %v", err)
++	}
++	if conv == "" || requestID != serviceID {
++		t.Fatalf("returned conversation/request id = %q/%q", conv, requestID)
++	}
++	if got.Method != http.MethodPost || got.URL.Path != "/v2/chat/completions" {
++		t.Fatalf("request = %s %s", got.Method, got.URL.Path)
++	}
++	if got.Header.Get("X-Expert-Id") != "expert-fixture-1" || got.Header.Get("Accept") != "text/event-stream" {
++		t.Errorf("desktop chat headers = expert %q accept %q", got.Header.Get("X-Expert-Id"), got.Header.Get("Accept"))
++	}
++	body, _ := io.ReadAll(got.Body)
++	for _, field := range []string{`"model":"fast-model"`, `"agent":"cli"`, `"stream":true`, `"include_usage":true`} {
++		if !bytes.Contains(body, []byte(field)) {
++			t.Errorf("request body missing %s: %s", field, body)
++		}
++	}
++	// The fixture deliberately returns only the service id. This is the current
++	// tracking-id contract; it does not claim that a human-readable answer exists.
++	t.Logf("id-only SSE accepted as tracking id %s; answer completion is not asserted", requestID)
++}
+diff --git a/internal/panel/code_entry_regression_test.go b/internal/panel/code_entry_regression_test.go
+new file mode 100644
+index 0000000..4db44b6
+--- /dev/null
++++ b/internal/panel/code_entry_regression_test.go
+@@ -0,0 +1,220 @@
++package panel
++
++import (
++	"encoding/json"
++	"fmt"
++	"io"
++	"net/http"
++	"net/http/httptest"
++	"strings"
++	"sync/atomic"
++	"testing"
++
++	"github.com/linguo2625469/workbuddy2api-panel/internal/auth"
++	"github.com/linguo2625469/workbuddy2api-panel/internal/pool"
++	"github.com/linguo2625469/workbuddy2api-panel/internal/upstream"
++)
++
++type codeEntryFixtureTransport func(*http.Request) (*http.Response, error)
++
++func (f codeEntryFixtureTransport) RoundTrip(r *http.Request) (*http.Response, error) {
++	return f(r)
++}
++
++func codeEntryResponse(status int, contentType, body string) *http.Response {
++	return &http.Response{StatusCode: status, Header: http.Header{"Content-Type": []string{contentType}}, Body: io.NopCloser(strings.NewReader(body)), Request: &http.Request{}}
++}
++
++func newCodeEntryFixtureClient(t *testing.T, experts string) (*upstream.Client, *int) {
++	t.Helper()
++	var reports, chats int
++	c := &upstream.Client{ChatBaseCN: "https://fixture.invalid"}
++	c.HTTP = &http.Client{Transport: codeEntryFixtureTransport(func(r *http.Request) (*http.Response, error) {
++		switch r.URL.Path {
++		case "/portal/operation-platform/market/expert/list":
++			return codeEntryResponse(200, "application/json", `{"code":0,"data":`+experts+`}`), nil
++		case "/v2/chat/completions":
++			chats++
++			return codeEntryResponse(200, "text/event-stream", "data: {\"id\":\"cmb-0123456789abcdef0123456789abcdef\"}\n\n"), nil
++		case "/v2/report":
++			reports++
++			return codeEntryResponse(200, "application/json", `{"code":0,"data":{}}`), nil
++		default:
++			return codeEntryResponse(404, "application/json", `{}`), nil
++		}
++	})}
++	return c, &reports
++}
++
++func TestRunExpertBatchUsesOriginalCodeEntryChain(t *testing.T) {
++	c, reports := newCodeEntryFixtureClient(t, `{"experts":[{"expert_id":"agent-fixture-1","expert_type":"agent","display_name_zh":"测试专家"}]}`)
++	p := New(Config{Upstream: c})
++	a := &auth.Auth{UID: "uid-fixture", AccessToken: "token-fixture"}
++	message, err := runExpertBatch(p, a, "agent", 1)
++	if err != nil {
++		t.Fatalf("runExpertBatch() error = %v", err)
++	}
++	if !strings.Contains(message, "1 位真实专家") {
++		t.Fatalf("runExpertBatch() message = %q", message)
++	}
++	if *reports != 2 {
++		t.Fatalf("report calls = %d, want summon and actual-use reports", *reports)
++	}
++	t.Logf("original code entry passed fixture chain: reports=%d", *reports)
++}
++
++// This test records the pre-fix behavior: a target of five with only one
++// listed expert returns nil error and a success-shaped message. It is kept as
++// an explicit regression witness so a later fix can change the assertion to
++// require an unconfirmed/partial result without involving GUI automation.
++func TestRunExpertBatchPartialEvidence(t *testing.T) {
++	c, _ := newCodeEntryFixtureClient(t, `{"experts":[{"expert_id":"agent-fixture-1","expert_type":"agent","display_name_zh":"测试专家"}]}`)
++	p := New(Config{Upstream: c})
++	a := &auth.Auth{UID: "uid-fixture", AccessToken: "token-fixture"}
++	message, err := runExpertBatch(p, a, "agent", 5)
++	if err != nil {
++		t.Fatalf("runExpertBatch() error = %v", err)
++	}
++	if !strings.Contains(message, "1 位真实专家") {
++		t.Fatalf("partial evidence message = %q", message)
++	}
++	t.Logf("KNOWN PARTIAL RESULT: target=5 listed=1 returned=%q; no completion/claim is asserted", message)
++}
++
++// newChat5RoutePanel serves the real /panel/api/.../tasks/auto handler and the
++// real runChat5 action. The fixture advances progress only when the readback
++// list is requested; HTTP 200 from /v2/report alone never makes a task done.
++func newChat5RoutePanel(t *testing.T, ready, reportFails bool, noopClaim bool) (*Panel, *atomic.Int32, *atomic.Int32) {
++	t.Helper()
++	var lists, reports, claims atomic.Int32
++	transport := codeEntryFixtureTransport(func(r *http.Request) (*http.Response, error) {
++		switch {
++		case r.URL.Path == "/v2/activity/growth/tasks":
++			call := lists.Add(1)
++			current := int64(1)
++			status := "accepted"
++			if ready && call > 2 {
++				current = 5
++			}
++			if !ready && call > 1 {
++				current = 1
++			}
++			if ready && claims.Load() > 0 && !noopClaim {
++				// A separate task-list readback confirms claimed status.
++				status = "claimed"
++			}
++			return codeEntryResponse(200, "application/json", sweepTasksBody([]map[string]any{sweepTask("chat_5", 5, current, status, nil)})), nil
++		case r.URL.Path == "/v2/billing/meter/get-user-resource":
++			remain := int64(500)
++			if !noopClaim {
++				remain += int64(claims.Load()) * 100
++			}
++			body := fmt.Sprintf(`{"code":0,"data":{"Response":{"Data":{"Accounts":[{"CapacitySize":1000,"CapacityRemain":%d}]}}}}`, remain)
++			return codeEntryResponse(200, "application/json", body), nil
++		case r.URL.Path == "/v2/report":
++			reports.Add(1)
++			if reportFails {
++				return codeEntryResponse(http.StatusBadGateway, "application/json", `{}`), nil
++			}
++			return codeEntryResponse(200, "application/json", `{"code":0,"msg":"OK","data":{}}`), nil
++		case strings.HasSuffix(r.URL.Path, "/claim"):
++			claims.Add(1)
++			if noopClaim {
++				return codeEntryResponse(200, "application/json", `{"code":0,"msg":"OK","data":{"already_claimed":false,"credit":0,"energy":0}}`), nil
++			}
++			return codeEntryResponse(200, "application/json", `{"code":0,"msg":"OK","data":{"already_claimed":false,"credit":100,"energy":5}}`), nil
++		default:
++			return codeEntryResponse(200, "application/json", `{"code":0,"msg":"OK","data":{}}`), nil
++		}
++	})
++	accounts := pool.New("")
++	accounts.Add(&auth.Auth{UID: "u1", AccessToken: "fixture"})
++	p := New(Config{Pool: accounts, Upstream: &upstream.Client{HTTP: &http.Client{Transport: transport}, ChatBaseCN: "https://fixture.invalid", BillingBaseCN: "https://fixture.invalid", WebBaseCN: "https://fixture.invalid"}})
++	return p, &lists, &claims
++}
++
++func invokeChat5Route(t *testing.T, p *Panel) (int, map[string]any) {
++	t.Helper()
++	r := httptest.NewRequest(http.MethodPost, "/panel/api/accounts/u1/tasks/auto", strings.NewReader(`{"task_code":"chat_5"}`))
++	w := httptest.NewRecorder()
++	p.ServeHTTP(w, r)
++	var out map[string]any
++	if err := json.NewDecoder(w.Body).Decode(&out); err != nil {
++		t.Fatalf("decode route response: %v; body=%s", err, w.Body.String())
++	}
++	return w.Code, out
++}
++
++func TestCodeEntryPanelAutoReadbackClaimAndIdempotence(t *testing.T) {
++	oldGap, oldAttempts, oldPollGap := reportGap, claimPollAttempts, claimPollGap
++	reportGap, claimPollAttempts, claimPollGap = 0, 1, 0
++	t.Cleanup(func() { reportGap, claimPollAttempts, claimPollGap = oldGap, oldAttempts, oldPollGap })
++	p, lists, claims := newChat5RoutePanel(t, true, false, false)
++	before := codeEntryFixtureBalance(t, p)
++	code, first := invokeChat5Route(t, p)
++	if code != http.StatusOK || first["verified"] != true || first["claimed"] != true || first["credit"] != float64(100) {
++		t.Fatalf("ready route response code=%d body=%v", code, first)
++	}
++	if claims.Load() != 1 || lists.Load() < 2 {
++		t.Fatalf("ready route calls lists=%d claims=%d, want readback and one claim", lists.Load(), claims.Load())
++	}
++	after := codeEntryFixtureBalance(t, p)
++	if after-before != 100 {
++		t.Fatalf("balance delta=%d want100", after-before)
++	}
++	code, second := invokeChat5Route(t, p)
++	if code != http.StatusOK || second["skipped"] != true || claims.Load() != 1 {
++		t.Fatalf("claimed rerun code=%d body=%v claims=%d", code, second, claims.Load())
++	}
++	if codeEntryFixtureBalance(t, p) != after {
++		t.Fatal("repeat claim changed balance")
++	}
++	t.Log("FIXTURE progress=5/5 claimed=true receipt=100/5 balance_delta=100 repeat_delta=0")
++}
++
++func TestCodeEntryPanelAutoPartialAndNoopNeverInventReward(t *testing.T) {
++	oldGap, oldAttempts, oldPollGap := reportGap, claimPollAttempts, claimPollGap
++	reportGap, claimPollAttempts, claimPollGap = 0, 1, 0
++	t.Cleanup(func() { reportGap, claimPollAttempts, claimPollGap = oldGap, oldAttempts, oldPollGap })
++	p, _, claims := newChat5RoutePanel(t, false, false, false)
++	before := codeEntryFixtureBalance(t, p)
++	code, out := invokeChat5Route(t, p)
++	if code != http.StatusOK || out["verified"] != false || out["claimable"] == true || claims.Load() != 0 {
++		t.Fatalf("partial route code=%d body=%v claims=%d", code, out, claims.Load())
++	}
++
++	if codeEntryFixtureBalance(t, p) != before {
++		t.Fatal("partial changed balance")
++	}
++	t.Log("FIXTURE progress=1/5 verified=false claim_requests=0 balance_delta=0")
++	p, _, claims = newChat5RoutePanel(t, true, false, true)
++	before = codeEntryFixtureBalance(t, p)
++	code, out = invokeChat5Route(t, p)
++	if code != http.StatusOK || out["verified"] != true || out["claimed"] == true || out["no_reward"] != true || claims.Load() != 1 {
++		t.Fatalf("noop claim route code=%d body=%v claims=%d", code, out, claims.Load())
++	}
++	if codeEntryFixtureBalance(t, p) != before {
++		t.Fatal("noop changed balance")
++	}
++	t.Log("FIXTURE noop_receipt=0/0 claimed=false no_reward=true balance_delta=0")
++}
++
++func TestCodeEntryPanelAutoActionFailureIsNotCompletion(t *testing.T) {
++	oldGap, oldAttempts, oldPollGap := reportGap, claimPollAttempts, claimPollGap
++	reportGap, claimPollAttempts, claimPollGap = 0, 1, 0
++	t.Cleanup(func() { reportGap, claimPollAttempts, claimPollGap = oldGap, oldAttempts, oldPollGap })
++	p, _, claims := newChat5RoutePanel(t, false, true, false)
++	code, out := invokeChat5Route(t, p)
++	if code != http.StatusOK || out["verified"] == true || out["claimed"] == true || claims.Load() != 0 {
++		t.Fatalf("failed action route code=%d body=%v claims=%d", code, out, claims.Load())
++	}
++}
++
++func codeEntryFixtureBalance(t *testing.T, p *Panel) int64 {
++	t.Helper()
++	n, _, e := p.cfg.Upstream.UserResource(p.cfg.Pool.AuthByUID("u1"))
++	if e != nil {
++		t.Fatal(e)
++	}
++	return n
++}

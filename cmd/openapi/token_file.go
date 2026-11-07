@@ -18,41 +18,50 @@ type tokenDocument struct {
 }
 
 func readTokenFile(path string) (string, error) {
+	doc, err := readTokenDocument(path)
+	if err != nil {
+		return "", err
+	}
+	return doc.AccessToken, nil
+}
+
+func readTokenDocument(path string) (tokenDocument, error) {
+	var empty tokenDocument
 	initial, err := os.Lstat(path)
 	if err != nil || initial.Mode()&os.ModeSymlink != 0 || !initial.Mode().IsRegular() {
-		return "", errors.New("redeem: token file unavailable")
+		return empty, errors.New("redeem: token file unavailable")
 	}
 	if initial.Mode().Perm()&0077 != 0 {
-		return "", errors.New("redeem: token file must not be group/world-readable")
+		return empty, errors.New("redeem: token file must not be group/world-readable")
 	}
 	f, err := os.Open(path)
 	if err != nil {
-		return "", errors.New("redeem: token file unavailable")
+		return empty, errors.New("redeem: token file unavailable")
 	}
 	defer f.Close()
 	opened, err := f.Stat()
 	if err != nil || !os.SameFile(initial, opened) {
-		return "", errors.New("redeem: token file changed")
+		return empty, errors.New("redeem: token file changed")
 	}
 	b, err := io.ReadAll(io.LimitReader(f, maxInput+1))
 	if err != nil || len(b) > maxInput {
-		return "", errors.New("redeem: token file unreadable")
+		return empty, errors.New("redeem: token file unreadable")
 	}
 	var doc tokenDocument
 	if err := json.Unmarshal(b, &doc); err != nil || strings.TrimSpace(doc.AccessToken) == "" {
-		return "", errors.New("redeem: token file has no access_token")
+		return empty, errors.New("redeem: token file has no access_token")
 	}
 	if !strings.EqualFold(strings.TrimSpace(doc.TokenType), "bearer") || doc.ExpiresIn <= 0 || doc.ExpiresIn > math.MaxInt64/int64(time.Second) {
-		return "", errors.New("redeem: token metadata is invalid")
+		return empty, errors.New("redeem: token metadata is invalid")
 	}
 	now := time.Now()
 	if doc.ObtainedAt.IsZero() || doc.ObtainedAt.After(now) || now.After(doc.ObtainedAt.Add(time.Duration(doc.ExpiresIn)*time.Second)) {
-		return "", errors.New("redeem: token is expired or obtained_at is invalid")
+		return empty, errors.New("redeem: token is expired or obtained_at is invalid")
 	}
 	if !hasScope(doc.Scope, "user.credit.exchange") {
-		return "", errors.New("redeem: token scope is insufficient")
+		return empty, errors.New("redeem: token scope is insufficient")
 	}
-	return doc.AccessToken, nil
+	return doc, nil
 }
 
 func hasScope(scope, required string) bool {

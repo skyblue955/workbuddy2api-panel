@@ -1,0 +1,114 @@
+Source-hint / account identity correction — 2026-11-03 Asia/Shanghai
+Branch: maintenance/v1-compat-rewards
+Original commit: 1afe7823984501a8c1d31d165b6512900bc068af
+Changed fields/branches: Auth.HasEnterpriseSwitchSource(); overview.enterprise_switch_source; reauthorization now accepts matching UID + empty upstream enterpriseId even when token_source remains enterprise_switch. It still validates expiry/refresh/realm/account and preserves file/device/runtime state. IsEnterpriseSession legacy automation protection remains unchanged.
+
+ROOT CAUSE / evidence and limits
+1. Saved account enterpriseId is absent; source hint is enterprise_switch; credential was unexpired when inspected. Active auth file predates the previous repair binary. Sanitized local log counters showed two OAuth starts and zero successful account reloads; old credentials had not been replaced. Neither tokens nor account IDs are recorded here.
+2. Previous loginPoll explicitly rejected a newly issued credential solely because token_source==enterprise_switch, including same-UID/no-enterpriseId results. It retained the old credential, and overview/UI derived the same enterprise-context badge from that old token: a reject/stale-display loop.
+3. It was incorrect to present that source hint as proof of enterprise account status or to promise that logout/personal login would change it. The exact source hint in each rejected live candidate was not retained, so those candidate payloads cannot be reconstructed from this evidence. Deterministic tests reproduce the faulty branch and verify its correction.
+4. One actual readonly ListTasks GET returned HTTP200/business0/19 tasks using the retained credential. This contradicts a blanket claim that no growth functionality is available. It does NOT establish task-completion eligibility, telemetry counting, payout or all personal entitlements.
+5. Public official login guide checked: https://www.codebuddy.cn/docs/workbuddy/FirstTask distinguishes personal/enterprise login. No public entitlement contract for token_source was found in that search. Diagnostic claim decoding is not an entitlement verification API.
+
+FOUR ARTIFACTS (reopened and checked)
+MODIFIED_FILE: /Users/jinyanya/Code/Codex/workbuddy/maintenance/session-identity/MODIFIED_FILE.go.txt (modified login.go copy, cmp matches working source)
+DIFF_FILE: /Users/jinyanya/Code/Codex/workbuddy/maintenance/session-identity/DIFF_FILE.patch (cmp matches actual tracked source diff)
+VERIFICATION: /Users/jinyanya/Code/Codex/workbuddy/maintenance/session-identity/VERIFICATION.txt
+ROLLBACK: /Users/jinyanya/Code/Codex/workbuddy/maintenance/session-identity/ROLLBACK.sh (executable)
+Original hashes of35 source files: ORIGINAL_SHA256.txt. Old reports remain historical; this correction supersedes their claim that the source hint proves enterprise context or must disappear after personal login.
+
+BASELINE
+Input: clean git archive of1afe782, deterministic fixtures only.
+Directory: /private/tmp/workbuddy-session-identity-baseline
+Exact command:
+GOTOOLCHAIN=local GOCACHE=/private/tmp/workbuddy-gocache GOMODCACHE=/Users/jinyanya/go/pkg/mod /Users/jinyanya/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.3.darwin-arm64/bin/go test ./internal/auth ./internal/panel ./internal/pool
+Literal output:
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/auth	0.766s
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/panel	5.470s
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/pool	0.599s
+Exit status: 0.
+
+MODIFIED
+Input: modified source and deterministic fixtures. Same-UID source-hint candidate now succeeds, persists a distinct fresh token and preserves disabled/balance/device/path state; enterpriseId/differentUID/badexpiry/badrealm candidates remain rejected. Source-only classification does not set enterprise identity or remove automation protection. Frontend neutral language and modal flows covered.
+Exact command:
+GOTOOLCHAIN=local GOCACHE=/private/tmp/workbuddy-gocache GOMODCACHE=/Users/jinyanya/go/pkg/mod /Users/jinyanya/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.3.darwin-arm64/bin/go test -race ./internal/auth ./internal/panel -run 'Test(Reauthor|EnterpriseSwitchSource|EnterpriseSessionTask|AddAccountButton|IsEnterpriseSession|AccountRow)' -count=1
+Literal output:
+ok  github.com/linguo2625469/workbuddy2api-panel/internal/auth 1.498s
+ok  github.com/linguo2625469/workbuddy2api-panel/internal/panel 1.806s
+Exit status: 0.
+Exact full-gate command:
+PATH=/Users/jinyanya/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.3.darwin-arm64/bin:$PATH GOTOOLCHAIN=local GOMODCACHE=/Users/jinyanya/go/pkg/mod GOCACHE=/private/tmp/workbuddy-gocache bash scripts/verify.sh
+Literal output:
+?   	github.com/linguo2625469/workbuddy2api-panel/cmd/credit	[no test files]
+ok  	github.com/linguo2625469/workbuddy2api-panel/cmd/login	1.871s
+ok  	github.com/linguo2625469/workbuddy2api-panel/cmd/openapi	(cached)
+ok  	github.com/linguo2625469/workbuddy2api-panel/cmd/server	1.545s
+?   	github.com/linguo2625469/workbuddy2api-panel/cmd/signin	[no test files]
+?   	github.com/linguo2625469/workbuddy2api-panel/cmd/trial	[no test files]
+?   	github.com/linguo2625469/workbuddy2api-panel/data/live-acceptance	[no test files]
+?   	github.com/linguo2625469/workbuddy2api-panel/data/live-acceptance/chat	[no test files]
+?   	github.com/linguo2625469/workbuddy2api-panel/data/live-acceptance/checkin	[no test files]
+?   	github.com/linguo2625469/workbuddy2api-panel/data/local-dev/identity-probe	[no test files]
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/activities	(cached)
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/auth	1.390s
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/credithist	(cached)
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/httpauth	(cached)
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/livecfg	(cached)
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/logfmt	(cached)
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/panel	15.855s
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/pool	1.867s
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/prompt	(cached)
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/redisstore	(cached)
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/reqlog	(cached)
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/scheduler	17.218s
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/server	13.841s
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/session	(cached)
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/upstream	2.310s
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/usage	(cached)
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/workbuddyopen	(cached)
+ACCEPTANCE PASS
+Exit status: 0. Go1.27.3; Node22.21.1 managed by fnm.
+One initial new test used the wrong Credits type and failed to compile; corrected to int64 assertion before all accepted test runs above.
+
+INDEPENDENT REVIEW
+/root/api_audit reviewed current diff: accepted corrected reauthorization loop, separated source hint/enterpriseId semantics, unchanged automation protection, preserved identity/realm/expiry/file/device/runtime checks, no reward side effects. Remaining stale comments identified and corrected. /root/v1_rewards independently extended and ran frontend regressions. Coordinator executed actual focused and full verification rather than relying on agent 'complete' messages.
+
+ROLLBACK
+Input: independent clean1afe782 source copy, forward-applied DIFF_FILE.patch; actual worktree and running service left changed.
+Exact command:
+bash /Users/jinyanya/Code/Codex/workbuddy/maintenance/session-identity/ROLLBACK.sh /private/tmp/workbuddy-identity-rollback
+Literal output: ROLLBACK PASS: source-hint correction reversed
+Exit status: 0.
+Then in that copy:
+shasum -a 256 -c /Users/jinyanya/Code/Codex/workbuddy/maintenance/session-identity/ORIGINAL_SHA256.txt > /private/tmp/workbuddy-identity-rollback-hashes.log && echo ORIGINAL_HASHES_PASS
+Literal output: ORIGINAL_HASHES_PASS
+Exit status: 0 (35 original hashes match).
+Exact restored-source test command:
+GOTOOLCHAIN=local GOCACHE=/private/tmp/workbuddy-gocache GOMODCACHE=/Users/jinyanya/go/pkg/mod /Users/jinyanya/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.3.darwin-arm64/bin/go test ./internal/auth ./internal/panel ./internal/pool
+Literal output:
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/auth	0.876s
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/panel	5.207s
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/pool	0.470s
+Exit status: 0.
+Restored behavior: isolated copy returns to previous source-hint rejection and display behavior, original tests pass. Modified worktree remains corrected. Prefer git revert of this repair commit for shared history; then rebuild and restart. Patch rollback takes an explicit source-tree argument and does not touch account files or start processes.
+
+REAL READONLY / LOCAL DEPLOYMENT
+Exact real probe command: data/local-dev/identity-probe/probe
+Input: existing previously authorized local account; strict single-request GET https://copilot.tencent.com/v2/activity/growth/tasks allowlist, no redirects/refresh/mutations. Literal JSON: LIVE_READONLY.json. Exit status: 0. HTTP200/business0/19tasks; one request; zero reward/behavior/chat calls. Credential values and task contents not retained in report.
+Local binary was rebuilt with Go1.27.3 (-buildvcs=false), previous binary backed up privately as data/local-dev/wb2api.before-identity-correction. Existing launchd service local.workbuddy.manualtest restarted on127.0.0.1:7863. Automatic schedules remain disabled; credentials unchanged.
+Previous binary SHA256: 8f5df6ebd12a737e7b5665788cb46e4dc20b49d22d727ca01628e9239b4caf71
+Modified binary SHA256: be51b670e6c5626b0a837635436f60b8b62a2447aa1d48ff534081ceea6c6719
+Exact local smoke command:
+UV_CACHE_DIR=/private/tmp/uv-workbuddy-cache uv run --no-project python data/local-dev/identity-smoke.py
+Literal output (excluding uv advisory):
+OVERVIEW_HTTP=200
+ENTERPRISE_FLAG=false
+ENTERPRISE_SWITCH_SOURCE=true
+SOURCE_HINT_LABEL_NOT_ENTERPRISE=PASS
+LEGACY_AUTOMATION_GUARD_PRESERVED=true
+CREDENTIAL_FILES_UNCHANGED=true
+READONLY_SMOKE_PASS
+Exit status: 0. Local service observed running (PID31762 at verification; may change).
+
+NOT CLAIMED / remaining acceptance
+No new live credential was issued or saved by this correction. Fresh same-account reauthorization with retained source hint is verified by mocks, not a third live OAuth attempt. Current saved account is no longer labeled enterprise merely due to token source. Legacy growth-task automatic completion remains unverified and guarded; actual reward/qualification/completion has not been restored or tested. No repeat logout/login is required just to correct the displayed identity. Any future account/reward mutation needs its proper explicit user action/authorization.

@@ -1,0 +1,126 @@
+#0 building with "orbstack" instance using docker driver
+
+#1 [internal] load build definition from Dockerfile
+#1 transferring dockerfile: 2.05kB done
+#1 DONE 0.0s
+
+#2 resolve image config for docker-image://docker.io/docker/dockerfile:1
+#2 DONE 2.4s
+
+#3 docker-image://docker.io/docker/dockerfile:1@sha256:4edf897a3ffa55b89f906fc8cc78afdb3f1834cc9c7083565e611a8a7d5fe99e
+#3 CACHED
+
+#4 [internal] load metadata for docker.io/library/alpine:3.20
+#4 DONE 2.6s
+
+#5 [internal] load metadata for docker.io/library/golang:1.27.3-alpine
+#5 DONE 2.6s
+
+#6 [internal] load .dockerignore
+#6 transferring context: 408B done
+#6 DONE 0.0s
+
+#7 [build 1/6] FROM docker.io/library/golang:1.27.3-alpine@sha256:d200d2dd76b03a99b52651fd1325aff7dcd35422c35c01bac56571b0507f3deb
+#7 DONE 0.0s
+
+#8 [stage-1  1/12] FROM docker.io/library/alpine:3.20@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc
+#8 CACHED
+
+#9 [build 2/6] WORKDIR /src
+#9 CACHED
+
+#10 [internal] load build context
+#10 transferring context: 705.29kB 0.0s done
+#10 DONE 0.1s
+
+#11 [build 3/6] COPY go.mod go.sum ./
+#11 DONE 0.1s
+
+#12 [stage-1  2/12] RUN apk add --no-cache wget ca-certificates tzdata python3 bash  && adduser -D -u 10001 app  && mkdir -p /app/auths /app/data  && chown -R app:app /app
+#12 0.248 fetch https://dl-cdn.alpinelinux.org/alpine/v3.20/main/aarch64/APKINDEX.tar.gz
+#12 1.559 fetch https://dl-cdn.alpinelinux.org/alpine/v3.20/community/aarch64/APKINDEX.tar.gz
+#12 2.792 (1/24) Installing ncurses-terminfo-base (6.4_p20240420-r2)
+#12 ...
+
+#13 [build 4/6] RUN go env -w GOPROXY=https://goproxy.cn,direct &&     go env GOPROXY &&     go mod download
+#13 0.207 https://goproxy.cn,direct
+#13 DONE 2.9s
+
+#12 [stage-1  2/12] RUN apk add --no-cache wget ca-certificates tzdata python3 bash  && adduser -D -u 10001 app  && mkdir -p /app/auths /app/data  && chown -R app:app /app
+#12 3.089 (2/24) Installing libncursesw (6.4_p20240420-r2)
+#12 ...
+
+#14 [build 5/6] COPY . .
+#14 DONE 0.2s
+
+#12 [stage-1  2/12] RUN apk add --no-cache wget ca-certificates tzdata python3 bash  && adduser -D -u 10001 app  && mkdir -p /app/auths /app/data  && chown -R app:app /app
+#12 3.333 (3/24) Installing readline (8.2.10-r0)
+#12 3.570 (4/24) Installing bash (5.2.26-r0)
+#12 3.861 Executing bash-5.2.26-r0.post-install
+#12 3.864 (5/24) Installing ca-certificates (20261020-r0)
+#12 4.139 (6/24) Installing libbz2 (1.0.8-r6)
+#12 4.364 (7/24) Installing libexpat (2.8.1-r0)
+#12 4.602 (8/24) Installing libffi (3.4.6-r0)
+#12 4.845 (9/24) Installing gdbm (1.23-r1)
+#12 5.082 (10/24) Installing xz-libs (5.8.3-r0)
+#12 5.329 (11/24) Installing libgcc (13.2.1_git20240309-r1)
+#12 5.575 (12/24) Installing libstdc++ (13.2.1_git20240309-r1)
+#12 5.932 (13/24) Installing mpdecimal (4.0.0-r0)
+#12 6.208 (14/24) Installing libpanelw (6.4_p20240420-r2)
+#12 ...
+
+#15 [build 6/6] RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/wb2api ./cmd/server  && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/signin_bin ./cmd/signin  && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/login ./cmd/login  && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/credit ./cmd/credit  && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/openapi ./cmd/openapi
+#15 DONE 10.8s
+
+#12 [stage-1  2/12] RUN apk add --no-cache wget ca-certificates tzdata python3 bash  && adduser -D -u 10001 app  && mkdir -p /app/auths /app/data  && chown -R app:app /app
+#12 76443.3 (15/24) Installing sqlite-libs (3.45.3-r3)
+#12 76446.1 (16/24) Installing python3 (3.12.13-r0)
+#12 76455.4 (17/24) Installing python3-pycache-pyc0 (3.12.13-r0)
+#12 76458.2 (18/24) Installing pyc (3.12.13-r0)
+#12 76458.5 (19/24) Installing python3-pyc (3.12.13-r0)
+#12 76458.9 (20/24) Installing tzdata (2026b-r0)
+#12 76459.8 (21/24) Installing libunistring (1.2-r0)
+#12 76460.5 (22/24) Installing libidn2 (2.3.7-r0)
+#12 76461.3 (23/24) Installing pcre2 (10.43-r0)
+#12 76462.2 (24/24) Installing wget (1.24.5-r0)
+#12 76463.0 Executing busybox-1.36.1-r31.trigger
+#12 76463.0 Executing ca-certificates-20261020-r0.trigger
+#12 76463.1 OK: 63 MiB in 38 packages
+#12 DONE 76463.4s
+
+#16 [stage-1  3/12] WORKDIR /app
+#16 DONE 0.1s
+
+#17 [stage-1  4/12] COPY --from=build /out/wb2api /app/wb2api
+#17 DONE 0.1s
+
+#18 [stage-1  5/12] COPY --from=build /out/signin_bin /app/signin_bin
+#18 DONE 0.0s
+
+#19 [stage-1  6/12] COPY --from=build /out/login /app/login
+#19 DONE 0.1s
+
+#20 [stage-1  7/12] COPY --from=build /out/credit /app/credit
+#20 DONE 0.1s
+
+#21 [stage-1  8/12] COPY --from=build /out/openapi /app/openapi
+#21 DONE 0.1s
+
+#22 [stage-1  9/12] COPY login.sh signin.sh credit.sh /app/
+#22 DONE 0.1s
+
+#23 [stage-1 10/12] COPY scripts/probe_active.py /app/scripts/probe_active.py
+#23 DONE 0.1s
+
+#24 [stage-1 11/12] RUN sed -i 's/\r$//' /app/login.sh /app/signin.sh /app/credit.sh && chmod 755 /app/login.sh /app/signin.sh /app/credit.sh
+#24 DONE 0.2s
+
+#25 [stage-1 12/12] COPY config.example.json /app/config.example.json
+#25 DONE 0.1s
+
+#26 exporting to image
+#26 exporting layers
+#26 exporting layers 0.4s done
+#26 writing image sha256:efef81cee83b1193450d6290531ede7881c7fdeb82f027f3a35e3077e04e7775 done
+#26 naming to docker.io/library/workbuddy-maintenance:v2-check done
+#26 DONE 0.5s

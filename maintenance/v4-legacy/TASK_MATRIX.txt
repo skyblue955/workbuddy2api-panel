@@ -1,0 +1,70 @@
+# Legacy auto-action matrix (25 rows)
+
+Date: 2026-11-07
+Source basis: `internal/panel/autotask.go` action registry and implementations; `internal/upstream/tasks.go` task/claim semantics; `maintenance/v4-legacy/evidence/legacy-source-reuse.json` (cached-source identity only). This is a static source inventory, not live acceptance.
+
+## Classification rules
+
+* **Hybrid** means the implementation performs a real operation (or a real upstream conversation/lookup) and also emits task telemetry. It still requires the genuine condition/effect to count.
+* **Event-only** means the implementation emits telemetry or a synthetic event sequence without performing the product operation described by the task. The 17 event-only paths are not genuine completion; do not execute or repair them to obtain unearned rewards, and do not test which fake events work.
+* “Real fulfillment shown” records what the source/tests establish, not what a telemetry response might imply. The matrix remains a static source inventory; the two rows below also record the bounded live validation evidence from 2026-11-07. Live evidence does not turn event-only paths into real completion.
+* Side effects are inferred only from the source implementation. `0` means no product side effect is shown by the implementation; counts are event/action families, not reward amounts.
+
+| # | code | source action | actual action vs event-only | real fulfillment shown | side effects / inference count | current validation |
+|---:|---|---|---|---|---|---|
+| 1 | `chat_5` | `runChat5`: report `chat_request_send` up to the remaining target | event-only | No; only activity reports are shown | 0 product actions; up to target−current telemetry reports | not live verified |
+| 2 | `first_buddy` | `runFirstBuddy`: report activity, accept agreement, call first-Buddy operation | hybrid | Buddy agreement/adoption operation is called; genuine daily-active prerequisite is required | 2 product operations + 1 activity report; prerequisite telemetry only (no inference) | not live verified |
+| 3 | `Model_chat_GLM5.2` | `runModelChat`: accept, stream one GLM-5.2 chat, report model activity | hybrid | One real chat stream is shown; reward still depends on upstream task state | 1 chat + 1 activity report + 1 accept; model-field inference 1 | not live verified |
+| 4 | `RichMeow_Chat` | `runRichMeow`: emit desktop conversation event sequence | event-only | No; no chat request is made | 0 product actions; 1 synthetic desktop sequence (6-event family) | not live verified |
+| 5 | `Buddy_App` | `runBuddyApp`: emit Buddy-app five-event sequence | event-only | No; no app entry/auth operation is made | 0 product actions; 1 five-event telemetry sequence | not live verified |
+| 6 | `Buddy_App_QQ` | `runBuddyApp`: emit the same Buddy-app five-event sequence with QQ label | event-only | No; no QQ assistant entry/auth operation is made | 0 product actions; 1 five-event telemetry sequence | not live verified |
+| 7 | `automation_1` | `runAutomationCreate`: emit `automated_task_create_suc` | event-only | No; source explicitly says no real scheduled-task creation | 0 product actions; 1 telemetry event | not live verified |
+| 8 | `Library_read` | `runLibraryRead`: emit `web_element_click` for the library intro URL | event-only | Historical exception only: genuine user reading + one claim was recorded on Nov 4; this is not old event-only function verification | 0 product actions in function; 1 web event; historical evidence count 1 user-reading/claim | historical Library_read true user reading + once claim Nov 4; otherwise not live verified |
+| 9 | `template_5` | `runTemplateUse`: emit five template event groups | event-only | No; source explicitly says it does not create tasks | 0 product actions; 5 telemetry groups | not live verified |
+| 10 | `playbook_prompt` | `runPlaybookPrompt`: emit playbook click/send sequence | event-only | No; no Dialog prompt is sent | 0 product actions; 1 telemetry sequence | not live verified |
+| 11 | `create_canvas` | `runCreateCanvas`: emit canvas create/open sequence | event-only | No; source emits telemetry and does not create a canvas | 0 product actions; 1 telemetry sequence | not live verified |
+| 12 | `expert_5` | `runExpertUse`/`runExpertBatch`: list experts, summon, real chat, report use | hybrid | Real expert list lookup and real chat request are shown; genuine expert availability/usage is required | up to 5 list-backed chats + summon/use telemetry; inference count 5 | live partial: 1/5 real expert conversation observed; task readback 1/5, not claimable; no claim; not full legacy runExpertBatch |
+| 13 | `Expert_team_use_3` | `runExpertTeamUse`/`runExpertBatch`: list teams, summon, real chat, report use | hybrid | Real team list lookup and real chat request are shown; genuine team availability/usage is required | up to 3 list-backed chats + summon/use telemetry; inference count 3 | live checked: task accepted, 0/3; second UI attempt stopped before Send; no confirmed team conversation; not claimable; no claim |
+| 14 | `Hp_Appearance` | `runAppearance`: set theme, then emit skin-apply event | hybrid | Theme-setting API call is shown; actual client application/effect must be genuine | 1 appearance mutation + 1 telemetry event; effect inference 1 | not live verified |
+| 15 | `skill_1` | `runSkillFresh`: real expert chat, then append `skill_info` telemetry | hybrid | Real chat is shown, but no actual skill invocation/loading is shown; skill completion is unproven | 1 chat + 1 synthetic skill event; actual-skill inference unresolved (0 shown) | not live verified; lacks actual skill proof |
+| 16 | `Expert_lighthouse` | `runExpertLighthouse`: summon telemetry, real chat, expert-use telemetry | hybrid | Real chat is shown, but no connector authorization/use proof is shown | 1 chat + summon/use telemetry; connector-effect inference unresolved (0 shown) | not live verified; lacks connector proof |
+| 17 | `black_cat` | `runBlackCat`: during window, run night chats and report | hybrid | Real night-chat calls are shown only inside 23:00–08:00; genuine window/account state is required | `need` real chats + activity reporting; window inference 1 | not live verified |
+| 18 | `school_season` | `runSchoolSeason`/`runMPMiniChatTask`: accept and emit mini chat events with activity ID | event-only | No real mini-program conversation is shown | 0 product actions; up to target telemetry reports; activityId inference 1 | not live verified |
+| 19 | `Sequential_Tasks_1` | `runSequentialChat`: accept and emit one mini chat event | event-only | No real mini-program conversation is shown | 0 product actions; 1 telemetry event | not live verified |
+| 20 | `Sequential_Tasks_2` | `runMiniExpert`: list an expert, accept, emit `expert_actual_use` | event-only | No expert chat/use request is made; list lookup alone is not fulfillment | 0 product actions; 1 list read + 1 synthetic use event; expert-id inference 1 | not live verified |
+| 21 | `Sequential_Tasks_3` | `runSequentialChat5`: accept and emit mini chat events at 45s cadence | event-only | No real mini-program conversations are shown; cadence does not make telemetry genuine | 0 product actions; up to 5 telemetry reports; anti-abuse inference 1 | not live verified |
+| 22 | `Sequential_Tasks_4` | `runSequentialAutomation`: emit desktop automation-create event | event-only | No scheduled task is created; source says this reuses the PC event | 0 product actions; 1 telemetry event | not live verified |
+| 23 | `Sequential_Tasks_5` | `runSequentialModelChat`: emit mini model event, then optional PC model event | event-only | No real GLM-5.2 chat is made by this function | 0 product actions; 1–2 telemetry events; fallback inference 1 | not live verified |
+| 24 | `Sequential_Tasks_6` | `runSequentialChat10`: accept and emit mini chat events at 45s cadence | event-only | No real mini-program conversations are shown | 0 product actions; up to target telemetry reports; target inference 1 | not live verified |
+| 25 | `Sequential_Tasks_7` | `runSequentialPlaybook`: emit PC playbook sequence, optionally mini fallback | event-only | No real inspiration workflow or prompt send is shown | 0 product actions; 1–2 telemetry sequences; fallback inference 1 | not live verified |
+
+## Current live validation (2026-11-07)
+
+本轮仅验收国内版 WorkBuddy，且只记录真实产品操作及只读回读。已确认 1 次内容创作专家普通短问答：真实 UI 出现新会话和完整纯文本回复，完成约 10 秒，界面显示快速（DeepSeek-V4.1-Flash）并显示消耗 0.7 积分；未观察到工具调用。一次坐标点击未执行，确认目标后只完成一次语义 Send，未自动付费重发。
+
+任务回读为 expert_5：in_progress、1/5、不可领取、未领取；Expert_team_use_3：accepted、0/3、不可领取、未领取。第二条销售教练只预约未发送，因 AX 目录/弹窗与截图状态不一致而停止。当前发送账面为 reserved 2、attempted UI 1、confirmed 1；其中 1 个预约槽未发送，另有 6 个未预约，未执行授权额度合计 7。领奖尝试为 0/2。以上是部分实证，不是旧版 runExpertBatch 全链路通过，也不是 25 项自动完成。
+
+后续验收入口：人工完成剩余 4 个不同专家及 3 个专家团普通短问答，不调用工具或连接器、不接受新协议、不领取奖励；然后仅做只读资格核验，只有上游明确 claimable 且未领取时，才按已批准额度对对应任务各领取一次。
+
+## Count and release-note caveats
+
+* Exact inventory count: **25** (`autoActions` entries in source).
+* **8 hybrids:** `first_buddy`, `Model_chat_GLM5.2`, `expert_5`, `Expert_team_use_3`, `Hp_Appearance`, `skill_1`, `Expert_lighthouse`, `black_cat`.
+* **17 event-only:** all remaining rows. These are not true completion paths and must not be recommended for execution/fixing to obtain rewards or for probing which fabricated events are accepted.
+* Real-action rows require bounded approval for any fee, terms/agreement, adoption, preference/theme mutation, expert/connector use, or other account effect. Do not blanket-run `auto_all`; do not reuse a prior approval.
+* `skill_1` lacks proof of an actual skill invocation/loading. `Expert_lighthouse` lacks connector authorization/use proof. `automation_1`, `template_5`, and `create_canvas` emit events but do not perform creation. `Library_read` has only the historical Nov-4 genuine-user-reading/once-claim evidence noted above.
+* Preserve legacy calls and wrappers; do not silently delete them. Simulations and mock passes are not live acceptance. No private JSON/credential reads or live calls were used for this inventory.
+
+## Source checks
+
+Commands used against the working tree:
+
+```text
+sed -n '1,220p' internal/panel/autotask.go
+sed -n '320,1140p' internal/panel/autotask.go
+grep -n '^func run' internal/panel/autotask.go
+sed -n '1,220p' internal/upstream/tasks.go
+cat maintenance/v4-legacy/evidence/legacy-source-reuse.json
+```
+
+The registry contains 25 entries; the implementation names and defaults above are taken from those source sections. This file does not claim that the legacy actions are currently verified against a live service.

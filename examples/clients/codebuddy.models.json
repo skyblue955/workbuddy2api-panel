@@ -1,0 +1,10 @@
+{
+  "models": [{
+    "id": "cn:deepseek-v4-flash",
+    "name": "Local maintained gateway (choose an available model)",
+    "vendor": "OpenAI Compatible",
+    "apiKey": "${WB2A_API_KEY}",
+    "url": "http://127.0.0.1:7863/v1/chat/completions"
+  }],
+  "availableModels": ["cn:deepseek-v4-flash"]
+}

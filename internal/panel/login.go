@@ -18,6 +18,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/linguo2625469/workbuddy2api-panel/internal/auth"
@@ -117,14 +118,31 @@ func doJSON(method, fullURL, bearer string, body io.Reader, origin string) (json
 // body 可带 {"realm":"global"}（缺省 cn）；state 会话记 realm，poll 同 realm 落盘。
 func (p *Panel) loginStart(w http.ResponseWriter, r *http.Request) {
 	realm := "cn"
+	reauthorizeUID := ""
 	if r.Body != nil {
 		var reqBody struct {
-			Realm string `json:"realm"`
+			Realm          string `json:"realm"`
+			ReauthorizeUID string `json:"reauthorize_uid"`
 		}
 		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<12)).Decode(&reqBody); err == nil {
 			if reqBody.Realm == "global" {
 				realm = "global"
 			}
+			reauthorizeUID = reqBody.ReauthorizeUID
+		} else if err != io.EOF {
+			writeErr(w, http.StatusBadRequest, "登录参数 JSON 无效")
+			return
+		}
+	}
+	if reauthorizeUID != "" {
+		if !validUID(reauthorizeUID) {
+			writeErr(w, http.StatusBadRequest, "invalid reauthorization uid")
+			return
+		}
+		found := p.cfg.Pool.AuthByUID(reauthorizeUID)
+		if found == nil || found.FilePath == "" || found.Realm() != realm {
+			writeErr(w, http.StatusBadRequest, "该账号不满足当前凭证更新条件，请刷新账号列表并核对同一账号与版本")
+			return
 		}
 	}
 	epState, _, _, origin := loginEndpoints(realm)
@@ -148,7 +166,7 @@ func (p *Panel) loginStart(w http.ResponseWriter, r *http.Request) {
 			delete(p.logins, s)
 		}
 	}
-	p.logins[st.State] = loginSession{created: time.Now(), realm: realm}
+	p.logins[st.State] = loginSession{created: time.Now(), realm: realm, reauthorizeUID: reauthorizeUID}
 	p.loginMu.Unlock()
 	log.Printf("panel: 发起 OAuth 添加账号 realm=%s（state=%s...）", realm, st.State[:min(8, len(st.State))])
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "url": st.AuthURL, "state": st.State, "realm": realm})
@@ -163,10 +181,44 @@ func (p *Panel) loginPoll(w http.ResponseWriter, r *http.Request) {
 	}
 	p.loginMu.Lock()
 	sess, known := p.logins[state]
+	if known && time.Since(sess.created) > loginTTL {
+		delete(p.logins, state)
+		known = false
+	}
+	if known && sess.processing {
+		p.loginMu.Unlock()
+		writeErr(w, http.StatusConflict, "授权处理中，请等待本次请求完成")
+		return
+	}
+	if known {
+		sess.processing = true
+		p.logins[state] = sess
+	}
 	p.loginMu.Unlock()
+	if known {
+		defer func() {
+			p.loginMu.Lock()
+			defer p.loginMu.Unlock()
+			if pending, ok := p.logins[state]; ok {
+				pending.processing = false
+				p.logins[state] = pending
+			}
+		}()
+	}
 	if !known {
 		writeErr(w, http.StatusNotFound, "unknown or expired state（请重新发起添加账号）")
 		return
+	}
+	var reauthCurrent *auth.Auth
+	if sess.reauthorizeUID != "" {
+		reauthCurrent = p.cfg.Pool.AuthByUID(sess.reauthorizeUID)
+		if reauthCurrent == nil || reauthCurrent.FilePath == "" || reauthCurrent.Realm() != sess.realm {
+			p.loginMu.Lock()
+			delete(p.logins, state)
+			p.loginMu.Unlock()
+			writeErr(w, http.StatusBadRequest, "原账号已移除、版本不匹配或身份已更新，请刷新账号列表后重新授权")
+			return
+		}
 	}
 	_, epToken, epAcct, origin := loginEndpoints(sess.realm)
 
@@ -208,6 +260,33 @@ func (p *Panel) loginPoll(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadGateway, "上游返回的 uid 含非法字符，拒绝落盘（防路径穿越）")
 		return
 	}
+	if sess.reauthorizeUID != "" {
+		log.Printf("panel: reauthorization result same_account=%t enterprise_id_present=%t enterprise_switch_source=%t", acct.UID == sess.reauthorizeUID, strings.TrimSpace(acct.EnterpriseID) != "", (&auth.Auth{AccessToken: tok.AccessToken}).HasEnterpriseSwitchSource())
+		if reauthCurrent == nil || acct.UID != sess.reauthorizeUID || strings.TrimSpace(acct.EnterpriseID) != strings.TrimSpace(reauthCurrent.EnterpriseID) {
+			p.loginMu.Lock()
+			delete(p.logins, state)
+			p.loginMu.Unlock()
+			writeErr(w, http.StatusBadRequest, "此次授权的账号或企业空间与原账号不一致，原凭证已保留；请核对官方授权页的账号与身份")
+			return
+		}
+	}
+
+	if sess.reauthorizeUID != "" {
+		if strings.TrimSpace(tok.RefreshToken) == "" || tok.ExpiresIn <= 0 || tok.ExpiresIn > int64((1<<63-1)/int64(time.Second)) || auth.ResolveRealm("", tok.Domain) != sess.realm {
+			p.loginMu.Lock()
+			delete(p.logins, state)
+			p.loginMu.Unlock()
+			writeErr(w, http.StatusBadGateway, "授权凭证有效期、刷新凭证或版本异常，原凭证已保留；请重新授权")
+			return
+		}
+		if p.cfg.Pool.AuthByUID(sess.reauthorizeUID) != reauthCurrent {
+			p.loginMu.Lock()
+			delete(p.logins, state)
+			p.loginMu.Unlock()
+			writeErr(w, http.StatusConflict, "原账号在授权期间已变更，原凭证未被覆盖；请刷新后重新授权")
+			return
+		}
+	}
 
 	// 凭证落盘（嵌套形，与 auths/ 目录既有格式一致）→ 热加载进池。
 	if err := os.MkdirAll(p.cfg.AuthDir, 0o755); err != nil {
@@ -224,6 +303,10 @@ func (p *Panel) loginPoll(w http.ResponseWriter, r *http.Request) {
 		Nickname:     acct.Nickname,
 		FilePath:     filepath.Join(p.cfg.AuthDir, fmt.Sprintf("workbuddy-%s.json", acct.UID)),
 	}
+	if sess.reauthorizeUID != "" {
+		a.FilePath = reauthCurrent.FilePath
+		a.DeviceToken = reauthCurrent.DeviceToken
+	}
 	// global 登录：落盘 auth.realm=global（Realm() 按此判域；不写则依赖 domain 后缀回落）。
 	if sess.realm == "global" {
 		if _, err := auth.BackfillRealmFor(a, "global"); err != nil {
@@ -239,7 +322,9 @@ func (p *Panel) loginPoll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p.cfg.Pool.Add(a)
-	p.cfg.Pool.Revive(acct.UID) // 全新登录 = 人工恢复口径：清掉旧号遗留的禁用/冷却/熔断
+	if sess.reauthorizeUID == "" {
+		p.cfg.Pool.Revive(acct.UID) // 全新登录 = 人工恢复口径：清掉旧号遗留的禁用/冷却/熔断
+	}
 
 	// 顺带签到 + 余额刷新（幂等；失败不影响登录结果，只体现在返回字段里）。
 	// realm 分支：CN 走 DailyCheckin；global 无 CN 签到体系，改为注册激活 + trial 领取
@@ -247,7 +332,12 @@ func (p *Panel) loginPoll(w http.ResponseWriter, r *http.Request) {
 	checkinMsg := ""
 	remain := int64(-1)
 	total := int64(0)
-	if sess.realm == "global" {
+	if sess.reauthorizeUID != "" {
+		checkinMsg = "授权已更新；未执行签到或奖励操作"
+		if a.HasEnterpriseSwitchSource() {
+			checkinMsg += "；token_source仅为来源提示，不代表企业账号；任务资格尚未验证"
+		}
+	} else if sess.realm == "global" {
 		// 注册激活（幂等）：region required 时自动补地区（白名单首个，HK）后重新激活。
 		// 失败不阻断登录结果（auth 已落盘），只在返回字段里体现。
 		if activated, err := p.cfg.Upstream.GlobalCompleteRegistration(a); err != nil {
@@ -271,29 +361,39 @@ func (p *Panel) loginPoll(w http.ResponseWriter, r *http.Request) {
 			checkinMsg = err.Error()
 		}
 	}
-	if rm, tt, err := p.cfg.Upstream.UserResource(a); err == nil {
-		remain, total = rm, tt
-		p.cfg.Pool.ReenableIfCredits(acct.UID, rm, tt)
+	if sess.reauthorizeUID == "" {
+		if rm, tt, err := p.cfg.Upstream.UserResource(a); err == nil {
+			remain, total = rm, tt
+			p.cfg.Pool.ReenableIfCredits(acct.UID, rm, tt)
+		}
 	}
 
 	p.loginMu.Lock()
 	delete(p.logins, state)
 	p.loginMu.Unlock()
 	log.Printf("panel: 新账号已热加载 uid=%s nickname=%q realm=%s（免重启生效）", acct.UID, acct.Nickname, sess.realm)
-	// 企业切换会话预警：该形态下 /v2/report 行为事件被上游静默丢弃（200 不计分），
-	// 成长任务全部无法点亮（签到/列表/额度/领养照常）。当场给出修复路径，
-	// 避免用户事后对着「已上报但进度 0/x」排查（见 auth.IsEnterpriseSession）。
-	if a.IsEnterpriseSession() && !a.IsEnterprise() {
-		log.Printf("panel: WARN uid=%s 的凭证为企业切换会话（token_source=enterprise_switch）：成长任务行为事件会被上游静默丢弃；建议移除该账号，在浏览器退出企业切换（个人身份）后重新登录", acct.UID)
+	// 来源字段不等于账号身份；保留保守自动化门控，但不要求反复登出重登。
+	if a.HasEnterpriseSwitchSource() && !a.IsEnterprise() {
+		log.Printf("panel: 登录凭证包含 enterprise_switch 来源提示；该提示不证明企业身份，旧版成长任务自动化仍待验证")
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"done":            true,
+		"reauthorized":    sess.reauthorizeUID != "",
+		"authorization":   a.CredentialStatus(time.Now()),
 		"uid":             acct.UID,
 		"nickname":        acct.Nickname,
 		"realm":           sess.realm,
 		"credits":         remain,
 		"credits_total":   total,
 		"checkin_message": checkinMsg,
+		"session_kind": func() string {
+			if sess.reauthorizeUID != "" {
+				return "personal_reauthorization"
+			}
+			return "new_login"
+		}(),
+		"enterprise":               a.IsEnterprise(),
+		"enterprise_switch_source": a.HasEnterpriseSwitchSource(),
 	})
 }
 

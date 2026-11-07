@@ -37,3 +37,8 @@ Committed code d002062: actual isolated Git clone + git revert --no-commit d0020
 Literal result: GIT_REVERT_COPY=PASS restored_tree=df28f4dbdd4d209d4b899c0001ee2e25c040a2cf; exit0.
 Fork branch pushed: origin/maintenance/v1-compat-rewards. Draft PR: https://github.com/skyblue955/workbuddy2api-panel/pull/1
 This evidence-only follow-up does not change executable code. Overall delivery remains incomplete pending mandatory real-account gates in ACCEPTANCE.txt.
+
+Real acceptance follow-up: LIVE_ACCEPTANCE.txt and live-readonly-result.json/live-chat-result.json/live-checkin-result.json record the actual, separately authorized primary route. Commands all exit0: go run ./data/live-acceptance; go run ./data/live-acceptance/chat; go run ./data/live-acceptance/checkin (each with GOCACHE=/private/tmp/workbuddy-gocache).
+Literal results: readonly gateway200/models18/schema_valid=true and balance passed=true; chat actual_chat_requests=2/upstream statuses[200,200]/both passed=true/reply_matches_ok=true; daily sign-in actual_checkin_requests=1/http_status=200/business_code=0/passed=true/observed_credit_delta=100.
+No source-code modification was needed for these live checks. Core baseline/modified/rollback evidence above remains unchanged. Local private harnesses and credentials are Git-ignored; only sanitized reports are committed. Other live acceptance boundaries are detailed in LIVE_ACCEPTANCE.txt.
+Hosted CI for evidence baseline dcb459c: all tests, five-platform builds and Docker PR build passed (no publication; publish job skipped). Runs41448856741(go-binaries) and41448856648(docker-ghcr). This subsequent report-only commit is not itself a new CI result.

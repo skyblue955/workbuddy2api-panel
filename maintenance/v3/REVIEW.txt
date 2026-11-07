@@ -1,0 +1,22 @@
+Independent review refreshed 2026-11-07 (real acceptance evidence remains 2026-11-04)
+claim_ready_review(security_reviewer) source-only,no tests/livecalls/privateJSONread:
+- Found ambiguous duplicate top-level execute/task_codes keys; rootfixedtoken-parserrejects400withzerooutbound regression.
+- Flagged newlock didnotcover oldmanualmutators; rootadded sameaccountlocktoaccept/accept_all/claim, tested409/zerooutbound.
+- Flagged receiptflagbeforepostconfirmation; rootseparatedreceipt_reward_reported/upstream_claimed/reward_received anduncertain statuses, testednegative/duplicate/unclaimed/readfailure.
+- Final no evidence-backed security blocker. Source commits c0c1f27 + 1a62232. Current hashes: claimready.go 034935acbb195f15bc151a065ae3f6a1a9048f8b4f3c9fdf291e1f45e5d1ad67; claimready_safety_test.go 59d7fa23d5943d5c41f692d28a8c198837f59cfda5e08c9807d6ff4498d3542a; tasks.go 0500718b1778a922d2d9862d306ca8826872e31f89e58e87716f95bc731e22f9. The independent claim_ready_review accepted the mini-fix.
+- Explicitremaininglimitation: existinglegacyClaimReward receiptparser is permissive; do not claimstrictschemas or independentbalanceverification fromproductionresponsealone.
+
+Test engineering
+Implementer initial parser-only tests did not satisfy acceptance. Rootrequiredintegrationcoverage, commissioned test_engineer then audited/strengthened actualassertions: realJWTsourcehint(not ignoredfakefield), handlerzerooutboundduplicates/oversize, exactonePOST/noothermutators, actualMPcandidatepresent, postconfirmationflags, HTTPfailurebudget. Rootranfullgate+targetedrace and isolatedrollback, not relying on agent 'done'.
+
+Live one-off review
+live_chat_paths reviewed separate source-only harnesses for savedcredentialexpiry,CNHTTPSallowlists,max16tokens/thinkingdisabled, explicitexecute/O_EXCL/noautoretry/budget2thenfreshadditional1. Unknown/omitted reasoningcapability must not be treated as confirmed nonreasoning: firsthy4casefailed and retained. Other livecode uses boundedallowlists andprivateevidence; mock fixtures never contain realaccounts.
+
+
+Delivery review notes (2026-11-07)
+- Native final service observation: current binary SHA256 e1ca68c7d359ec2ed77d6d2cc7373cf4237017a3112608ef56e14beb14681671; prior v3 backup SHA256 c73c377602740c53a022cbfa72a83ee2cc2df0a8633b2c5ea52b25050da52d0a. The 646649 hash is an intermediate restored fallback, not the final current hash.
+- Observed postclaim preview: HTTP 200, claims=0, selected=0, reason=already_claimed, upstream_claimed=true, new_reward=false; POSTCLAIM_NO_DUPLICATE_MUTATION_PASS, exit 0.
+- The shutdown-race account is an inference, not a direct observation. Do not present it as a measured root cause.
+- Release caveats: autonomous preclaim eligibility discovery remains incomplete; the production legacy receipt parser remains permissive; no distributed/crash-safe exactly-once guarantee is claimed.
+
+2026-11-07 continuation: repo_explorer qualification_gap_audit examined fixed-shape parser, computed Claimable and source precedence. It identified plausible discarded-field/channel/merge issues, NOT a proved new readiness contract. Root recorded conservative research queue rather than changing eligibility or spending consumed live grants. Nov7 coordinator fullgate and freshcopy reverse/hash/fullgate all passed; no additional source change after reviewed hashes.

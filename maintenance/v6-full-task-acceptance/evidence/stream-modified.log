@@ -1,0 +1,6 @@
+Focused modified verification
+Command: mv internal/panel/full_action_acceptance_test.go /tmp/full_action_acceptance_test.go.disabled && GOROOT=/opt/homebrew/Cellar/go/1.27.1/libexec GOTOOLCHAIN=local GOCACHE=/tmp/workbuddy-gocache go test ./internal/panel -run 'TestRunModelChat' -count=1 -v; rc=$?; mv /tmp/full_action_acceptance_test.go.disabled internal/panel/full_action_acceptance_test.go; exit $rc
+Result: PASS; exit status 0
+Cases: valid report=1; errorframe/truncated/readerror/id-only/empty/reasoning-only/oversize/malformed report=0; request preservation PASS.
+Note: full_action_acceptance_test.go was temporarily excluded only because the coordinator-owned file currently has unrelated undefined failurePaths compile errors; it was restored unchanged.
+Tightened rerun: added data: (no-space), event:error, post-DONE rejection, assistant-role check, stop/length-only termination, and error/message assertions. Same focused command: PASS; exit status 0; 13 invalid cases report=0 and return err, valid report=1.

@@ -1,0 +1,51 @@
+{
+  "date": "2026-11-07",
+  "realm": "cn",
+  "client": "WorkBuddy V5.9.3",
+  "authorized_gui_submissions": 8,
+  "semantic_send_attempts": 1,
+  "confirmed_gui_replies": 1,
+  "confirmation": [
+    "human confirmed reply",
+    "subsequent native UI full reply/completed 10s"
+  ],
+  "model": "DeepSeek-V4.1-Flash",
+  "displayed_credit_cost_for_confirmed_reply": 0.7,
+  "tools_observed": 0,
+  "model_http_requests": "not instrumented; UI cap only",
+  "reserved_slots": 2,
+  "reserved_but_unsent_ordinals": [
+    2
+  ],
+  "unreserved_slots": 6,
+  "remaining_actual_submissions": 7,
+  "controlled_post_send_readback": {
+    "command": "./data/live-v4/expert-ops/probe read",
+    "reads": 1,
+    "writes": 0,
+    "statuses": [
+      200
+    ],
+    "exit": 0
+  },
+  "task_progress": {
+    "expert_5": {
+      "current": 1,
+      "target": 5,
+      "status": "in_progress",
+      "claimable": false,
+      "claimed": false
+    },
+    "Expert_team_use_3": {
+      "current": 0,
+      "target": 3,
+      "status": "accepted",
+      "claimable": false,
+      "claimed": false
+    }
+  },
+  "reward_attempts": 0,
+  "automatic_chat_retries": 0,
+  "second_expert": "editor transition not confirmed; no Send attempted",
+  "live_completion": "INCOMPLETE"
+}

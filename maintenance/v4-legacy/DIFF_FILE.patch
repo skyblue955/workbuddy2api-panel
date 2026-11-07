@@ -1,0 +1,1591 @@
+diff --git a/internal/panel/app.js b/internal/panel/app.js
+index e4cf10f..9036d3b 100644
+--- a/internal/panel/app.js
++++ b/internal/panel/app.js
+@@ -1729,6 +1729,17 @@ $('btnTaskAcceptAll').onclick = async () => {
+   finally { btn.disabled = false; btn.textContent = '全部接受'; loadTasks(); }
+ };
+ 
++function summarizeAutoResults(results) {
++  return results.reduce((out, item) => {
++    if (item.claim_error || item.no_reward === true) out.unconfirmedN++;
++    else if (item.status === 'done' && item.verified === true) out.verifiedN++;
++    else if (item.status === 'skipped') out.skippedN++;
++    else if (item.status === 'error') out.errorN++;
++    else out.unconfirmedN++;
++    return out;
++  }, { verifiedN: 0, skippedN: 0, unconfirmedN: 0, errorN: 0 });
++}
++
+ // 一键完成全部可自动任务（耗时较长：含真实对话，逐项回读验证）。
+ $('btnTaskAutoAll').onclick = async () => {
+   if (!taskUID || taskSessionBlocked()) return;
+@@ -1737,11 +1748,9 @@ $('btnTaskAutoAll').onclick = async () => {
+   btn.disabled = true; btn.textContent = '执行中…';
+   try {
+     const r = await api('accounts/' + encodeURIComponent(taskUID) + '/tasks/auto_all', { method: 'POST' });
+-    const okN = (r.results || []).filter(x => x.status === 'done').length;
+-    const skipN = (r.results || []).filter(x => x.status === 'skipped').length;
+-    const errN = (r.results || []).filter(x => x.status === 'error').length;
+-    toast(`执行完成：成功 ${okN} 项，跳过 ${skipN} 项${errN ? '，失败 ' + errN + ' 项' : ''}`, errN ? 'err' : 'ok');
+-    console.log('auto_all results:', r.results);
++    const summary = summarizeAutoResults(r.results || []);
++    const warning = summary.unconfirmedN + summary.errorN > 0;
++    toast(`执行完成：成功 ${summary.verifiedN} 项，跳过 ${summary.skippedN} 项${warning ? `，未确认 ${summary.unconfirmedN} 项，失败 ${summary.errorN} 项` : ''}`, warning ? 'err' : 'ok');
+   } catch (e) { toast(e.message, 'err'); }
+   finally { btn.disabled = false; btn.textContent = '一键完成可自动任务'; loadTasks(); }
+ };
+@@ -1822,15 +1831,24 @@ $('taskBody').addEventListener('click', async ev => {
+         if (r.claimed) msg += '，奖励已自动到账';
+         else if (r.claimable) msg += r.claim_error ? '，可点「领取」重试' : '';
+         else if (r.attempt && !advanced) msg += '；进度未动，该任务可能需要官方客户端';
+-        toast(msg, (r.claimed || advanced) ? 'ok' : 'err');
++        const confirmed = r.verified === true || r.claimed === true || r.already_claimed === true;
++        toast(msg, confirmed && !r.claim_error && r.no_reward !== true ? 'ok' : 'err');
+       }
+       loadOverview(true);
+     } else {
+       const path = 'accounts/' + encodeURIComponent(taskUID) + '/tasks/' + (kind === 'claim' ? 'claim' : 'accept');
+       const body = kind === 'claim' ? { task_code: code } : { task_codes: [code] };
+-      await api(path, { method: 'POST', body: JSON.stringify(body) });
+-      toast(kind === 'claim' ? '已领取奖励' : '已接受任务', 'ok');
+-      if (kind === 'claim') loadOverview(true);
++      const r = await api(path, { method: 'POST', body: JSON.stringify(body) });
++      if (kind === 'claim') {
++        if (r.credit > 0 || r.energy > 0) {
++          toast(`已领取奖励 +${r.credit || 0} 分 +${r.energy || 0} 能`, 'ok');
++          loadOverview(true);
++        } else if (r.already_claimed === true) {
++          toast('该奖励此前已领取', 'ok');
++        } else {
++          toast('领奖响应未确认新增奖励', 'err');
++        }
++      } else toast('已接受任务', 'ok');
+     }
+   } catch (e) { toast(e.message, 'err'); }
+   finally { loadTasks(); }
+diff --git a/internal/panel/autotask.go b/internal/panel/autotask.go
+index 0a3e177..5967686 100644
+--- a/internal/panel/autotask.go
++++ b/internal/panel/autotask.go
+@@ -218,10 +218,17 @@ func isMPTaskCode(code string) bool { return mpTaskCodes[code] }
+ // claimTaskReward 按任务码口径领奖：mp 码走 chat 域 mp 端点，其余走 Web 端。
+ // claim 幂等（重复领返回 already_claimed → 0 分 0 能）。
+ func claimTaskReward(p *Panel, a *auth.Auth, code string) (credit, energy int64, err error) {
++	r, err := claimTaskRewardReceipt(p, a, code)
++	return r.Credit, r.Energy, err
++}
++
++// claimTaskRewardReceipt preserves the upstream distinction between a positive
++// award, an explicit already-claimed response, and a zero/unknown response.
++func claimTaskRewardReceipt(p *Panel, a *auth.Auth, code string) (upstream.ClaimReceipt, error) {
+ 	if isMPTaskCode(code) {
+-		return p.cfg.Upstream.ClaimRewardMP(a, code)
++		return p.cfg.Upstream.ClaimRewardMPReceipt(a, code)
+ 	}
+-	return p.cfg.Upstream.ClaimReward(a, code)
++	return p.cfg.Upstream.ClaimRewardReceipt(a, code)
+ }
+ 
+ // taskByCode 拉取任务列表并定位单个任务；未找到返回 nil（不视为错误）。
+@@ -232,11 +239,18 @@ func (p *Panel) taskByCode(a *auth.Auth, code string) (*upstream.Task, error) {
+ 	if err != nil {
+ 		return nil, err
+ 	}
++	var found *upstream.Task
+ 	for i := range tasks {
+ 		if tasks[i].TaskCode == code {
+-			return &tasks[i], nil
++			if found != nil {
++				return nil, fmt.Errorf("ambiguous task code %q", code)
++			}
++			found = &tasks[i]
+ 		}
+ 	}
++	if found != nil {
++		return found, nil
++	}
+ 	if isMPTaskCode(code) {
+ 		return p.taskByCodeMP(a, code)
+ 	}
+@@ -285,12 +299,16 @@ func (p *Panel) taskByCodeMP(a *auth.Auth, code string) (*upstream.Task, error)
+ 	if err != nil {
+ 		return nil, err
+ 	}
++	var found *upstream.Task
+ 	for i := range tasks {
+ 		if tasks[i].TaskCode == code {
+-			return &tasks[i], nil
++			if found != nil {
++				return nil, fmt.Errorf("ambiguous task code %q", code)
++			}
++			found = &tasks[i]
+ 		}
+ 	}
+-	return nil, nil
++	return found, nil
+ }
+ 
+ // acceptWithVerifyMP accept 并回读验证登记生效：上游存在 200+OK 但 accept 未真正
+@@ -670,6 +688,10 @@ func (p *Panel) accountTaskAuto(w http.ResponseWriter, r *http.Request) {
+ 		return
+ 	}
+ 	isMP := isMPTaskCode(act.TaskCode)
++	if before.IsInactive() {
++		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "skipped": true, "message": "该任务当前不可用或已锁定"})
++		return
++	}
+ 	if before.Claimed {
+ 		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "skipped": true, "message": "该任务已领取过奖励"})
+ 		return
+@@ -690,36 +712,40 @@ func (p *Panel) accountTaskAuto(w http.ResponseWriter, r *http.Request) {
+ 	}
+ 	progressBefore, progressAfter := taskProgressText(before), ""
+ 	claimable := false
++	progressReadbackOK := false
++	verified := false
+ 	if aerr == nil && after != nil {
+ 		progressAfter = taskProgressText(after)
+-		claimable = after.Claimable
++		progressReadbackOK = true
++		verified = after.Claimed || after.CanClaimReward()
++		claimable = after.CanClaimReward()
+ 	}
+ 	resp := map[string]any{
+-		"ok":               true,
+-		"message":          msg,
+-		"progress_before":  progressBefore,
+-		"progress_after":   progressAfter,
+-		"claimable":        claimable,
+-		"attempt":          act.Attempt,
+-		"verify_supported": true,
++		"ok":                   true,
++		"message":              msg,
++		"progress_before":      progressBefore,
++		"progress_after":       progressAfter,
++		"claimable":            claimable,
++		"attempt":              act.Attempt,
++		"verify_supported":     true,
++		"verified":             verified,
++		"progress_readback_ok": progressReadbackOK,
+ 	}
+ 	// 达标即自动领奖（Web 端 claim）：把"完成→领奖"收敛成一步，无需用户再点一次。
+ 	if claimable {
+-		var credit, energy int64
+-		var cerr error
+-		if isMP {
+-			credit, energy, cerr = p.cfg.Upstream.ClaimRewardMP(a, act.TaskCode)
+-		} else {
+-			credit, energy, cerr = p.cfg.Upstream.ClaimReward(a, act.TaskCode)
+-		}
++		receipt, cerr := claimTaskRewardReceipt(p, a, act.TaskCode)
+ 		if cerr == nil {
+-			resp["claimed"] = true
+-			resp["credit"] = credit
+-			resp["energy"] = energy
+-			if credit > 0 || energy > 0 {
+-				resp["message"] = msg + fmt.Sprintf("；已自动领奖 +%d 分 +%d 能", credit, energy)
+-			} else {
++			if receipt.HasReward() {
++				resp["claimed"] = true
++				resp["credit"] = receipt.Credit
++				resp["energy"] = receipt.Energy
++				resp["message"] = msg + fmt.Sprintf("；已自动领奖 +%d 分 +%d 能", receipt.Credit, receipt.Energy)
++			} else if receipt.AlreadyClaimedKnown && receipt.AlreadyClaimed {
++				resp["already_claimed"] = true
+ 				resp["message"] = msg + "；奖励此前已领取"
++			} else {
++				resp["no_reward"] = true
++				resp["message"] = msg + "；领奖响应未确认新增奖励"
+ 			}
+ 		} else {
+ 			resp["claim_error"] = cerr.Error()
+@@ -1136,8 +1162,17 @@ func (p *Panel) runAutoAll(a *auth.Auth) []map[string]any {
+ 	// 阶段 0：批量接受尚未接受的任务（失败不阻塞——行为事件才是进度唯一判据）。
+ 	if tasks, err := p.cfg.Upstream.ListTasks(a); err == nil {
+ 		var codes []string
++		counts := map[string]int{}
++		for _, t := range tasks {
++			counts[t.TaskCode]++
++		}
++		for code, n := range counts {
++			if n > 1 || code == "" {
++				out = append(out, map[string]any{"task_code": code, "status": "error", "message": "任务码重复或为空，跳过所有匹配项"})
++			}
++		}
+ 		for _, t := range tasks {
+-			if !t.Claimed && !t.Locked && t.AcceptStatus != "accepted" && t.AcceptStatus != "completed" {
++			if counts[t.TaskCode] == 1 && t.TaskCode != "" && !t.IsInactive() && !t.Claimed && t.AcceptStatus != "accepted" && t.AcceptStatus != "completed" {
+ 				codes = append(codes, t.TaskCode)
+ 			}
+ 		}
+@@ -1149,8 +1184,9 @@ func (p *Panel) runAutoAll(a *auth.Auth) []map[string]any {
+ 				})
+ 			} else {
+ 				out = append(out, map[string]any{
+-					"task_code": "(批量接受)", "status": "done",
+-					"message": fmt.Sprintf("已接受 %d 个任务", len(codes)),
++					"task_code": "(批量接受)", "status": "unconfirmed", "verified": false,
++					"submitted_count": len(codes),
++					"message":         fmt.Sprintf("报名请求已提交 %d 个任务，状态待回读", len(codes)),
+ 				})
+ 				time.Sleep(reportGap)
+ 			}
+@@ -1160,8 +1196,17 @@ func (p *Panel) runAutoAll(a *auth.Auth) []map[string]any {
+ 	// 阶段 0b：小程序口径任务单独接受（默认列表不含 mp 码；失败不阻塞）。
+ 	if mpTasks, err := p.cfg.Upstream.ListTasksMP(a); err == nil {
+ 		var mpCodes []string
++		counts := map[string]int{}
+ 		for _, t := range mpTasks {
+-			if !t.Claimed && !t.Locked && t.AcceptStatus != "accepted" && t.AcceptStatus != "completed" {
++			counts[t.TaskCode]++
++		}
++		for code, n := range counts {
++			if n > 1 || code == "" {
++				out = append(out, map[string]any{"task_code": code, "status": "error", "message": "任务码重复或为空，跳过所有匹配项"})
++			}
++		}
++		for _, t := range mpTasks {
++			if counts[t.TaskCode] == 1 && t.TaskCode != "" && !t.IsInactive() && !t.Claimed && t.AcceptStatus != "accepted" && t.AcceptStatus != "completed" {
+ 				mpCodes = append(mpCodes, t.TaskCode)
+ 			}
+ 		}
+@@ -1173,8 +1218,9 @@ func (p *Panel) runAutoAll(a *auth.Auth) []map[string]any {
+ 				})
+ 			} else {
+ 				out = append(out, map[string]any{
+-					"task_code": "(批量接受-mp)", "status": "done",
+-					"message": fmt.Sprintf("已接受 %d 个小程序任务", len(mpCodes)),
++					"task_code": "(批量接受-mp)", "status": "unconfirmed", "verified": false,
++					"submitted_count": len(mpCodes),
++					"message":         fmt.Sprintf("报名请求已提交 %d 个小程序任务，状态待回读", len(mpCodes)),
+ 				})
+ 				time.Sleep(reportGap)
+ 			}
+@@ -1196,7 +1242,13 @@ func (p *Panel) runAutoAll(a *auth.Auth) []map[string]any {
+ 			out = append(out, item)
+ 			continue
+ 		}
+-		if before.Claimed || before.Current >= before.Target && before.Target > 0 {
++		if before.IsInactive() {
++			item["status"] = "skipped"
++			item["message"] = "该任务当前不可用或已锁定"
++			out = append(out, item)
++			continue
++		}
++		if before.Claimed || before.CanClaimReward() {
+ 			item["status"] = "skipped"
+ 			msg := "已完成（" + taskProgressText(before) + "）"
+ 			// 达标未领：先补领再跳过（issue #174）。经真实对话等链路点亮的
+@@ -1206,18 +1258,22 @@ func (p *Panel) runAutoAll(a *auth.Auth) []map[string]any {
+ 			// 依赖 accept_status=="completed"（回读会短暂转 completed 后回滚，
+ 			// 据此领奖会误领）。
+ 			if !before.Claimed {
+-				credit, energy, cerr := claimTaskReward(p, a, act.TaskCode)
++				receipt, cerr := claimTaskRewardReceipt(p, a, act.TaskCode)
+ 				switch {
+ 				case cerr != nil:
+ 					item["claim_error"] = cerr.Error()
+ 					msg += "；补领失败（可在列表手动重试）"
+-				case credit > 0 || energy > 0:
++				case receipt.HasReward():
+ 					item["claimed"] = true
+-					item["credit"] = credit
+-					item["energy"] = energy
+-					msg += fmt.Sprintf("；已补领 +%d 分 +%d 能", credit, energy)
+-				default:
++					item["credit"] = receipt.Credit
++					item["energy"] = receipt.Energy
++					msg += fmt.Sprintf("；已补领 +%d 分 +%d 能", receipt.Credit, receipt.Energy)
++				case receipt.AlreadyClaimedKnown && receipt.AlreadyClaimed:
++					item["already_claimed"] = true
+ 					msg += "；奖励此前已领取"
++				default:
++					item["no_reward"] = true
++					msg += "；领奖响应未确认新增奖励"
+ 				}
+ 			}
+ 			item["message"] = msg
+@@ -1237,22 +1293,33 @@ func (p *Panel) runAutoAll(a *auth.Auth) []map[string]any {
+ 		} else {
+ 			after, _ = p.taskByCodeWaiting(a, act.TaskCode)
+ 		}
+-		item["status"] = "done"
++		verified := after != nil && (after.Claimed || after.CanClaimReward())
++		item["verified"] = verified
++		item["progress_readback_ok"] = after != nil
++		if verified {
++			item["status"] = "done"
++		} else {
++			item["status"] = "unconfirmed"
++		}
+ 		item["message"] = msg
+ 		item["progress_after"] = taskProgressText(after)
+ 		// 进度达标即自动领奖（mp 任务走 chat 域 mp 口径，其余 Web 端接口）。
+ 		// 领奖失败不掩盖主流程结果：status 仍为 done，附加 claim_error 供前端提示。
+-		if after != nil && after.Claimable {
++		if after != nil && after.CanClaimReward() {
+ 			item["claimable"] = true
+-			credit, energy, cerr := claimTaskReward(p, a, act.TaskCode)
++			receipt, cerr := claimTaskRewardReceipt(p, a, act.TaskCode)
+ 			if cerr == nil {
+-				item["claimed"] = true
+-				item["credit"] = credit
+-				item["energy"] = energy
+-				if credit > 0 || energy > 0 {
+-					item["message"] = msg + fmt.Sprintf("；已自动领奖 +%d 分 +%d 能", credit, energy)
+-				} else {
++				if receipt.HasReward() {
++					item["claimed"] = true
++					item["credit"] = receipt.Credit
++					item["energy"] = receipt.Energy
++					item["message"] = msg + fmt.Sprintf("；已自动领奖 +%d 分 +%d 能", receipt.Credit, receipt.Energy)
++				} else if receipt.AlreadyClaimedKnown && receipt.AlreadyClaimed {
++					item["already_claimed"] = true
+ 					item["message"] = msg + "；奖励此前已领取"
++				} else {
++					item["no_reward"] = true
++					item["message"] = msg + "；领奖响应未确认新增奖励"
+ 				}
+ 			} else {
+ 				item["claim_error"] = cerr.Error()
+diff --git a/internal/panel/taskcenter.go b/internal/panel/taskcenter.go
+index e9aaf3f..fa5653c 100644
+--- a/internal/panel/taskcenter.go
++++ b/internal/panel/taskcenter.go
+@@ -36,7 +36,7 @@ type scanAccountItem struct {
+ 
+ // growthPending 任务是否"未完成且可自动化"。
+ func growthPending(t upstream.Task) bool {
+-	if t.Claimed {
++	if t.Claimed || t.IsInactive() {
+ 		return false
+ 	}
+ 	// 上游锁定的任务不出待办：Sequential 族每日零点解锁一环，刚做完上一环时
+@@ -46,7 +46,7 @@ func growthPending(t upstream.Task) bool {
+ 	if t.Locked {
+ 		return false
+ 	}
+-	if t.Target > 0 && t.Current >= t.Target {
++	if t.CanClaimReward() {
+ 		// 达标未领：也入队（队列执行后会自动领）——但仅限有自动化动作的任务，
+ 		// 否则队列执行时会因 autoActionFor 为 nil 直接报错。
+ 		return autoActionFor(t.TaskCode) != nil
+@@ -405,8 +405,20 @@ func (p *Panel) acceptPendingTasks(a *auth.Auth) int {
+ 		return 0
+ 	}
+ 	var codes []string
++	seen := make(map[string]bool)
++	ambiguous := make(map[string]bool)
+ 	for _, t := range tasks {
+-		if !t.Claimed && !t.Locked && t.AcceptStatus != "accepted" && t.AcceptStatus != "completed" {
++		if t.TaskCode == "" {
++			ambiguous[""] = true
++			continue
++		}
++		if seen[t.TaskCode] {
++			ambiguous[t.TaskCode] = true
++		}
++		seen[t.TaskCode] = true
++	}
++	for _, t := range tasks {
++		if t.TaskCode != "" && !ambiguous[t.TaskCode] && !t.Claimed && !t.IsInactive() && t.AcceptStatus != "accepted" && t.AcceptStatus != "completed" {
+ 			codes = append(codes, t.TaskCode)
+ 		}
+ 	}
+@@ -417,7 +429,7 @@ func (p *Panel) acceptPendingTasks(a *auth.Auth) int {
+ 		log.Printf("panel: 队列 accept uid=%s: %v（不阻塞）", a.UID, err)
+ 		return 0
+ 	}
+-	log.Printf("panel: 队列 accept uid=%s: 已接受 %d 个任务", a.UID, len(codes))
++	log.Printf("panel: 队列 accept uid=%s: 已提交 %d 个任务报名请求（待回读）", a.UID, len(codes))
+ 	return len(codes)
+ }
+ 
+@@ -434,12 +446,31 @@ func (p *Panel) runGrowthQueued(a *auth.Auth, code string) (string, error) {
+ 		return "", err
+ 	}
+ 	if before == nil {
+-		return "该账号无此任务", nil
++		return "", fmt.Errorf("该账号无此任务")
+ 	}
+ 	isMP := isMPTaskCode(code)
+ 	if before.Claimed {
+ 		return "已完成（已领取）", nil
+ 	}
++	if before.IsInactive() {
++		return "", fmt.Errorf("任务当前不可用或已锁定")
++	}
++	// A task that is already eligible must be claimed directly. Re-running its
++	// action can spend credits and/or emit duplicate activity without changing
++	// the qualification state.
++	if before.CanClaimReward() {
++		receipt, cerr := claimTaskRewardReceipt(p, a, code)
++		if cerr != nil {
++			return "", fmt.Errorf("领奖未确认: %w", cerr)
++		}
++		if receipt.HasReward() {
++			return fmt.Sprintf("已自动领奖 +%d 分 +%d 能（进度 %s）", receipt.Credit, receipt.Energy, taskProgressText(before)), nil
++		}
++		if receipt.AlreadyClaimedKnown && receipt.AlreadyClaimed {
++			return "奖励此前已领取（进度 " + taskProgressText(before) + "）", nil
++		}
++		return "", fmt.Errorf("领奖响应未确认新增奖励")
++	}
+ 	msg, err := act.run(p, a)
+ 	if err != nil {
+ 		return "", err
+@@ -450,21 +481,28 @@ func (p *Panel) runGrowthQueued(a *auth.Auth, code string) (string, error) {
+ 	} else {
+ 		after, _ = p.taskByCodeWaiting(a, code)
+ 	}
+-	if after != nil && after.Claimable {
+-		var credit, energy int64
+-		var cerr error
+-		if isMP {
+-			credit, energy, cerr = p.cfg.Upstream.ClaimRewardMP(a, code)
+-		} else {
+-			credit, energy, cerr = p.cfg.Upstream.ClaimReward(a, code)
++	if after == nil {
++		return "", fmt.Errorf("任务进度回读未确认")
++	}
++	if after.IsInactive() {
++		return "", fmt.Errorf("任务完成后状态不可用或已锁定")
++	}
++	if after.CanClaimReward() {
++		receipt, cerr := claimTaskRewardReceipt(p, a, code)
++		if cerr != nil {
++			return "", fmt.Errorf("领奖未确认: %w", cerr)
+ 		}
+-		if cerr == nil && (credit > 0 || energy > 0) {
+-			msg += fmt.Sprintf("；自动领奖 +%d 分 +%d 能", credit, energy)
++		if receipt.HasReward() {
++			msg += fmt.Sprintf("；自动领奖 +%d 分 +%d 能", receipt.Credit, receipt.Energy)
++		} else if receipt.AlreadyClaimedKnown && receipt.AlreadyClaimed {
++			msg += "；奖励此前已领取"
++		} else {
++			return "", fmt.Errorf("领奖响应未确认新增奖励")
+ 		}
++	} else if !after.Claimed {
++		return "", fmt.Errorf("任务进度未达标，未确认完成")
+ 	}
+-	if after != nil {
+-		msg += "（进度 " + taskProgressText(after) + "）"
+-	}
++	msg += "（进度 " + taskProgressText(after) + "）"
+ 	log.Printf("panel: 队列 growth uid=%s code=%s: %s", a.UID, code, msg)
+ 	return msg, nil
+ }
+diff --git a/internal/panel/tasks.go b/internal/panel/tasks.go
+index 87528d7..5d00b02 100644
+--- a/internal/panel/tasks.go
++++ b/internal/panel/tasks.go
+@@ -179,22 +179,22 @@ func (p *Panel) accountTaskClaim(w http.ResponseWriter, r *http.Request) {
+ 		return
+ 	}
+ 	// 小程序口径任务走 chat 域 mp 头领奖（缺头实测不可领）；其余 Web 端接口。
+-	var credit, energy int64
+-	var err error
+-	if isMPTaskCode(body.TaskCode) {
+-		credit, energy, err = p.cfg.Upstream.ClaimRewardMP(a, body.TaskCode)
+-	} else {
+-		credit, energy, err = p.cfg.Upstream.ClaimReward(a, body.TaskCode)
+-	}
++	receipt, err := claimTaskRewardReceipt(p, a, body.TaskCode)
+ 	if err != nil {
+-		writeErr(w, http.StatusBadGateway, "claim: "+err.Error())
++		// 解析失败时不把上游响应内容透传给面板。
++		writeErr(w, http.StatusBadGateway, "claim: invalid reward response")
++		return
++	}
++	if receipt.HasReward() {
++		log.Printf("panel: 领取任务奖励 uid=%s code=%s +%d分 +%d能", uid, body.TaskCode, receipt.Credit, receipt.Energy)
++		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "credit": receipt.Credit, "energy": receipt.Energy, "confirmed": true})
+ 		return
+ 	}
+-	if credit == 0 && energy == 0 {
++	if receipt.AlreadyClaimedKnown && receipt.AlreadyClaimed {
+ 		log.Printf("panel: 领取任务奖励 uid=%s code=%s（已领取过，无新增）", uid, body.TaskCode)
+-		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "already_claimed": true, "message": "该奖励此前已领取"})
++		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "already_claimed": true, "confirmed": true, "message": "该奖励此前已领取"})
+ 		return
+ 	}
+-	log.Printf("panel: 领取任务奖励 uid=%s code=%s +%d分 +%d能", uid, body.TaskCode, credit, energy)
+-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "credit": credit, "energy": energy})
++	// 明确的零奖励/未知奖励不是“已领取”：保持旧响应字段并标记未确认。
++	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "no_reward": true, "confirmed": false, "message": "领奖响应未确认新增奖励"})
+ }
+diff --git a/internal/panel/tasksweep.go b/internal/panel/tasksweep.go
+index 25a00ae..0b68b15 100644
+--- a/internal/panel/tasksweep.go
++++ b/internal/panel/tasksweep.go
+@@ -27,17 +27,21 @@ import (
+ 	"sync"
+ 
+ 	"github.com/linguo2625469/workbuddy2api-panel/internal/auth"
++	"github.com/linguo2625469/workbuddy2api-panel/internal/upstream"
+ )
+ 
+ // TaskSweepStats 一轮补领清扫的汇总（供日志与潜在的未来 HTTP 回执）。
+ type TaskSweepStats struct {
+-	Accounts int   `json:"accounts"` // 参与清扫的账号数
+-	Skipped  int   `json:"skipped"`  // 因正在执行任务动作而跳过的账号数
+-	Accepted int   `json:"accepted"` // 本轮接受成功的任务数
+-	Claimed  int   `json:"claimed"`  // 本轮领奖成功的任务数
+-	Credits  int64 `json:"credits"`  // 本轮到账积分
+-	Energy   int64 `json:"energy"`   // 本轮到账能量
+-	Errors   int   `json:"errors"`   // 本轮出错（不中断）的次数
++	Accounts       int   `json:"accounts"` // 参与清扫的账号数
++	Skipped        int   `json:"skipped"`  // 因正在执行任务动作而跳过的账号数
++	Accepted       int   `json:"accepted"` // 成功提交报名请求数，不代表资格确认
++	Claimed        int   `json:"claimed"`  // 上游报告新增奖励的任务数
++	Credits        int64 `json:"credits"`  // 上游报告的新增奖励积分
++	Energy         int64 `json:"energy"`   // 上游报告的新增奖励能量
++	Errors         int   `json:"errors"`   // 本轮出错（不中断）的次数
++	Attempted      int   `json:"attempted"`
++	AlreadyClaimed int   `json:"already_claimed"`
++	NoReward       int   `json:"no_reward"`
+ }
+ 
+ // RunTaskSweepOnce 对所有账号做一轮幂等补领清扫（账号间并发、账号内串行）。
+@@ -68,6 +72,9 @@ func (p *Panel) RunTaskSweepOnce() TaskSweepStats {
+ 			st.Credits += r.credit
+ 			st.Energy += r.energy
+ 			st.Errors += r.errors
++			st.Attempted += r.attempted
++			st.AlreadyClaimed += r.alreadyClaimed
++			st.NoReward += r.noReward
+ 		}(a, ps.UID)
+ 	}
+ 	wg.Wait()
+@@ -84,8 +91,8 @@ func (s TaskSweepStats) Claims() int { return s.Claimed }
+ 
+ // sweepResult 单账号清扫结果（RunTaskSweepOnce 汇总用，非导出）。
+ type sweepResult struct {
+-	accounts, skipped, accepted, claimed, errors int
+-	credit, energy                               int64
++	accounts, skipped, accepted, claimed, errors, attempted, alreadyClaimed, noReward int
++	credit, energy                                                                    int64
+ }
+ 
+ // sweepAccount 单账号一轮清扫。命中账号锁（正在跑任务动作）时整账号跳过：
+@@ -123,8 +130,19 @@ func (p *Panel) sweepAccount(a *auth.Auth, uid string) (res sweepResult) {
+ 	// 阶段一：接受未接受的任务。默认口径与 mp 口径必须**分开提交**（端标记不同，
+ 	// 混提交会让 mp 任务报 task not found）。
+ 	var codes, mpCodes []string
++	counts := map[string]int{}
+ 	for _, t := range tasks {
+-		if t.Claimed || t.Locked {
++		counts[t.TaskCode]++
++	}
++	ambiguous := map[string]bool{}
++	for code, n := range counts {
++		if n > 1 || code == "" {
++			ambiguous[code] = true
++			res.errors++
++		}
++	}
++	for _, t := range tasks {
++		if t.IsInactive() || t.Claimed || ambiguous[t.TaskCode] {
+ 			continue
+ 		}
+ 		if t.AcceptStatus == "accepted" || t.AcceptStatus == "completed" {
+@@ -157,26 +175,35 @@ func (p *Panel) sweepAccount(a *auth.Auth, uid string) (res sweepResult) {
+ 
+ 	// 阶段二：领取已达标的奖励。claim 幂等（重复领 already_claimed → 0 分 0 能），
+ 	// 单项出错只记录、不中断后续任务。
++	claimedCodes := map[string]bool{}
+ 	for _, t := range tasks {
+-		if !t.Claimable {
++		if t.IsInactive() || !t.CanClaimReward() || ambiguous[t.TaskCode] || claimedCodes[t.TaskCode] {
+ 			continue
+ 		}
++		claimedCodes[t.TaskCode] = true
+ 		// mp 口径任务必须走 mp 变体领奖端点（缺 mp 头上游返回 task not found）；
+ 		// 其余走 Web 域端点——与 taskcenter / autotask 的领奖口径一致。
+-		var c, e int64
++		res.attempted++
++		var receipt upstream.ClaimReceipt
+ 		var cErr error
+ 		if isMPTaskCode(t.TaskCode) || mpOnly[t.TaskCode] {
+-			c, e, cErr = p.cfg.Upstream.ClaimRewardMP(a, t.TaskCode)
++			receipt, cErr = p.cfg.Upstream.ClaimRewardMPReceipt(a, t.TaskCode)
+ 		} else {
+-			c, e, cErr = p.cfg.Upstream.ClaimReward(a, t.TaskCode)
++			receipt, cErr = p.cfg.Upstream.ClaimRewardReceipt(a, t.TaskCode)
+ 		}
+ 		if cErr != nil {
+ 			res.errors++
+ 			continue
+ 		}
+-		res.credit += c
+-		res.energy += e
+-		res.claimed++
++		if receipt.AlreadyClaimedKnown && receipt.AlreadyClaimed {
++			res.alreadyClaimed++
++		} else if receipt.HasReward() {
++			res.credit += receipt.Credit
++			res.energy += receipt.Energy
++			res.claimed++
++		} else {
++			res.noReward++
++		}
+ 	}
+ 	return res
+ }
+diff --git a/internal/panel/tasksweep_test.go b/internal/panel/tasksweep_test.go
+index e1bda37..1127bc5 100644
+--- a/internal/panel/tasksweep_test.go
++++ b/internal/panel/tasksweep_test.go
+@@ -268,7 +268,10 @@ func TestTaskSweepSkipsBusyAccount(t *testing.T) {
+ 	p.unlockAccount("u1")
+ 	// 解锁后同一轮即可正常清扫（下一周期自动补）。
+ 	st = p.RunTaskSweepOnce()
+-	if st.Skipped != 0 || st.Claimed != 1 {
+-		t.Errorf("解锁后 stats = %+v, want skipped=0 claimed=1", st)
++	if st.Skipped != 0 || st.Claimed != 0 || st.Attempted != 1 || st.AlreadyClaimed != 1 {
++		t.Errorf("解锁后 stats = %+v, want skipped=0 claimed=0 attempted=1 already_claimed=1", st)
++	}
++	if got := b.claims.Load(); got != 1 {
++		t.Errorf("解锁后领奖请求数 = %d, want 1", got)
+ 	}
+ }
+diff --git a/internal/upstream/tasks.go b/internal/upstream/tasks.go
+index b48c975..18f8eed 100644
+--- a/internal/upstream/tasks.go
++++ b/internal/upstream/tasks.go
+@@ -17,9 +17,11 @@ package upstream
+ import (
+ 	"bytes"
+ 	"encoding/json"
++	"fmt"
+ 	"io"
+ 	"net/http"
+ 	"net/url"
++	"strings"
+ 
+ 	"github.com/linguo2625469/workbuddy2api-panel/internal/auth"
+ )
+@@ -56,6 +58,34 @@ type Task struct {
+ 	Claimed      bool   `json:"claimed,omitempty"`   // 已领取（accept_status == claimed）
+ }
+ 
++// IsInactive reports states in which a task cannot be claimed.
++func (t Task) IsInactive() bool {
++	if t.Locked {
++		return true
++	}
++	switch strings.ToLower(strings.TrimSpace(t.Status)) {
++	case "expired", "ended", "disabled", "cancelled":
++		return true
++	default:
++		return false
++	}
++}
++
++// CanClaimReward reports whether the locally observed task state is claimable.
++func (t Task) CanClaimReward() bool {
++	return t.Claimable && !t.Claimed && !t.IsInactive() && t.Target > 0 && t.Current >= t.Target
++}
++
++// ClaimReceipt is the normalized result of a reward claim.
++type ClaimReceipt struct {
++	Credit              int64
++	Energy              int64
++	AlreadyClaimed      bool
++	AlreadyClaimedKnown bool
++}
++
++func (r ClaimReceipt) HasReward() bool { return r.Credit > 0 || r.Energy > 0 }
++
+ // ListTasks 拉取全量任务列表（默认口径，无端标记头）。
+ // 响应形如 data.tasks[]，元素字段随任务类型变化（progress 可能是 {current,target} 或平铺），
+ // 这里做宽松解析：两种形状都尝试。
+@@ -112,10 +142,16 @@ func (c *Client) AcceptTasksMP(a *auth.Auth, taskCodes []string) error {
+ // + mp 头（上游 task_runner claim_one(mp=True) 同款）；chat 域 400 时降级 Web 域
+ // 领奖端点（ClaimReward，x-client-platform: web 形态）。返回 (credit, energy, err)。
+ func (c *Client) ClaimRewardMP(a *auth.Auth, taskCode string) (credit, energy int64, err error) {
++	r, err := c.ClaimRewardMPReceipt(a, taskCode)
++	return r.Credit, r.Energy, err
++}
++
++// ClaimRewardMPReceipt is the receipt form of ClaimRewardMP.
++func (c *Client) ClaimRewardMPReceipt(a *auth.Auth, taskCode string) (ClaimReceipt, error) {
+ 	req, err := http.NewRequest(http.MethodPost,
+ 		c.chatBase(a)+"/activity/growth/tasks/"+url.PathEscape(taskCode)+"/claim", nil)
+ 	if err != nil {
+-		return 0, 0, err
++		return ClaimReceipt{}, err
+ 	}
+ 	c.BillingHeaders(req, a)
+ 	req.Header.Set("X-Client-Platform", mpPlatform)
+@@ -123,24 +159,87 @@ func (c *Client) ClaimRewardMP(a *auth.Auth, taskCode string) (credit, energy in
+ 	if err != nil {
+ 		// chat 域对该路径 400（部分任务/租户形态）→ Web 域降级（已实测可领）。
+ 		if ue, ok := err.(*Error); ok && ue.Status == http.StatusBadRequest {
+-			return c.ClaimReward(a, taskCode)
++			return c.ClaimRewardReceipt(a, taskCode)
+ 		}
+-		return 0, 0, err
++		return ClaimReceipt{}, err
+ 	}
+-	return parseClaimReward(data)
++	return parseClaimRewardReceipt(data)
+ }
+ 
+-// parseClaimReward 解析领奖响应 data：{"already_claimed":bool,"credit":n,"energy":n}。
+-func parseClaimReward(data json.RawMessage) (credit, energy int64, err error) {
+-	var resp struct {
+-		AlreadyClaimed bool  `json:"already_claimed"`
+-		Credit         int64 `json:"credit"`
+-		Energy         int64 `json:"energy"`
++// parseClaimRewardReceipt strictly parses the claim data object while allowing
++// unknown extension fields.
++func parseClaimRewardReceipt(data json.RawMessage) (ClaimReceipt, error) {
++	dec := json.NewDecoder(bytes.NewReader(data))
++	tok, err := dec.Token()
++	if err != nil {
++		return ClaimReceipt{}, err
+ 	}
+-	if err := json.Unmarshal(data, &resp); err != nil {
+-		return 0, 0, err
++	if d, ok := tok.(json.Delim); !ok || d != '{' {
++		return ClaimReceipt{}, fmt.Errorf("claim receipt must be an object")
++	}
++	obj := make(map[string]json.RawMessage)
++	for dec.More() {
++		kt, err := dec.Token()
++		if err != nil {
++			return ClaimReceipt{}, err
++		}
++		key, ok := kt.(string)
++		if !ok {
++			return ClaimReceipt{}, fmt.Errorf("invalid claim receipt key")
++		}
++		if _, exists := obj[key]; exists {
++			return ClaimReceipt{}, fmt.Errorf("duplicate claim receipt key")
++		}
++		var raw json.RawMessage
++		if err := dec.Decode(&raw); err != nil {
++			return ClaimReceipt{}, err
++		}
++		obj[key] = raw
++	}
++	if _, err := dec.Token(); err != nil {
++		return ClaimReceipt{}, err
++	}
++	var extra any
++	if err := dec.Decode(&extra); err != io.EOF {
++		return ClaimReceipt{}, fmt.Errorf("trailing claim receipt data")
++	}
++	var r ClaimReceipt
++	knownAmount := false
++	for key, raw := range obj {
++		switch key {
++		case "credit", "energy":
++			var n *int64
++			if err := json.Unmarshal(raw, &n); err != nil || n == nil || *n < 0 {
++				return ClaimReceipt{}, fmt.Errorf("invalid %s", key)
++			}
++			knownAmount = true
++			v := *n
++			if key == "credit" {
++				r.Credit = v
++			} else {
++				r.Energy = v
++			}
++		case "already_claimed":
++			var b *bool
++			if err := json.Unmarshal(raw, &b); err != nil || b == nil {
++				return ClaimReceipt{}, fmt.Errorf("invalid already_claimed")
++			}
++			r.AlreadyClaimed, r.AlreadyClaimedKnown = *b, true
++		}
+ 	}
+-	return resp.Credit, resp.Energy, nil
++	if r.AlreadyClaimed && r.HasReward() {
++		return ClaimReceipt{}, fmt.Errorf("already claimed receipt has reward")
++	}
++	if !knownAmount && !r.AlreadyClaimed {
++		return ClaimReceipt{}, fmt.Errorf("empty claim receipt")
++	}
++	return r, nil
++}
++
++// parseClaimReward preserves the legacy tuple API.
++func parseClaimReward(data json.RawMessage) (credit, energy int64, err error) {
++	r, err := parseClaimRewardReceipt(data)
++	return r.Credit, r.Energy, err
+ }
+ 
+ // parseGrowthTasks 解析 growth 任务列表 data.tasks[]（默认与 mp 口径共用）。
+@@ -174,12 +273,17 @@ func parseGrowthTasks(data json.RawMessage) ([]Task, error) {
+ 		cur, tgt := t.Current, t.Target
+ 		// progress 可能是 {current,target} 对象（实测口径），覆盖平铺字段。
+ 		if len(t.Progress) > 0 && string(t.Progress) != "null" {
+-			var pr struct {
+-				Current int64 `json:"current"`
+-				Target  int64 `json:"target"`
+-			}
+-			if json.Unmarshal(t.Progress, &pr) == nil && (pr.Target > 0 || pr.Current > 0) {
+-				cur, tgt = pr.Current, pr.Target
++			pr, ok := parseProgress(t.Progress)
++			// A nested progress object is treated as an atomic snapshot.  Do not
++			// combine one nested field with stale flat fields: a partial snapshot
++			// is not sufficient evidence for claiming a reward.
++			if ok && len(pr) == 2 {
++				cur = pr["current"]
++				tgt = pr["target"]
++			} else {
++				// A supplied but malformed/non-object progress must not leave
++				// stale flat progress eligible.
++				cur, tgt = 0, 0
+ 			}
+ 		}
+ 		claimed := t.AcceptStatus == "claimed"
+@@ -200,13 +304,58 @@ func parseGrowthTasks(data json.RawMessage) ([]Task, error) {
+ 			Current:      cur,
+ 			AcceptStatus: t.AcceptStatus,
+ 			Status:       t.Status,
+-			Claimable:    !claimed && tgt > 0 && cur >= tgt,
++			Claimable:    !claimed && !t.Locked && !strings.EqualFold(strings.TrimSpace(t.Status), "expired") && !strings.EqualFold(strings.TrimSpace(t.Status), "ended") && !strings.EqualFold(strings.TrimSpace(t.Status), "disabled") && !strings.EqualFold(strings.TrimSpace(t.Status), "cancelled") && tgt > 0 && cur >= tgt,
+ 			Claimed:      claimed,
+ 		})
+ 	}
+ 	return out, nil
+ }
+ 
++func parseProgress(raw json.RawMessage) (map[string]int64, bool) {
++	dec := json.NewDecoder(bytes.NewReader(raw))
++	tok, err := dec.Token()
++	if err != nil {
++		return nil, false
++	}
++	d, ok := tok.(json.Delim)
++	if !ok || d != '{' {
++		return nil, false
++	}
++	out := make(map[string]int64)
++	seen := make(map[string]bool)
++	for dec.More() {
++		kt, err := dec.Token()
++		if err != nil {
++			return nil, false
++		}
++		key, ok := kt.(string)
++		if !ok || seen[key] {
++			return nil, false
++		}
++		seen[key] = true
++		var v json.RawMessage
++		if err := dec.Decode(&v); err != nil {
++			return nil, false
++		}
++		if key != "current" && key != "target" {
++			continue
++		}
++		var n *int64
++		if err := json.Unmarshal(v, &n); err != nil || n == nil || *n < 0 {
++			return nil, false
++		}
++		out[key] = *n
++	}
++	if _, err := dec.Token(); err != nil {
++		return nil, false
++	}
++	var extra any
++	if err := dec.Decode(&extra); err != io.EOF {
++		return nil, false
++	}
++	return out, true
++}
++
+ // AcceptTasks 接受任务（幂等：已 accepted 时上游返回成功或业务提示，均不视为致命错误）。
+ func (c *Client) AcceptTasks(a *auth.Auth, taskCodes []string) error {
+ 	_, err := c.growthJSON(a, http.MethodPost, tasksAcceptPath, map[string]any{"task_codes": taskCodes})
+@@ -225,10 +374,16 @@ func (c *Client) AcceptTasks(a *auth.Auth, taskCodes []string) error {
+ // 一直返回 400 "task not completed"，是此前领奖失败的真实原因。
+ // 本实现返回 (credit, energy, err)：credit/energy 为本次到账奖励（已领取过时为 0）。
+ func (c *Client) ClaimReward(a *auth.Auth, taskCode string) (credit, energy int64, err error) {
++	r, err := c.ClaimRewardReceipt(a, taskCode)
++	return r.Credit, r.Energy, err
++}
++
++// ClaimRewardReceipt is the receipt form of ClaimReward.
++func (c *Client) ClaimRewardReceipt(a *auth.Auth, taskCode string) (ClaimReceipt, error) {
+ 	req, err := http.NewRequest(http.MethodPost,
+ 		c.webBase(a)+"/activity/growth/tasks/"+url.PathEscape(taskCode)+"/claim", nil)
+ 	if err != nil {
+-		return 0, 0, err
++		return ClaimReceipt{}, err
+ 	}
+ 	// Web 端请求头形状（对照浏览器实际请求）：Origin/Referer 指向 workbuddy.cn 成长中心，
+ 	// 带 x-client-platform: web 标记来源端。
+@@ -254,19 +409,7 @@ func (c *Client) ClaimReward(a *auth.Auth, taskCode string) (credit, energy int6
+ 
+ 	data, err := c.doJSON(req)
+ 	if err != nil {
+-		return 0, 0, err
+-	}
+-	// 响应 data：{"already_claimed":bool,"credit":100,"energy":5,...}
+-	var resp struct {
+-		AlreadyClaimed bool  `json:"already_claimed"`
+-		Credit         int64 `json:"credit"`
+-		Energy         int64 `json:"energy"`
+-	}
+-	if err := json.Unmarshal(data, &resp); err != nil {
+-		return 0, 0, err
+-	}
+-	if resp.AlreadyClaimed {
+-		return 0, 0, nil // 幂等：重复领取不算错误，但无新增奖励
++		return ClaimReceipt{}, err
+ 	}
+-	return resp.Credit, resp.Energy, nil
++	return parseClaimRewardReceipt(data)
+ }
+diff --git a/internal/panel/legacy_queue_integrity_test.go b/internal/panel/legacy_queue_integrity_test.go
+new file mode 100644
+index 0000000..d05dead
+--- /dev/null
++++ b/internal/panel/legacy_queue_integrity_test.go
+@@ -0,0 +1,177 @@
++package panel
++
++import (
++	"encoding/json"
++	"net/http"
++	"net/http/httptest"
++	"strings"
++	"sync/atomic"
++	"testing"
++
++	"github.com/linguo2625469/workbuddy2api-panel/internal/auth"
++	"github.com/linguo2625469/workbuddy2api-panel/internal/upstream"
++)
++
++func TestGrowthPendingRejectsInactiveAndAlreadyEligible(t *testing.T) {
++	cases := []struct {
++		name string
++		task upstream.Task
++		want bool
++	}{
++		{"locked", upstream.Task{TaskCode: "chat_5", Locked: true, Target: 1, Current: 0}, false},
++		{"expired", upstream.Task{TaskCode: "chat_5", Status: "expired", Target: 1, Current: 0}, false},
++		{"claimed", upstream.Task{TaskCode: "chat_5", Claimed: true, Target: 1, Current: 1}, false},
++		{"eligible", upstream.Task{TaskCode: "chat_5", Target: 5, Current: 5, Claimable: true}, true},
++		{"pending", upstream.Task{TaskCode: "chat_5", Target: 5, Current: 1}, true},
++	}
++	for _, tc := range cases {
++		t.Run(tc.name, func(t *testing.T) {
++			if got := growthPending(tc.task); got != tc.want {
++				t.Fatalf("growthPending(%+v)=%v, want %v", tc.task, got, tc.want)
++			}
++		})
++	}
++}
++
++func TestGrowthPendingUnknownActionIsNotQueued(t *testing.T) {
++	if growthPending(upstream.Task{TaskCode: "unknown", Target: 1, Current: 0}) {
++		t.Fatal("unknown task action must not enter queue")
++	}
++}
++
++func TestLegacyQueueReadyClaimDoesNotRunAction(t *testing.T) {
++	for _, tc := range []struct {
++		name, receipt string
++		wantErr       bool
++		wantMsg       string
++	}{
++		{"positive", `{"credit":100,"energy":5}`, false, "已自动领奖"},
++		{"already", `{"already_claimed":true}`, false, "奖励此前已领取"},
++		{"zero", `{"credit":0,"energy":0,"already_claimed":false}`, true, ""},
++		{"malformed", `null`, true, ""},
++	} {
++		t.Run(tc.name, func(t *testing.T) {
++			var claims, runs atomic.Int32
++			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++				if r.URL.Path == "/v2/activity/growth/tasks" {
++					_, _ = w.Write([]byte(sweepTasksBody([]map[string]any{sweepTask("chat_5", 1, 1, "accepted", nil)})))
++					return
++				}
++				if strings.HasSuffix(r.URL.Path, "/claim") {
++					claims.Add(1)
++					_, _ = w.Write([]byte(`{"code":0,"msg":"OK","data":` + tc.receipt + `}`))
++					return
++				}
++				_, _ = w.Write([]byte(`{"code":0,"msg":"OK","data":{}}`))
++			}))
++			defer srv.Close()
++			p := &Panel{cfg: Config{Upstream: &upstream.Client{HTTP: srv.Client(), ChatBaseCN: srv.URL, WebBaseCN: srv.URL}}}
++			withStubbedAutoAction(t, "chat_5", func(*Panel, *auth.Auth) (string, error) { runs.Add(1); return "stub", nil }, func() {
++				msg, err := p.runGrowthQueued(&auth.Auth{UID: "fixture", AccessToken: "fixture"}, "chat_5")
++				if (err != nil) != tc.wantErr || runs.Load() != 0 || claims.Load() != 1 {
++					t.Fatalf("msg=%q err=%v runs=%d claims=%d", msg, err, runs.Load(), claims.Load())
++				}
++				if !tc.wantErr && !strings.Contains(msg, tc.wantMsg) {
++					t.Fatalf("msg=%q missing %q", msg, tc.wantMsg)
++				}
++			})
++		})
++	}
++}
++
++func TestLegacyQueueInactiveAndUnreadyDoNotClaim(t *testing.T) {
++	oldAttempts := claimPollAttempts
++	claimPollAttempts = 1
++	t.Cleanup(func() { claimPollAttempts = oldAttempts })
++	for _, tc := range []struct {
++		name  string
++		extra map[string]any
++		cur   int
++	}{
++		{"locked", map[string]any{"locked": true}, 1},
++		{"expired", map[string]any{"status": "expired"}, 1},
++		{"unready", nil, 0},
++	} {
++		t.Run(tc.name, func(t *testing.T) {
++			var claims, runs atomic.Int32
++			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++				if r.URL.Path == "/v2/activity/growth/tasks" {
++					_, _ = w.Write([]byte(sweepTasksBody([]map[string]any{sweepTask("chat_5", 1, int64(tc.cur), "accepted", tc.extra)})))
++					return
++				}
++				if strings.HasSuffix(r.URL.Path, "/claim") {
++					claims.Add(1)
++				}
++				_, _ = w.Write([]byte(`{"code":0,"msg":"OK","data":{}}`))
++			}))
++			defer srv.Close()
++			p := &Panel{cfg: Config{Upstream: &upstream.Client{HTTP: srv.Client(), ChatBaseCN: srv.URL, WebBaseCN: srv.URL}}}
++			withStubbedAutoAction(t, "chat_5", func(*Panel, *auth.Auth) (string, error) { runs.Add(1); return "stub", nil }, func() {
++				_, err := p.runGrowthQueued(&auth.Auth{UID: "fixture", AccessToken: "fixture"}, "chat_5")
++				wantRuns := int32(0)
++				if tc.name == "unready" {
++					wantRuns = 1
++				}
++				if runs.Load() != wantRuns || claims.Load() != 0 || err == nil {
++					t.Fatalf("err=%v runs=%d claims=%d", err, runs.Load(), claims.Load())
++				}
++			})
++		})
++	}
++}
++
++func TestLegacyQueueReadbackFailureDoesNotConfirm(t *testing.T) {
++	oldAttempts := claimPollAttempts
++	claimPollAttempts = 1
++	t.Cleanup(func() { claimPollAttempts = oldAttempts })
++	var reads, runs, claims atomic.Int32
++	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		if r.URL.Path == "/v2/activity/growth/tasks" {
++			if reads.Add(1) == 1 {
++				_, _ = w.Write([]byte(sweepTasksBody([]map[string]any{sweepTask("chat_5", 1, 0, "accepted", nil)})))
++			} else {
++				w.WriteHeader(http.StatusServiceUnavailable)
++			}
++			return
++		}
++		claims.Add(1)
++		w.WriteHeader(http.StatusBadRequest)
++	}))
++	defer srv.Close()
++	p := &Panel{cfg: Config{Upstream: &upstream.Client{HTTP: srv.Client(), ChatBaseCN: srv.URL, WebBaseCN: srv.URL}}}
++	withStubbedAutoAction(t, "chat_5", func(*Panel, *auth.Auth) (string, error) { runs.Add(1); return "stub", nil }, func() {
++		_, err := p.runGrowthQueued(&auth.Auth{UID: "fixture", AccessToken: "fixture"}, "chat_5")
++		if err == nil || runs.Load() != 1 || claims.Load() != 0 {
++			t.Fatalf("err=%v runs=%d claims=%d", err, runs.Load(), claims.Load())
++		}
++	})
++}
++
++func TestLegacyQueueAcceptSkipsEmptyDuplicateAndInactive(t *testing.T) {
++	var accepted []string
++	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		if r.URL.Path == "/v2/activity/growth/tasks" {
++			_, _ = w.Write([]byte(sweepTasksBody([]map[string]any{
++				sweepTask("", 1, 0, "not_accepted", nil),
++				sweepTask("dup", 1, 0, "not_accepted", nil),
++				sweepTask("dup", 1, 0, "not_accepted", nil),
++				sweepTask("expired", 1, 0, "not_accepted", map[string]any{"status": "expired"}),
++				sweepTask("valid", 1, 0, "not_accepted", nil),
++			})))
++			return
++		}
++		if strings.HasSuffix(r.URL.Path, "/accept") {
++			var body struct {
++				TaskCodes []string `json:"task_codes"`
++			}
++			_ = json.NewDecoder(r.Body).Decode(&body)
++			accepted = append(accepted, body.TaskCodes...)
++		}
++		_, _ = w.Write([]byte(`{"code":0,"msg":"OK","data":{}}`))
++	}))
++	defer srv.Close()
++	p := &Panel{cfg: Config{Upstream: &upstream.Client{HTTP: srv.Client(), ChatBaseCN: srv.URL, WebBaseCN: srv.URL}}}
++	if got := p.acceptPendingTasks(&auth.Auth{UID: "fixture", AccessToken: "fixture"}); got != 1 || len(accepted) != 1 || accepted[0] != "valid" {
++		t.Fatalf("accepted=%d codes=%v", got, accepted)
++	}
++}
+diff --git a/internal/panel/legacy_result_ui_test.go b/internal/panel/legacy_result_ui_test.go
+new file mode 100644
+index 0000000..4e51925
+--- /dev/null
++++ b/internal/panel/legacy_result_ui_test.go
+@@ -0,0 +1,84 @@
++package panel
++
++import (
++	"encoding/json"
++	"net/http"
++	"net/http/httptest"
++	"os/exec"
++	"path/filepath"
++	"runtime"
++	"strings"
++	"testing"
++
++	"github.com/linguo2625469/workbuddy2api-panel/internal/auth"
++	"github.com/linguo2625469/workbuddy2api-panel/internal/pool"
++	"github.com/linguo2625469/workbuddy2api-panel/internal/upstream"
++)
++
++func TestAccountTaskClaimUsesTypedReceiptTruth(t *testing.T) {
++	cases := []struct {
++		name    string
++		data    string
++		status  int
++		want    map[string]any
++		wantErr string
++	}{
++		{"positive", `{"credit":100,"energy":5}`, http.StatusOK, map[string]any{"credit": float64(100), "energy": float64(5), "confirmed": true}, ""},
++		{"already", `{"already_claimed":true}`, http.StatusOK, map[string]any{"already_claimed": true, "confirmed": true}, ""},
++		{"zero_false", `{"credit":0,"energy":0,"already_claimed":false}`, http.StatusOK, map[string]any{"no_reward": true, "confirmed": false}, ""},
++		{"zero_unknown", `{"credit":0,"energy":0}`, http.StatusOK, map[string]any{"no_reward": true, "confirmed": false}, ""},
++		{"malformed", `null`, http.StatusBadGateway, nil, "claim: invalid reward response"},
++	}
++	for _, tc := range cases {
++		t.Run(tc.name, func(t *testing.T) {
++			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++				w.Header().Set("Content-Type", "application/json")
++				_, _ = w.Write([]byte(`{"code":0,"msg":"OK","data":` + tc.data + `}`))
++			}))
++			defer srv.Close()
++			p := &Panel{cfg: Config{Pool: pool.New(""), Upstream: &upstream.Client{HTTP: srv.Client(), WebBaseCN: srv.URL, ChatBaseCN: srv.URL}}}
++			p.cfg.Pool.Add(&auth.Auth{UID: "fixture", AccessToken: "fixture"})
++			req := httptest.NewRequest(http.MethodPost, "/panel/api/accounts/fixture/tasks/claim", strings.NewReader(`{"task_code":"chat_5"}`))
++			req.SetPathValue("uid", "fixture")
++			rec := httptest.NewRecorder()
++			p.accountTaskClaim(rec, req)
++			if rec.Code != tc.status {
++				t.Fatalf("status=%d want %d body=%s", rec.Code, tc.status, rec.Body.String())
++			}
++			var got map[string]any
++			_ = json.Unmarshal(rec.Body.Bytes(), &got)
++			if tc.wantErr != "" {
++				if got["error"] != tc.wantErr || strings.Contains(rec.Body.String(), tc.data) {
++					t.Fatalf("sanitized error=%v body=%s", got["error"], rec.Body.String())
++				}
++				return
++			}
++			for k, want := range tc.want {
++				if got[k] != want {
++					t.Fatalf("%s=%v want %v body=%s", k, got[k], want, rec.Body.String())
++				}
++			}
++			if tc.name == "zero_false" && got["already_claimed"] == true {
++				t.Fatal("zero false was treated as already claimed")
++			}
++		})
++	}
++}
++
++func TestAutoResultSummaryDoesNotCountUnverifiedDone(t *testing.T) {
++	node, err := exec.LookPath("node")
++	if err != nil {
++		t.Skip("node not available")
++	}
++	_, file, _, _ := runtime.Caller(0)
++	app := filepath.Join(filepath.Dir(file), "app.js")
++	script := `const fs=require('fs'); const src=fs.readFileSync(process.argv[1],'utf8');
++const a=src.indexOf('function summarizeAutoResults'); const b=src.indexOf('// 一键完成全部可自动任务',a);
++const ctx={}; eval(src.slice(a,b)+';ctx.summarizeAutoResults=summarizeAutoResults');
++const got=ctx.summarizeAutoResults([{status:'done',verified:true},{status:'done',verified:false},{status:'skipped'},{status:'unconfirmed'},{status:'unknown'},{status:'submitted'},{status:'done',verified:true,claim_error:'failed'},{status:'done',verified:true,no_reward:true},{status:'error'}]);
++if (JSON.stringify(got)!==JSON.stringify({verifiedN:1,skippedN:1,unconfirmedN:6,errorN:1})) process.exit(1);`
++	cmd := exec.Command(node, "-e", script, app)
++	if out, err := cmd.CombinedOutput(); err != nil {
++		t.Fatalf("summary node test failed: %v: %s", err, out)
++	}
++}
+diff --git a/internal/panel/legacy_reward_integrity_test.go b/internal/panel/legacy_reward_integrity_test.go
+new file mode 100644
+index 0000000..275dcad
+--- /dev/null
++++ b/internal/panel/legacy_reward_integrity_test.go
+@@ -0,0 +1,285 @@
++package panel
++
++import (
++	"encoding/json"
++	"net/http"
++	"net/http/httptest"
++	"strings"
++	"sync/atomic"
++	"testing"
++
++	"github.com/linguo2625469/workbuddy2api-panel/internal/auth"
++	"github.com/linguo2625469/workbuddy2api-panel/internal/pool"
++	"github.com/linguo2625469/workbuddy2api-panel/internal/upstream"
++)
++
++// Duplicate task codes are ambiguous: lookup must fail instead of selecting a
++// first row that could be inactive while a later row is claimable.
++func TestTaskByCodeRejectsAmbiguousRows(t *testing.T) {
++	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		json.NewEncoder(w).Encode(map[string]any{"code": 0, "msg": "OK", "data": map[string]any{
++			"tasks": []map[string]any{
++				{"task_code": "chat_5", "locked": true, "target": 5, "current": 5},
++				{"task_code": "chat_5", "target": 5, "current": 5},
++			},
++		}})
++	}))
++	defer srv.Close()
++	p := &Panel{cfg: Config{Upstream: &upstream.Client{HTTP: srv.Client(), ChatBaseCN: srv.URL, BillingBaseCN: srv.URL, WebBaseCN: srv.URL}}}
++	if _, err := p.taskByCode(&auth.Auth{AccessToken: "fixture", UID: "fixture"}, "chat_5"); err == nil {
++		t.Fatal("ambiguous task code was accepted")
++	}
++}
++
++func TestTaskSweepLockedAndExpiredReachedProgressDoesNotMutate(t *testing.T) {
++	b := &sweepBackend{listFn: func(isMP bool) []map[string]any {
++		if isMP {
++			return nil
++		}
++		return []map[string]any{
++			sweepTask("locked", 1, 1, "accepted", map[string]any{"locked": true}),
++			sweepTask("expired", 1, 1, "accepted", map[string]any{"status": "expired"}),
++		}
++	}}
++	p := newSweepPanel(t, b, &auth.Auth{UID: "u1", AccessToken: "fixture"})
++	st := p.RunTaskSweepOnce()
++	if st.Accepted != 0 || st.Attempted != 0 || st.Claimed != 0 || b.accepts.Load() != 0 || b.claims.Load() != 0 {
++		t.Fatalf("inactive reached tasks mutated: stats=%+v accepts=%d claims=%d", st, b.accepts.Load(), b.claims.Load())
++	}
++}
++
++func TestTaskSweepDuplicateCodeConflictingRowsDoesNotMutate(t *testing.T) {
++	b := &sweepBackend{listFn: func(isMP bool) []map[string]any {
++		if isMP {
++			return nil
++		}
++		return []map[string]any{
++			sweepTask("dup", 1, 0, "not_accepted", nil),
++			sweepTask("dup", 1, 1, "accepted", nil),
++		}
++	}}
++	p := newSweepPanel(t, b, &auth.Auth{UID: "u1", AccessToken: "fixture"})
++	st := p.RunTaskSweepOnce()
++	if st.Errors != 1 || st.Accepted != 0 || st.Attempted != 0 || st.Claimed != 0 || b.accepts.Load() != 0 || b.claims.Load() != 0 {
++		t.Fatalf("duplicate code was mutated: stats=%+v accepts=%d claims=%d", st, b.accepts.Load(), b.claims.Load())
++	}
++}
++
++func TestTaskSweepPositiveAward(t *testing.T) {
++	b := &sweepBackend{
++		listFn: func(isMP bool) []map[string]any {
++			if isMP {
++				return nil
++			}
++			return []map[string]any{sweepTask("award", 1, 1, "accepted", nil)}
++		},
++		claimFn: func(string) (int, map[string]any) { return 0, map[string]any{"already_claimed": false, "credit": 100} },
++	}
++	st := newSweepPanel(t, b, &auth.Auth{UID: "u1", AccessToken: "fixture"}).RunTaskSweepOnce()
++	if st.Attempted != 1 || st.Claimed != 1 || st.Credits != 100 || st.AlreadyClaimed != 0 {
++		t.Fatalf("positive award stats=%+v", st)
++	}
++}
++
++func TestTaskSweepAlreadyClaimedAndNoRewardReceipts(t *testing.T) {
++	tests := []struct {
++		name              string
++		data              map[string]any
++		already, noReward int
++	}{
++		{"already", map[string]any{"already_claimed": true}, 1, 0},
++		{"zero_false", map[string]any{"already_claimed": false, "credit": 0, "energy": 0}, 0, 1},
++	}
++	for _, tc := range tests {
++		t.Run(tc.name, func(t *testing.T) {
++			b := &sweepBackend{
++				listFn: func(isMP bool) []map[string]any {
++					if isMP {
++						return nil
++					}
++					return []map[string]any{sweepTask("receipt", 1, 1, "accepted", nil)}
++				},
++				claimFn: func(string) (int, map[string]any) { return 0, tc.data },
++			}
++			st := newSweepPanel(t, b, &auth.Auth{UID: "u1", AccessToken: "fixture"}).RunTaskSweepOnce()
++			if st.Attempted != 1 || st.AlreadyClaimed != tc.already || st.NoReward != tc.noReward || st.Claimed != 0 {
++				t.Fatalf("stats=%+v", st)
++			}
++		})
++	}
++}
++
++func TestTaskSweepMalformedNullAndEmptyReceiptsAreErrorsWithoutRetry(t *testing.T) {
++	for _, body := range []string{`null`, `{}`} {
++		t.Run(body, func(t *testing.T) {
++			var claims atomic.Int32
++			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++				if r.URL.Path == "/v2/activity/growth/tasks" {
++					w.Write([]byte(sweepTasksBody([]map[string]any{sweepTask("bad", 1, 1, "accepted", nil)})))
++					return
++				}
++				if strings.HasSuffix(r.URL.Path, "/claim") {
++					claims.Add(1)
++					w.Write([]byte(`{"code":0,"msg":"OK","data":` + body + `}`))
++					return
++				}
++				w.Write([]byte(`{"code":0,"msg":"OK","data":{}}`))
++			}))
++			defer srv.Close()
++			p := &Panel{cfg: Config{Upstream: &upstream.Client{HTTP: srv.Client(), ChatBaseCN: srv.URL, BillingBaseCN: srv.URL, WebBaseCN: srv.URL}}}
++			p.cfg.Pool = pool.New("")
++			p.cfg.Pool.Add(&auth.Auth{UID: "u1", AccessToken: "fixture"})
++			st := p.RunTaskSweepOnce()
++			if st.Errors != 1 || st.Attempted != 1 || st.Claimed != 0 || claims.Load() != 1 {
++				t.Fatalf("body=%s stats=%+v claims=%d", body, st, claims.Load())
++			}
++		})
++	}
++}
++
++func TestLegacyClaimMethodsKeepHTTPPaths(t *testing.T) {
++	var paths []string
++	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		paths = append(paths, r.Method+" "+r.URL.Path)
++		w.Write([]byte(`{"code":0,"msg":"OK","data":{"credit":100,"energy":5}}`))
++	}))
++	defer srv.Close()
++	c := &upstream.Client{HTTP: srv.Client(), ChatBaseCN: srv.URL, BillingBaseCN: srv.URL, WebBaseCN: srv.URL}
++	a := &auth.Auth{UID: "u1", AccessToken: "fixture"}
++	if _, _, err := c.ClaimReward(a, "legacy"); err != nil {
++		t.Fatal(err)
++	}
++	if _, _, err := c.ClaimRewardMP(a, "legacy"); err != nil {
++		t.Fatal(err)
++	}
++	if len(paths) != 2 || paths[0] != "POST /activity/growth/tasks/legacy/claim" || paths[1] != paths[0] {
++		t.Fatalf("paths=%v", paths)
++	}
++}
++
++func withStubbedAutoAction(t *testing.T, code string, run func(*Panel, *auth.Auth) (string, error), f func()) {
++	t.Helper()
++	for i := range autoActions {
++		if autoActions[i].TaskCode == code {
++			old := autoActions[i].run
++			autoActions[i].run = run
++			t.Cleanup(func() { autoActions[i].run = old })
++			f()
++			return
++		}
++	}
++	t.Fatalf("action %q not found", code)
++}
++
++func autoFixturePanel(t *testing.T, handler http.Handler) *Panel {
++	t.Helper()
++	srv := httptest.NewServer(handler)
++	t.Cleanup(srv.Close)
++	p := &Panel{cfg: Config{Pool: pool.New(""), Upstream: &upstream.Client{HTTP: srv.Client(), ChatBaseCN: srv.URL, BillingBaseCN: srv.URL, WebBaseCN: srv.URL}}}
++	p.cfg.Pool.Add(&auth.Auth{UID: "u1", AccessToken: "fixture"})
++	return p
++}
++
++func TestRunAutoAllReadyButLockedDoesNotRunOrClaim(t *testing.T) {
++	oldGap, oldAttempts := reportGap, claimPollAttempts
++	reportGap, claimPollAttempts = 0, 1
++	t.Cleanup(func() { reportGap, claimPollAttempts = oldGap, oldAttempts })
++	var runs atomic.Int32
++	p := autoFixturePanel(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		if r.URL.Path == "/v2/activity/growth/tasks" {
++			w.Write([]byte(sweepTasksBody([]map[string]any{sweepTask("chat_5", 1, 1, "accepted", map[string]any{"locked": true})})))
++			return
++		}
++		if strings.HasSuffix(r.URL.Path, "/claim") {
++			t.Errorf("locked task claimed: %s", r.URL.Path)
++		}
++		w.Write([]byte(`{"code":0,"msg":"OK","data":{}}`))
++	}))
++	withStubbedAutoAction(t, "chat_5", func(*Panel, *auth.Auth) (string, error) { runs.Add(1); return "stub", nil }, func() {
++		out := p.runAutoAll(&auth.Auth{UID: "u1", AccessToken: "fixture"})
++		if runs.Load() != 0 {
++			t.Fatalf("locked task action ran %d times", runs.Load())
++		}
++		for _, item := range out {
++			if item["task_code"] == "chat_5" && item["status"] != "skipped" {
++				t.Fatalf("locked item=%v", item)
++			}
++		}
++	})
++}
++
++func TestAccountTaskAutoReadbackNotReadyIsUnconfirmed(t *testing.T) {
++	oldAttempts := claimPollAttempts
++	claimPollAttempts = 1
++	t.Cleanup(func() { claimPollAttempts = oldAttempts })
++	var list atomic.Int32
++	p := autoFixturePanel(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		if r.URL.Path == "/v2/activity/growth/tasks" {
++			list.Add(1)
++			w.Write([]byte(sweepTasksBody([]map[string]any{sweepTask("chat_5", 1, 0, "accepted", nil)})))
++			return
++		}
++		w.Write([]byte(`{"code":0,"msg":"OK","data":{}}`))
++	}))
++	withStubbedAutoAction(t, "chat_5", func(*Panel, *auth.Auth) (string, error) { return "stub-200", nil }, func() {
++		r := httptest.NewRequest(http.MethodPost, "/accounts/u1/tasks/auto", strings.NewReader(`{"task_code":"chat_5"}`))
++		r.SetPathValue("uid", "u1")
++		w := httptest.NewRecorder()
++		p.accountTaskAuto(w, r)
++		var got map[string]any
++		if err := json.NewDecoder(w.Body).Decode(&got); err != nil {
++			t.Fatal(err)
++		}
++		if w.Code != http.StatusOK || got["progress_readback_ok"] != true || got["verified"] != false {
++			t.Fatalf("status=%d response=%v lists=%d", w.Code, got, list.Load())
++		}
++		if got["claimable"] == true || got["claimed"] == true {
++			t.Fatalf("not-ready task was treated as done: %v", got)
++		}
++	})
++}
++
++func TestAccountTaskAutoReadbackFailureIsUnknownUnconfirmed(t *testing.T) {
++	oldAttempts := claimPollAttempts
++	claimPollAttempts = 1
++	t.Cleanup(func() { claimPollAttempts = oldAttempts })
++	p := autoFixturePanel(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		if r.URL.Path == "/v2/activity/growth/tasks" {
++			if r.Header.Get("X-Readback-Fail") == "1" {
++				w.WriteHeader(http.StatusBadGateway)
++				return
++			}
++			w.Write([]byte(sweepTasksBody([]map[string]any{sweepTask("chat_5", 1, 0, "accepted", nil)})))
++			return
++		}
++		w.Write([]byte(`{"code":0,"msg":"OK","data":{}}`))
++	}))
++	withStubbedAutoAction(t, "chat_5", func(*Panel, *auth.Auth) (string, error) { return "stub-200", nil }, func() {
++		// The fixture flips to an upstream read failure after the initial list.
++		// Header injection is not part of production code, so use a client transport
++		// that marks the second GET while preserving the same deterministic server.
++		var gets atomic.Int32
++		base := p.cfg.Upstream.HTTP
++		p.cfg.Upstream.HTTP = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
++			if req.URL.Path == "/v2/activity/growth/tasks" && gets.Add(1) > 1 {
++				req.Header.Set("X-Readback-Fail", "1")
++			}
++			return base.Transport.RoundTrip(req)
++		})}
++		r := httptest.NewRequest(http.MethodPost, "/accounts/u1/tasks/auto", strings.NewReader(`{"task_code":"chat_5"}`))
++		r.SetPathValue("uid", "u1")
++		w := httptest.NewRecorder()
++		p.accountTaskAuto(w, r)
++		var got map[string]any
++		if err := json.NewDecoder(w.Body).Decode(&got); err != nil {
++			t.Fatal(err)
++		}
++		if w.Code != http.StatusOK || got["progress_readback_ok"] != false || got["verified"] != false || got["status"] == "done" {
++			t.Fatalf("readback failure response=%v code=%d", got, w.Code)
++		}
++	})
++}
++
++type roundTripFunc func(*http.Request) (*http.Response, error)
++
++func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+diff --git a/internal/upstream/tasks_integrity_test.go b/internal/upstream/tasks_integrity_test.go
+new file mode 100644
+index 0000000..db5d1ae
+--- /dev/null
++++ b/internal/upstream/tasks_integrity_test.go
+@@ -0,0 +1,76 @@
++package upstream
++
++import (
++	"encoding/json"
++	"testing"
++)
++
++func TestParseClaimRewardReceiptIntegrity(t *testing.T) {
++	valid := []struct {
++		name           string
++		body           string
++		credit, energy int64
++		claimed, known bool
++	}{
++		{"credit", `{"credit":3}`, 3, 0, false, false},
++		{"energy", `{"energy":4}`, 0, 4, false, false},
++		{"both", `{"credit":3,"energy":4,"extension":{"x":1}}`, 3, 4, false, false},
++		{"already", `{"already_claimed":true}`, 0, 0, true, true},
++		{"zero-false", `{"credit":0,"energy":0,"already_claimed":false}`, 0, 0, false, true},
++	}
++	for _, tc := range valid {
++		t.Run(tc.name, func(t *testing.T) {
++			r, err := parseClaimRewardReceipt(json.RawMessage(tc.body))
++			if err != nil {
++				t.Fatalf("parse: %v", err)
++			}
++			if r.Credit != tc.credit || r.Energy != tc.energy || r.AlreadyClaimed != tc.claimed || r.AlreadyClaimedKnown != tc.known {
++				t.Fatalf("receipt=%+v", r)
++			}
++		})
++	}
++	invalid := []string{
++		`null`, `[]`, `{}`, `{"already_claimed":false}`,
++		`{"credit":-1}`, `{"energy":-1}`, `{"credit":1.2}`, `{"credit":1e2}`,
++		`{"credit":null}`, `{"already_claimed":null}`, `{"already_claimed":true,"credit":1}`,
++		`{"credit":1,"credit":2}`, `{"credit":1} trailing`, `{"credit":"3"}`,
++		`{"credit":1,"already_claimed":null}`, `{"already_claimed":false,"extension":1}`,
++		`{"extension":true}`, `{"credit":9223372036854775808}`,
++	}
++	for _, body := range invalid {
++		t.Run(body, func(t *testing.T) {
++			if _, err := parseClaimRewardReceipt(json.RawMessage(body)); err == nil {
++				t.Fatalf("accepted invalid receipt %s", body)
++			}
++		})
++	}
++}
++
++func TestGrowthProgressAndInactiveEligibility(t *testing.T) {
++	data := json.RawMessage(`{"tasks":[
++		{"task_code":"locked","locked":true,"target":1,"current":1},
++		{"task_code":"ended","status":"EnDeD","target":1,"current":1},
++		{"task_code":"zero","target":9,"current":9,"progress":{"current":0,"target":0}},
++		{"task_code":"partial","target":9,"current":9,"progress":{"current":1,"target":2}},
++		{"task_code":"invalid","target":9,"current":9,"progress":{"current":"bad","target":9}},
++		{"task_code":"negative","target":9,"current":9,"progress":{"current":-1,"target":9}},
++		{"task_code":"null","target":1,"current":1,"progress":{"current":null,"target":1}},
++		{"task_code":"duplicate","target":1,"current":1,"progress":{"current":1,"current":0,"target":1}},
++		{"task_code":"array","target":1,"current":1,"progress":[]},
++		{"task_code":"nested_target_only","target":1,"current":1,"progress":{"target":1}},
++		{"task_code":"nested_current_only","target":1,"current":1,"progress":{"current":1}},
++		{"task_code":"nested_empty","target":1,"current":1,"progress":{}},
++		{"task_code":"nested_extension_only","target":1,"current":1,"progress":{"source":"client"}},
++		{"task_code":"flat","target":1,"current":1}
++	]}`)
++	tasks, err := parseGrowthTasks(data)
++	if err != nil {
++		t.Fatal(err)
++	}
++	for _, task := range tasks {
++		want := task.TaskCode == "flat"
++		if task.CanClaimReward() != want {
++			t.Errorf("%s CanClaimReward=%v want %v (%+v)", task.TaskCode, task.CanClaimReward(), want, task)
++		}
++	}
++}

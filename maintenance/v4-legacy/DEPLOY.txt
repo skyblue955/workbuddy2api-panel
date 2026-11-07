@@ -1,0 +1,25 @@
+本地部署与回滚 — 2026-11-07
+
+面板：http://127.0.0.1:7863/panel/ 。仅回环监听，未发布镜像/版本、未部署生产。
+当前源提交：09e59b5（upstream回执/进度）、7a10f04（面板/队列/结果真实性）。
+当前原生二进制：data/local-dev/wb2api
+SHA256 e50ea8515ff1ac1af6717db6a576c029199be01d1f8f0e48748aa6b373278da3
+备份：data/local-dev/wb2api.before-v4
+SHA256 e1ca68c7d359ec2ed77d6d2cc7373cf4237017a3112608ef56e14beb14681671
+
+实际构建：go build -buildvcs=false -o data/local-dev/wb2api.next ./cmd/server，exit0。
+实际部署：保存备份→service.sh stop→等待旧PID退出→替换二进制→service.sh start。
+结果：NATIVE_V4_BOOTSTRAP_EXIT=0，running PID38659（当时观测，不保证后续PID相同）。
+随后只读overview200、静态资源新版、拒绝路径400/401/404通过；凭证与config哈希不变；8个schedule *_enabled均false/global.enabledfalse。见 evidence/native-smoke.log。
+
+干净源码环境（测试使用缓存依赖，不代表完全离线首次下载）：
+1. 项目克隆到新目录，切到此维护分支的源码提交。
+2. 通过 fnm 选Node22，Go1.27.3；运行 bash scripts/verify.sh。
+3. 按 README 配置私有config/auth目录；不要提交令牌。普通账号登录无需开发者应用；可选 OpenAPI OAuth另行配置，不混用普通账号令牌。
+4. 本轮只手动测试，保持自动计划关闭；不要把旧auto_all的事件上报当成真实任务完成。
+
+源码回滚（保留历史）：先备份工作区，再 git revert 7a10f04 09e59b5，运行 bash scripts/verify.sh；不要强推。
+隔离验证脚本：bash /Users/jinyanya/Code/Codex/workbuddy/maintenance/v4-legacy/ROLLBACK.sh /绝对路径/隔离源码副本。
+该脚本有意拒绝当前维护工作区，只反转11个源码/测试文件；真实项目保持修改。
+原生回滚：service.sh stop，确认旧进程退出，将 wb2api.before-v4 复制回 wb2api，再 service.sh start，运行只读smoke。不要使用不等待旧PID的快速restart。
+代码/二进制回滚不会撤销已发生的官方账号报名、聊天计费或奖励；不以回滚为理由重复领取。

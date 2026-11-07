@@ -1,0 +1,128 @@
+v6 全量积分任务验收与14项仅报名回读
+2026-11-07；maintenance/v1-compat-rewards；基线70dcd40e5d3cd70b8167d1d63311059b877823ef。
+源码修复1c44e75；25项原入口测试4dd5aab；PR https://github.com/skyblue955/workbuddy2api-panel/pull/2 。
+结论：原报名接口真实登记14/14已确认；全量任务真实完成及积分到账尚未完成，不能把报名/模拟PASS叫领奖成功。
+
+全量范围
+25个旧action注册项 + 当前上游19个唯一任务 = 联合31项（重合13、旧码本次未下发12、新出现且无action handler6）。
+真实GET默认18项、MP12项，交集11，去重19。两种源不存在上位/下位恒定假设。
+10个同码字段差异仅jump_url，资格/进度字段矛盾0；原两视图均私有保留，不合成max进度。
+代码入口确定性正常25项+失败25项全部记录并通过；专家目录单条只证明partial链，不等于5/5或3/3；blackcat本次日间为0请求guard，不是夜间成功。
+17个event-only动作只在假上游测试，未向真实上游补发虚构成功事件，也未增强事件载荷。
+逐项结果见 TASK_MATRIX.tsv；新6码见catalog-comparison.json，已报名但不代表新增自动完成适配。
+
+改变的分支/字段
+只改变runModelChat在HTTP200后的流完成分支：原先io.Copy丢弃read error/SSE error/截断，仍上报“完成”；现在异常流返回error且report次数0。
+请求URL/headers/model/messages/stream不改；没有推理重试、额外聊天或补事件。其余24个旧action实现原样，见other-actions-preserved.json。
+局部有界SSE消费：1MiB+1超限拒绝，支持data可选空格、LF/CRLF/CR、多data行、注释、DONE/有效finish_reason；空finish作为未终止。
+本任务n默认1，拒绝意外多choice/非零index；每个delta/message角色不得为非assistant；工具/函数等待、过滤/error、reasoning-only、空正文、读错和半截均不报完成。
+共享Aggregate保留原实现；仅本动作的已校验副本规范化后复用聚合；read error固定错误文字不外泄底层文本。
+
+四个交付物（最终逐一重新打开核验）
+MODIFIED_FILE=/Users/jinyanya/Code/Codex/workbuddy/maintenance/v6-full-task-acceptance/MODIFIED_FILE.go.txt
+DIFF_FILE=/Users/jinyanya/Code/Codex/workbuddy/maintenance/v6-full-task-acceptance/DIFF_FILE.patch
+VERIFICATION=/Users/jinyanya/Code/Codex/workbuddy/maintenance/v6-full-task-acceptance/VERIFICATION.txt
+ROLLBACK=/Users/jinyanya/Code/Codex/workbuddy/maintenance/v6-full-task-acceptance/ROLLBACK.sh
+MODIFIED_FILE逐字复制新autotask.go；DIFF覆盖4源码/测试文件；原文件SHA256及3个ABSENT保留；ROLLBACK为0755并真实在另一副本演练，当前维护树保持修改。
+
+环境与门禁
+PATH=/Users/jinyanya/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.3.darwin-arm64/bin:$PATH
+GOTOOLCHAIN=local GOCACHE=/private/tmp/workbuddy-gocache GOMODCACHE=/Users/jinyanya/go/pkg/mod GOPROXY=off
+Node22.21.1/fnm；Python均以 UV_CACHE_DIR=/private/tmp/uv-workbuddy-cache uv run --no-project python 执行。
+测试只连mock RoundTripper或本地httptest；不在CI访问真实账号或发奖励。依赖使用本机缓存，不宣称首次无网下载可行。
+
+BASELINE
+命令：bash scripts/verify.sh
+输入：70dcd40原源码/确定性fixtures。
+字面结果：ACCEPTANCE PASS；V6_BASELINE_EXIT=0；exit0。evidence/baseline-verify.log。
+探针干净目录：/private/tmp/workbuddy-v6-baseline.buzqXB；git archive70dcd40，加STREAM_PROBE_test.go.txt为internal/panel/v6_stream_evidence_test.go。
+精确命令：go test -v ./internal/panel -run '^TestV6StreamEvidence$' -count=1
+literal输入，均HTTP200：
+valid = data: {"choices":[{"delta":{"content":"OK"}}]} 后空行；data: [DONE] 后空行。
+error_sse = data: {"error":{"message":"fixture"}} 后空行。
+truncated = data: {"choices":[{"delta":{"content":"partial"}}]} 后空行，EOF无终止。
+read_failure = valid内容后reader返回fixture read failed。
+字面输出：
+MODEL valid accepted=true reports=1
+MODEL error_sse accepted=true reports=1
+MODEL truncated accepted=true reports=1
+MODEL read_failure accepted=true reports=1
+exit0；stream-baseline-reproduced.log。探针exit0是采证成功，不是原行为正确。
+实现者早期stream-baseline.log只在当时未修工作树采证；本记录以root干净archive可复制探针为准，未把说明文本当源码。
+
+MODIFIED
+命令：bash scripts/verify.sh
+输入：当前4文件修复版/fixtures；语法检查、go vet ./...、go test -race ./...、go build ./...。
+字面输出：ACCEPTANCE PASS；exit0。evidence/modified-final-verify.log。
+另一干净archive+正向DIFF同命令：ACCEPTANCE PASS；exit0。evidence/clean-modified-verify.log。
+同一STREAM_PROBE命令及literal输入：
+MODEL valid accepted=true reports=1
+MODEL error_sse accepted=false reports=0
+MODEL truncated accepted=false reports=0
+MODEL read_failure accepted=false reports=0
+exit0。evidence/stream-modified-reproduced.log；正常旧行为保留，仅错误分支收紧。
+全量与边界定向命令：go test -race -v ./internal/panel -run 'TestRunModelChat|TestFullLegacyAction' -count=1
+字面结果：PASS / ok；exit0。evidence/final-fixtures-verbose.log。
+25原action每项正常与502失败；非达标不claim；失败不伪报完成；POST JSON有效性/MP header/team expert_type/模型完整请求contract有断言。
+MP fixture将gap=-10s抵消[0,10s)随机数，和始终负，Sleep立即返回，仅缩短本地模拟；未改生产节奏或实际发送事件。
+
+ROLLBACK
+输入：/private/tmp/workbuddy-v6-final-rollback.ihNFzr，与真实维护树分离的干净70dcd40+正向补丁副本。
+精确命令：bash /Users/jinyanya/Code/Codex/workbuddy/maintenance/v6-full-task-acceptance/ROLLBACK.sh /private/tmp/workbuddy-v6-final-rollback.ihNFzr
+字面输出：ROLLBACK PASS: 70dcd40 source restored; 4 hashes/absences matched；exit0。
+命令：bash scripts/verify.sh（回滚副本）
+字面输出：ACCEPTANCE PASS；exit0。evidence/rollback-verify.log。
+同一STREAM_PROBE命令与输入恢复为：
+MODEL valid accepted=true reports=1
+MODEL error_sse accepted=true reports=1
+MODEL truncated accepted=true reports=1
+MODEL read_failure accepted=true reports=1
+exit0。stream-rollback-reproduced.log。旧行为/状态及4个文件哈希/缺省恢复；维护树仍是修复版。
+最终整条演练输出V6_FINAL_BASELINE_MODIFIED_ROLLBACK_PASS，exit0。
+
+真实只读盘点（不是模拟）
+精确命令：./data/live-v6/task-inventory/probe -readonly
+原Client.ListTasks/ListTasksMP各一次，HTTP200/200、code0/0、unique19、claimable0、claimed3；chat/event/claim均0。
+config_auth_unchanged=true；LIVE_INVENTORY_EXIT=0，exit0。live-inventory.log。
+完整逐账号任务视图只存gitignored0600私有文件；公共文件仅无账号标识的定义和汇总。
+
+新授权14项仅报名+回读（已实际执行完毕）
+用户明确授权14项仅报名并回读，不授权聊天/事件/领奖/实际公众号关注/协议/领养/连接器/自动化创建。
+精确命令：./data/live-v6/task-inventory/probe -register
+使用原AcceptTasks(default13码)与AcceptTasksMP(Sequential_Tasks_1一码)，各一次POST；前后ListTasks/ListTasksMP各一次GET。
+先按实时源选择，不假定MP包含全部普通任务；本地初始8/6批次规划断言发现不符后、任何POST之前已改为真实13/1，实际没有重试或错误报名。
+字面结果：
+requested=14 attempted=14 confirmed=14 unconfirmed=0 skipped=0 not_attempted=0
+accept_requests=2 default_requests=2 mp_requests=2
+http_statuses=[200,200,200,200,200,200] business_codes=[0,0,0,0,0,0]
+chat_posts=0 event_posts=0 reward_posts=0 config_auth_unchanged=true class=ok
+LIVE_REGISTRATION_EXIT=0；exit0。
+确认依据是每个已尝试task在对应来源postflight的accept_status落为有效报名状态，不是仅看200；目标也实际回读：chat_5/template_5各5，其余12项各1。
+post唯一19项、可领仍0，已领前后仍3。本轮未查询余额，不声称余额变化0；没有发领奖请求，不声称到账。
+即时回读已确认14/14，无需为确认而重放；每batch O_EXCL标记保留，脚本禁止自动重试。
+详情：live-registration.log；registered-task-definitions.json为去敏定义，不含真实进度/UID/凭据；实际pre/post私有记录不入Git。
+历史聊天额度仍已用2/8、剩6；本轮真实聊天0、奖励0，不使用此前专家达标领取额度。
+
+独立审查与整改
+公开4文件由独立reviewer审查；补齐多choice、角色翻转、finish空串、合法SSE多行/CR、readerror脱敏、失败断言与请求contract后，最终无实质阻断，定向go test与-race均exit0。
+reviewer曾误判负gap有概率正等待，算术复核撤回，不为mock修改生产jitter。
+私有盘点/报名助手另由reviewer检查，修复真auth路径回读、null/重复code、overflow、summary早失败、body读后恢复、nilBody、planned batch、真实attempt计数、302误接受等后通过。
+真实助手显式手工运行，CI只跑mock；data目录继续gitignore，未force-add私有代码/凭据/完整账号记录。
+
+本地部署
+已运行 go build -buildvcs=false -o data/local-dev/wb2api.next ./cmd/server，exit0。
+新binary a5820d588f94e5bb2f2617b75276192da8d7a214d49124bf53999f3d2ee4a1d3；备份before-v6为55dc6850292e0a17677816dec29333187d11d03a6509e0bcaa81a20700c9fe5c。
+停止旧PID→等待退出→替换→启动，观察running PID81010（当时值）；overview200、400/401/404拒绝路径通过。
+config/authhash未变，8计划off/globalfalse；二进制副本覆盖恢复/cmp/-help PASS，exit0。
+smoke复用v5私有只读脚本，因此输出V5_*前缀不表示部署了旧二进制；SHA256指向本轮新版本。
+
+未完成（逐项不静默删除）
+14个任务仅报名成功，实际产品动作和奖励未执行；2专家任务仍未达标；3已领不重放；12旧码本次未下发，不推定永久下线。
+6个新增目录任务暂无原action handler/已验证编程完成契约；登记成功不代表已适配自动完成。
+未真实验证全量领取到账、夜间分支、外部账号授权或新协议；不会用虚构事件替代真实履约，也不会把GUI设为默认前置或要求用户代做。
+代码/二进制回滚不会撤销真实账号报名状态，不能据此重复报名/领奖。
+
+打包与Git核验
+保留原日志字节（部分502错误行有末尾空格）及合法nested patch上下文，避免改写实际输出。普通文本全量diff --check会对这些证据产生空白提示；源码检查 git diff 70dcd40 --check -- internal/panel 实际exit0；排除DIFF_FILE.patch及evidence/*.log后其余diff检查也exit0。没有修改全局Git设置。
+源码1c44e75、测试4dd5aab、记录8ece4e3已推送fork维护分支，远端头核验一致；PR2为fork main <- fork maintenance/v1-compat-rewards、OPEN。
+实际PR记录 https://github.com/skyblue955/workbuddy2api-panel/pull/2#issuecomment-6705922794 。私有data/live-v6跟踪文件数0；本记录追加前工作区干净。后续只提交此核验记录本身，不改变已测源码/已部署二进制/真实报名状态。

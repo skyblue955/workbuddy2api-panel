@@ -1,0 +1,1468 @@
+diff --git a/cmd/openapi/main.go b/cmd/openapi/main.go
+index 06d3bb8..332a78e 100644
+--- a/cmd/openapi/main.go
++++ b/cmd/openapi/main.go
+@@ -9,7 +9,9 @@ import (
+ 	"fmt"
+ 	"io"
+ 	"os"
++	"path/filepath"
+ 	"strings"
++	"time"
+ 
+ 	"github.com/linguo2625469/workbuddy2api-panel/internal/activities"
+ 	"github.com/linguo2625469/workbuddy2api-panel/internal/workbuddyopen"
+@@ -48,7 +50,7 @@ func run(args []string, stdin io.Reader, out io.Writer, client redeemer) error {
+ 		if err := fs.Parse(args[1:]); err != nil || fs.NArg() != 0 {
+ 			return errors.New("activities: unknown or trailing arguments")
+ 		}
+-		return json.NewEncoder(out).Encode(activities.Registry())
++		return json.NewEncoder(out).Encode(activities.Catalog(time.Now()))
+ 	case "redeem":
+ 		return runRedeem(args[1:], stdin, out, client)
+ 	default:
+@@ -61,6 +63,7 @@ func runRedeem(args []string, stdin io.Reader, out io.Writer, client redeemer) e
+ 	fs.SetOutput(io.Discard)
+ 	execute := fs.Bool("execute", false, "submit the request")
+ 	tokenFile := fs.String("token-file", "", "official OAuth access-token JSON file")
++	journalDir := fs.String("journal-dir", "", "durable redemption journal directory")
+ 	if err := fs.Parse(args); err != nil || fs.NArg() != 0 {
+ 		return errors.New("redeem: unknown or trailing arguments")
+ 	}
+@@ -80,14 +83,44 @@ func runRedeem(args []string, stdin io.Reader, out io.Writer, client redeemer) e
+ 	if strings.TrimSpace(*tokenFile) == "" {
+ 		return errors.New("redeem: -token-file is required with -execute")
+ 	}
+-	token, err := readTokenFile(*tokenFile)
++	if strings.TrimSpace(*journalDir) == "" {
++		return errors.New("redeem: -journal-dir is required with -execute")
++	}
++	normalizedJournal, pathErr := filepath.Abs(*journalDir)
++	if pathErr != nil {
++		return errors.New("redeem: journal directory is invalid")
++	}
++	*journalDir = normalizedJournal
++
++	doc, err := readTokenDocument(*tokenFile)
+ 	if err != nil {
+ 		return err
+ 	}
+-	result, err := client.Redeem(context.Background(), token, input)
++	if strings.TrimSpace(doc.OpenID) == "" {
++		return errors.New("redeem: token file has no open_id")
++	}
++	rec, path, beginErr := beginRedemption(*journalDir, input, doc.OpenID)
++	if rec.State == "succeeded" && beginErr == nil {
++		result := replayResult(rec)
++		_, err = fmt.Fprintf(out, "{\"flow_no\":%q,\"credits\":%d}\n", result.FlowNo, result.Credits)
++		return err
++	}
++	if beginErr != nil {
++		return beginErr
++	}
++	result, err := client.Redeem(context.Background(), doc.AccessToken, input)
++	if err == nil {
++		err = validateRedemptionResult(result)
++	}
++	if err == nil && result.OpenID != doc.OpenID {
++		err = errors.New("redeem: response subject mismatch")
++	}
+ 	if err != nil {
+ 		return err
+ 	}
++	if err := completeRedemption(path, *journalDir, rec, result); err != nil {
++		return errors.New("redeem: result durability failed")
++	}
+ 	_, err = fmt.Fprintf(out, "{\"flow_no\":%q,\"credits\":%d}\n", result.FlowNo, result.Credits)
+ 	return err
+ }
+diff --git a/cmd/openapi/main_test.go b/cmd/openapi/main_test.go
+index b99d0ff..3bcd817 100644
+--- a/cmd/openapi/main_test.go
++++ b/cmd/openapi/main_test.go
+@@ -20,7 +20,7 @@ type fakeRedeemer struct {
+ func (f *fakeRedeemer) Redeem(_ context.Context, token string, input workbuddyopen.RedemptionRequest) (*workbuddyopen.RedemptionResponse, error) {
+ 	f.calls++
+ 	f.token, f.input = token, input
+-	return &workbuddyopen.RedemptionResponse{FlowNo: "flow", Credits: 7, OpenID: "secret-open-id"}, nil
++	return &workbuddyopen.RedemptionResponse{Status: "success", FlowNo: "flow", Credits: 7, OpenID: "fixture-open-id"}, nil
+ }
+ 
+ func TestRedeemDryRunDoesNotCallClient(t *testing.T) {
+@@ -35,13 +35,14 @@ func TestRedeemDryRunDoesNotCallClient(t *testing.T) {
+ func TestRedeemExecuteReadsTokenAndDoesNotPrintSecrets(t *testing.T) {
+ 	dir := t.TempDir()
+ 	path := filepath.Join(dir, "token.json")
+-	tokenJSON := `{"access_token":"official-token","token_type":"Bearer","expires_in":3600,"scope":"user.credit.exchange","obtained_at":"` + time.Now().UTC().Format(time.RFC3339) + `"}`
++	journal := filepath.Join(dir, "journal")
++	tokenJSON := `{"access_token":"official-token","token_type":"Bearer","expires_in":3600,"scope":"user.credit.exchange","open_id":"fixture-open-id","obtained_at":"` + time.Now().UTC().Format(time.RFC3339) + `"}`
+ 	if err := os.WriteFile(path, []byte(tokenJSON), 0600); err != nil {
+ 		t.Fatal(err)
+ 	}
+ 	f := &fakeRedeemer{}
+ 	var out strings.Builder
+-	err := run([]string{"redeem", "-execute", "-token-file", path}, strings.NewReader(`{"gift_key":"giftkey","gift_code":"giftcode","request_id":"stable-2"}`), &out, f)
++	err := run([]string{"redeem", "-execute", "-token-file", path, "-journal-dir", journal}, strings.NewReader(`{"gift_key":"giftkey","gift_code":"giftcode","request_id":"stable-2"}`), &out, f)
+ 	if err != nil || f.calls != 1 || f.token != "official-token" || !strings.Contains(out.String(), `"flow_no":"flow"`) || !strings.Contains(out.String(), `"credits":7`) || strings.Contains(out.String(), "official-token") || strings.Contains(out.String(), "secret-open-id") {
+ 		t.Fatalf("err=%v out=%q calls=%d token=%q", err, out.String(), f.calls, f.token)
+ 	}
+@@ -59,10 +60,11 @@ func TestRedeemRejectsUnknownTrailingAndOversizedInput(t *testing.T) {
+ func TestRedeemTokenFilePermissionsAndExecuteRequirement(t *testing.T) {
+ 	dir := t.TempDir()
+ 	path := filepath.Join(dir, "token.json")
++	journal := filepath.Join(dir, "journal")
+ 	if err := os.WriteFile(path, []byte(`{"access_token":"secret"}`), 0644); err != nil {
+ 		t.Fatal(err)
+ 	}
+-	if err := run([]string{"redeem", "-execute", "-token-file", path}, strings.NewReader(`{"code":"code","request_id":"stable-1"}`), &strings.Builder{}, &fakeRedeemer{}); err == nil {
++	if err := run([]string{"redeem", "-execute", "-token-file", path, "-journal-dir", journal}, strings.NewReader(`{"code":"code","request_id":"stable-1"}`), &strings.Builder{}, &fakeRedeemer{}); err == nil {
+ 		t.Fatal("permissive token file accepted")
+ 	}
+ 	if err := run([]string{"redeem", "-execute"}, strings.NewReader(`{"code":"code","request_id":"stable-1"}`), &strings.Builder{}, &fakeRedeemer{}); err == nil {
+diff --git a/cmd/openapi/redemption_journal.go b/cmd/openapi/redemption_journal.go
+new file mode 100644
+index 0000000..5823609
+--- /dev/null
++++ b/cmd/openapi/redemption_journal.go
+@@ -0,0 +1,200 @@
++package main
++
++import (
++	"crypto/sha256"
++	"encoding/hex"
++	"encoding/json"
++	"errors"
++	"io"
++	"os"
++	"path/filepath"
++	"strings"
++	"time"
++
++	"github.com/linguo2625469/workbuddy2api-panel/internal/workbuddyopen"
++)
++
++const maxJournalRecord = 16 << 10
++
++type redemptionJournalRecord struct {
++	RequestID   string `json:"request_id"`
++	PayloadHash string `json:"payload_hash"`
++	SubjectHash string `json:"subject_hash"`
++	State       string `json:"state"`
++	CreatedAt   string `json:"created_at"`
++	UpdatedAt   string `json:"updated_at"`
++	FlowNo      string `json:"flow_no,omitempty"`
++	Credits     *int64 `json:"credits,omitempty"`
++}
++
++func journalHash(v string) string { sum := sha256.Sum256([]byte(v)); return hex.EncodeToString(sum[:]) }
++
++func redemptionPayloadHash(in workbuddyopen.RedemptionRequest) (string, error) {
++	b, err := json.Marshal(in)
++	if err != nil {
++		return "", err
++	}
++	return journalHash(string(b)), nil
++}
++
++func ensureJournalDir(path string) error {
++	if strings.TrimSpace(path) == "" {
++		return errors.New("journal directory is required")
++	}
++	path = filepath.Clean(path)
++	info, err := os.Lstat(path)
++	if os.IsNotExist(err) {
++		if err := os.Mkdir(path, 0700); err != nil {
++			return err
++		}
++		info, err = os.Lstat(path)
++	}
++	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.IsDir() || info.Mode().Perm() != 0700 {
++		return errors.New("invalid journal directory")
++	}
++	if err := syncDirectory(filepath.Dir(path)); err != nil {
++		return err
++	}
++	return nil
++}
++
++func journalPath(dir, requestID string) string {
++	return filepath.Join(dir, journalHash(requestID)+".json")
++}
++
++func readJournal(path string) (redemptionJournalRecord, error) {
++	var rec redemptionJournalRecord
++	info, err := os.Lstat(path)
++	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || info.Mode().Perm() != 0600 {
++		return rec, errors.New("invalid journal record")
++	}
++	f, err := os.Open(path)
++	if err != nil {
++		return rec, err
++	}
++	opened, statErr := f.Stat()
++	if statErr != nil || !os.SameFile(info, opened) || opened.Mode()&os.ModeSymlink != 0 || !opened.Mode().IsRegular() || opened.Mode().Perm() != 0600 {
++		_ = f.Close()
++		return rec, errors.New("journal record changed")
++	}
++	b, err := io.ReadAll(io.LimitReader(f, maxJournalRecord+1))
++	closeErr := f.Close()
++	if err != nil || closeErr != nil || len(b) > maxJournalRecord {
++		return rec, errors.New("invalid journal record")
++	}
++	dec := json.NewDecoder(strings.NewReader(string(b)))
++	dec.DisallowUnknownFields()
++	if err := dec.Decode(&rec); err != nil {
++		return rec, err
++	}
++	var extra any
++	if err := dec.Decode(&extra); err != io.EOF {
++		return rec, errors.New("trailing journal record")
++	}
++	if rec.RequestID == "" || rec.PayloadHash == "" || rec.SubjectHash == "" || rec.CreatedAt == "" || rec.UpdatedAt == "" || (rec.State != "pending" && rec.State != "succeeded") {
++		return rec, errors.New("incomplete journal record")
++	}
++	if rec.State == "pending" && (rec.FlowNo != "" || rec.Credits != nil) {
++		return rec, errors.New("pending journal has a receipt")
++	}
++	if rec.State == "succeeded" && (strings.TrimSpace(rec.FlowNo) == "" || rec.Credits == nil || *rec.Credits < 0) {
++		return rec, errors.New("completed journal receipt is invalid")
++	}
++	return rec, nil
++}
++
++func beginRedemption(dir string, in workbuddyopen.RedemptionRequest, openID string) (redemptionJournalRecord, string, error) {
++	if err := ensureJournalDir(dir); err != nil {
++		return redemptionJournalRecord{}, "", err
++	}
++	ph, err := redemptionPayloadHash(in)
++	if err != nil {
++		return redemptionJournalRecord{}, "", err
++	}
++	path := journalPath(dir, in.RequestID)
++	now := time.Now().UTC().Format(time.RFC3339Nano)
++	rec := redemptionJournalRecord{RequestID: in.RequestID, PayloadHash: ph, SubjectHash: journalHash(openID), State: "pending", CreatedAt: now, UpdatedAt: now}
++	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
++	if err != nil {
++		old, readErr := readJournal(path)
++		if readErr != nil {
++			return rec, "", errors.New("redemption outcome uncertain")
++		}
++		if old.RequestID != in.RequestID || old.PayloadHash != ph || old.SubjectHash != rec.SubjectHash {
++			return rec, "", errors.New("request already used with different input or account")
++		}
++		if old.State == "succeeded" {
++			return old, path, nil
++		}
++		return old, path, errors.New("redemption outcome uncertain")
++	}
++	if err := json.NewEncoder(f).Encode(rec); err != nil {
++		_ = f.Close()
++		return rec, "", err
++	}
++	if err := f.Sync(); err != nil {
++		_ = f.Close()
++		return rec, "", err
++	}
++	if err := f.Close(); err != nil {
++		return rec, "", err
++	}
++	if err := syncDirectory(dir); err != nil {
++		return rec, "", err
++	}
++	return rec, path, nil
++}
++
++func completeRedemption(path, dir string, rec redemptionJournalRecord, result *workbuddyopen.RedemptionResponse) error {
++	credits := result.Credits
++	rec.State, rec.UpdatedAt, rec.FlowNo, rec.Credits = "succeeded", time.Now().UTC().Format(time.RFC3339Nano), result.FlowNo, &credits
++	tmp, err := os.CreateTemp(dir, ".redemption-*")
++	if err != nil {
++		return err
++	}
++	tmpPath := tmp.Name()
++	defer func() { _ = os.Remove(tmpPath) }()
++	if err := tmp.Chmod(0600); err != nil {
++		_ = tmp.Close()
++		return err
++	}
++	if err := json.NewEncoder(tmp).Encode(rec); err != nil {
++		_ = tmp.Close()
++		return err
++	}
++	if err := tmp.Sync(); err != nil {
++		_ = tmp.Close()
++		return err
++	}
++	if err := tmp.Close(); err != nil {
++		return err
++	}
++	if err := os.Rename(tmpPath, path); err != nil {
++		return err
++	}
++	return syncDirectory(dir)
++}
++
++func syncDirectory(path string) error {
++	f, err := os.Open(path)
++	if err != nil {
++		return err
++	}
++	defer f.Close()
++	return f.Sync()
++}
++
++func replayResult(rec redemptionJournalRecord) *workbuddyopen.RedemptionResponse {
++	credits := int64(0)
++	if rec.Credits != nil {
++		credits = *rec.Credits
++	}
++	return &workbuddyopen.RedemptionResponse{Status: "success", FlowNo: rec.FlowNo, Credits: credits}
++}
++
++func validateRedemptionResult(result *workbuddyopen.RedemptionResponse) error {
++	if result == nil || result.Status != "success" || strings.TrimSpace(result.FlowNo) == "" || strings.TrimSpace(result.OpenID) == "" || result.Credits < 0 {
++		return errors.New("redemption: response is unconfirmed")
++	}
++	return nil
++}
+diff --git a/cmd/openapi/redemption_journal_test.go b/cmd/openapi/redemption_journal_test.go
+new file mode 100644
+index 0000000..14f644a
+--- /dev/null
++++ b/cmd/openapi/redemption_journal_test.go
+@@ -0,0 +1,272 @@
++package main
++
++import (
++	"context"
++	"encoding/json"
++	"errors"
++	"os"
++	"path/filepath"
++	"strings"
++	"sync"
++	"testing"
++	"time"
++
++	"github.com/linguo2625469/workbuddy2api-panel/internal/workbuddyopen"
++)
++
++type journalRedeemer struct {
++	calls int
++	err   error
++}
++
++func (r *journalRedeemer) Redeem(context.Context, string, workbuddyopen.RedemptionRequest) (*workbuddyopen.RedemptionResponse, error) {
++	r.calls++
++	if r.err != nil {
++		return nil, r.err
++	}
++	return &workbuddyopen.RedemptionResponse{Status: "success", FlowNo: "flow-fixture", Credits: 3, OpenID: "fixture-open-id"}, nil
++}
++
++type concurrentJournalRedeemer struct {
++	mu    sync.Mutex
++	calls int
++}
++
++func (r *concurrentJournalRedeemer) Redeem(context.Context, string, workbuddyopen.RedemptionRequest) (*workbuddyopen.RedemptionResponse, error) {
++	r.mu.Lock()
++	defer r.mu.Unlock()
++	r.calls++
++	return &workbuddyopen.RedemptionResponse{Status: "success", FlowNo: "flow-fixture", Credits: 3, OpenID: "fixture-open-id"}, nil
++}
++
++func writeJournalToken(t *testing.T, path, openID string) {
++	writeJournalTokenWithAccess(t, path, openID, "fixture-token")
++}
++
++func writeJournalTokenWithAccess(t *testing.T, path, openID, accessToken string) {
++	t.Helper()
++	doc := tokenDocument{OAuthToken: workbuddyopen.OAuthToken{AccessToken: accessToken, TokenType: "Bearer", ExpiresIn: 3600, Scope: "user.credit.exchange", OpenID: openID}, ObtainedAt: time.Now().UTC()}
++	b, _ := json.Marshal(doc)
++	if err := os.WriteFile(path, b, 0600); err != nil {
++		t.Fatal(err)
++	}
++}
++
++func TestRedeemJournalSuccessReplayAndNoSecrets(t *testing.T) {
++	dir := t.TempDir()
++	tokenPath := filepath.Join(dir, "token.json")
++	journalDir := filepath.Join(dir, "journal")
++	writeJournalToken(t, tokenPath, "fixture-open-id")
++	r := &journalRedeemer{}
++	args := []string{"redeem", "-execute", "-token-file", tokenPath, "-journal-dir", journalDir}
++	input := `{"code":"fixture-code","request_id":"request-1"}`
++	var out strings.Builder
++	if err := run(args, strings.NewReader(input), &out, r); err != nil {
++		t.Fatal(err)
++	}
++	if r.calls != 1 || !strings.Contains(out.String(), `"flow_no":"flow-fixture"`) {
++		t.Fatalf("calls=%d out=%q", r.calls, out.String())
++	}
++	entry, err := os.ReadFile(filepath.Join(journalDir, journalHash("request-1")+".json"))
++	if err != nil {
++		t.Fatal(err)
++	}
++	for _, secret := range []string{"fixture-code", "fixture-open-id", "fixture-token"} {
++		if strings.Contains(string(entry), secret) {
++			t.Fatalf("journal contains %q", secret)
++		}
++	}
++	out.Reset()
++	if err := run(args, strings.NewReader(input), &out, r); err != nil {
++		t.Fatal(err)
++	}
++	if r.calls != 1 || !strings.Contains(out.String(), `"credits":3`) {
++		t.Fatalf("replay calls=%d out=%q", r.calls, out.String())
++	}
++	secondToken := filepath.Join(dir, "rotated-token.json")
++	writeJournalTokenWithAccess(t, secondToken, "fixture-open-id", "rotated-token")
++	rotatedArgs := []string{"redeem", "-execute", "-token-file", secondToken, "-journal-dir", journalDir}
++	if err := run(rotatedArgs, strings.NewReader(input), &out, r); err != nil || r.calls != 1 {
++		t.Fatalf("rotated-token replay err=%v calls=%d", err, r.calls)
++	}
++}
++
++func TestRedeemJournalUncertainAndChangedInputNoNetwork(t *testing.T) {
++	dir := t.TempDir()
++	tokenPath := filepath.Join(dir, "token.json")
++	journalDir := filepath.Join(dir, "journal")
++	writeJournalToken(t, tokenPath, "fixture-open-id")
++	r := &journalRedeemer{err: errors.New("fixture transport")}
++	args := []string{"redeem", "-execute", "-token-file", tokenPath, "-journal-dir", journalDir}
++	if err := run(args, strings.NewReader(`{"code":"fixture-code","request_id":"request-2"}`), &strings.Builder{}, r); err == nil {
++		t.Fatal("uncertain request succeeded")
++	}
++	if err := run(args, strings.NewReader(`{"code":"fixture-code","request_id":"request-2"}`), &strings.Builder{}, r); err == nil || r.calls != 1 {
++		t.Fatalf("repeat err=%v calls=%d", err, r.calls)
++	}
++	if err := run(args, strings.NewReader(`{"code":"changed-code","request_id":"request-2"}`), &strings.Builder{}, r); err == nil || r.calls != 1 {
++		t.Fatalf("changed input err=%v calls=%d", err, r.calls)
++	}
++}
++
++func TestRedeemJournalRequiresOpenIDAndRejectsBadJournal(t *testing.T) {
++	dir := t.TempDir()
++	tokenPath := filepath.Join(dir, "token.json")
++	journalDir := filepath.Join(dir, "journal")
++	writeJournalToken(t, tokenPath, "")
++	r := &journalRedeemer{}
++	if err := run([]string{"redeem", "-execute", "-token-file", tokenPath, "-journal-dir", journalDir}, strings.NewReader(`{"code":"fixture-code","request_id":"request-3"}`), &strings.Builder{}, r); err == nil || r.calls != 0 {
++		t.Fatalf("missing open id err=%v calls=%d", err, r.calls)
++	}
++	writeJournalToken(t, tokenPath, "fixture-open-id")
++	if err := os.Mkdir(journalDir, 0700); err != nil {
++		t.Fatal(err)
++	}
++	if err := os.WriteFile(filepath.Join(journalDir, journalHash("request-3")+".json"), []byte("{"), 0600); err != nil {
++		t.Fatal(err)
++	}
++	if err := run([]string{"redeem", "-execute", "-token-file", tokenPath, "-journal-dir", journalDir}, strings.NewReader(`{"code":"fixture-code","request_id":"request-3"}`), &strings.Builder{}, r); err == nil || r.calls != 0 {
++		t.Fatalf("bad journal err=%v calls=%d", err, r.calls)
++	}
++}
++
++func TestRedeemRequiresExplicitJournalDirAndMatchesResponseSubject(t *testing.T) {
++	dir := t.TempDir()
++	tokenPath := filepath.Join(dir, "token.json")
++	writeJournalToken(t, tokenPath, "fixture-open-id")
++	args := []string{"redeem", "-execute", "-token-file", tokenPath}
++	if err := run(args, strings.NewReader(`{"code":"fixture-code","request_id":"request-5"}`), &strings.Builder{}, &journalRedeemer{}); err == nil {
++		t.Fatal("execute accepted missing journal directory")
++	}
++	journalDir := filepath.Join(dir, "journal")
++	// The mock's OpenID is changed to a different subject; the pending record
++	// remains and no later invocation can silently replay under another subject.
++	if err := run(append(args, "-journal-dir", journalDir), strings.NewReader(`{"code":"fixture-code","request_id":"request-5"}`), &strings.Builder{}, &subjectRedeemer{}); err == nil {
++		t.Fatal("subject mismatch accepted")
++	}
++	if _, err := os.Stat(filepath.Join(journalDir, journalHash("request-5")+".json")); err != nil {
++		t.Fatalf("pending record missing: %v", err)
++	}
++}
++
++type subjectRedeemer struct{}
++
++func (*subjectRedeemer) Redeem(context.Context, string, workbuddyopen.RedemptionRequest) (*workbuddyopen.RedemptionResponse, error) {
++	return &workbuddyopen.RedemptionResponse{Status: "success", FlowNo: "flow-fixture", Credits: 3, OpenID: "other-subject"}, nil
++}
++
++func TestRedeemJournalConcurrentInvocationsOnePost(t *testing.T) {
++	dir := t.TempDir()
++	tokenPath := filepath.Join(dir, "token.json")
++	journalDir := filepath.Join(dir, "journal")
++	writeJournalToken(t, tokenPath, "fixture-open-id")
++	// Keep the mock response deterministic while allowing both callers to race
++	// at the exclusive journal creation boundary.
++	adapter := &concurrentJournalRedeemer{}
++	args := []string{"redeem", "-execute", "-token-file", tokenPath, "-journal-dir", journalDir}
++	var wg sync.WaitGroup
++	for i := 0; i < 2; i++ {
++		wg.Add(1)
++		go func() {
++			defer wg.Done()
++			_ = run(args, strings.NewReader(`{"code":"fixture-code","request_id":"request-4"}`), &strings.Builder{}, adapter)
++		}()
++	}
++	wg.Wait()
++	adapter.mu.Lock()
++	calls := adapter.calls
++	adapter.mu.Unlock()
++	if calls != 1 {
++		t.Fatalf("network calls=%d want 1", calls)
++	}
++}
++
++func TestRedeemJournalRejectsCorruptSucceededReceipt(t *testing.T) {
++	for name, receipt := range map[string]map[string]any{
++		"missing flow":     {"credits": 1},
++		"blank flow":       {"flow_no": " ", "credits": 1},
++		"missing credits":  {"flow_no": "flow"},
++		"negative credits": {"flow_no": "flow", "credits": -1},
++	} {
++		t.Run(name, func(t *testing.T) {
++			dir := t.TempDir()
++			tokenPath := filepath.Join(dir, "token.json")
++			journalDir := filepath.Join(dir, "journal")
++			writeJournalToken(t, tokenPath, "fixture-open-id")
++			if err := os.Mkdir(journalDir, 0700); err != nil {
++				t.Fatal(err)
++			}
++			payloadHash, err := redemptionPayloadHash(workbuddyopen.RedemptionRequest{Code: "fixture-code", RequestID: "request-corrupt"})
++			if err != nil {
++				t.Fatal(err)
++			}
++			record := map[string]any{"request_id": "request-corrupt", "payload_hash": payloadHash, "subject_hash": journalHash("fixture-open-id"), "state": "succeeded", "created_at": time.Now().UTC().Format(time.RFC3339Nano), "updated_at": time.Now().UTC().Format(time.RFC3339Nano)}
++			for k, v := range receipt {
++				record[k] = v
++			}
++			b, _ := json.Marshal(record)
++			if err := os.WriteFile(filepath.Join(journalDir, journalHash("request-corrupt")+".json"), b, 0600); err != nil {
++				t.Fatal(err)
++			}
++			r := &journalRedeemer{}
++			err = run([]string{"redeem", "-execute", "-token-file", tokenPath, "-journal-dir", journalDir}, strings.NewReader(`{"code":"fixture-code","request_id":"request-corrupt"}`), &strings.Builder{}, r)
++			if err == nil || r.calls != 0 {
++				t.Fatalf("err=%v calls=%d", err, r.calls)
++			}
++		})
++	}
++}
++
++func TestRedeemJournalReplaysValidZeroCreditReceipt(t *testing.T) {
++	dir := t.TempDir()
++	tokenPath := filepath.Join(dir, "token.json")
++	journalDir := filepath.Join(dir, "journal")
++	writeJournalToken(t, tokenPath, "fixture-open-id")
++	if err := os.Mkdir(journalDir, 0700); err != nil {
++		t.Fatal(err)
++	}
++	in := workbuddyopen.RedemptionRequest{Code: "fixture-code", RequestID: "request-zero"}
++	ph, err := redemptionPayloadHash(in)
++	if err != nil {
++		t.Fatal(err)
++	}
++	record := redemptionJournalRecord{RequestID: in.RequestID, PayloadHash: ph, SubjectHash: journalHash("fixture-open-id"), State: "succeeded", CreatedAt: time.Now().UTC().Format(time.RFC3339Nano), UpdatedAt: time.Now().UTC().Format(time.RFC3339Nano), FlowNo: "flow-zero"}
++	zero := int64(0)
++	record.Credits = &zero
++	b, _ := json.Marshal(record)
++	if err := os.WriteFile(filepath.Join(journalDir, journalHash(in.RequestID)+".json"), b, 0600); err != nil {
++		t.Fatal(err)
++	}
++	r := &journalRedeemer{}
++	var out strings.Builder
++	if err := run([]string{"redeem", "-execute", "-token-file", tokenPath, "-journal-dir", journalDir}, strings.NewReader(`{"code":"fixture-code","request_id":"request-zero"}`), &out, r); err != nil {
++		t.Fatal(err)
++	}
++	if r.calls != 0 || !strings.Contains(out.String(), `"credits":0`) {
++		t.Fatalf("calls=%d out=%q", r.calls, out.String())
++	}
++}
++
++func TestJournalNormalizesTrailingSlashAndRejectsSymlink(t *testing.T) {
++	dir := t.TempDir()
++	token := filepath.Join(dir, "token.json")
++	writeJournalToken(t, token, "fixture-open-id")
++	journal := filepath.Join(dir, "journal")
++	r := &journalRedeemer{}
++	input := `{"code":"fixture-code","request_id":"request-path"}`
++	for _, path := range []string{journal + string(os.PathSeparator), filepath.Join(journal, ".")} {
++		if err := run([]string{"redeem", "-execute", "-token-file", token, "-journal-dir", path}, strings.NewReader(input), &strings.Builder{}, r); err != nil {
++			t.Fatal(err)
++		}
++	}
++	if r.calls != 1 {
++		t.Fatalf("normalizedpath replay posted%d times", r.calls)
++	}
++	link := filepath.Join(dir, "linked-journal")
++	if err := os.Symlink(journal, link); err != nil {
++		t.Skip("symlinks unavailable")
++	}
++	if err := run([]string{"redeem", "-execute", "-token-file", token, "-journal-dir", link + string(os.PathSeparator)}, strings.NewReader(input), &strings.Builder{}, r); err == nil || r.calls != 1 {
++		t.Fatal("trailing slash bypassed symlink validation")
++	}
++}
+diff --git a/cmd/openapi/token_file.go b/cmd/openapi/token_file.go
+index 5ed41f6..f05f223 100644
+--- a/cmd/openapi/token_file.go
++++ b/cmd/openapi/token_file.go
+@@ -18,41 +18,50 @@ type tokenDocument struct {
+ }
+ 
+ func readTokenFile(path string) (string, error) {
++	doc, err := readTokenDocument(path)
++	if err != nil {
++		return "", err
++	}
++	return doc.AccessToken, nil
++}
++
++func readTokenDocument(path string) (tokenDocument, error) {
++	var empty tokenDocument
+ 	initial, err := os.Lstat(path)
+ 	if err != nil || initial.Mode()&os.ModeSymlink != 0 || !initial.Mode().IsRegular() {
+-		return "", errors.New("redeem: token file unavailable")
++		return empty, errors.New("redeem: token file unavailable")
+ 	}
+ 	if initial.Mode().Perm()&0077 != 0 {
+-		return "", errors.New("redeem: token file must not be group/world-readable")
++		return empty, errors.New("redeem: token file must not be group/world-readable")
+ 	}
+ 	f, err := os.Open(path)
+ 	if err != nil {
+-		return "", errors.New("redeem: token file unavailable")
++		return empty, errors.New("redeem: token file unavailable")
+ 	}
+ 	defer f.Close()
+ 	opened, err := f.Stat()
+ 	if err != nil || !os.SameFile(initial, opened) {
+-		return "", errors.New("redeem: token file changed")
++		return empty, errors.New("redeem: token file changed")
+ 	}
+ 	b, err := io.ReadAll(io.LimitReader(f, maxInput+1))
+ 	if err != nil || len(b) > maxInput {
+-		return "", errors.New("redeem: token file unreadable")
++		return empty, errors.New("redeem: token file unreadable")
+ 	}
+ 	var doc tokenDocument
+ 	if err := json.Unmarshal(b, &doc); err != nil || strings.TrimSpace(doc.AccessToken) == "" {
+-		return "", errors.New("redeem: token file has no access_token")
++		return empty, errors.New("redeem: token file has no access_token")
+ 	}
+ 	if !strings.EqualFold(strings.TrimSpace(doc.TokenType), "bearer") || doc.ExpiresIn <= 0 || doc.ExpiresIn > math.MaxInt64/int64(time.Second) {
+-		return "", errors.New("redeem: token metadata is invalid")
++		return empty, errors.New("redeem: token metadata is invalid")
+ 	}
+ 	now := time.Now()
+ 	if doc.ObtainedAt.IsZero() || doc.ObtainedAt.After(now) || now.After(doc.ObtainedAt.Add(time.Duration(doc.ExpiresIn)*time.Second)) {
+-		return "", errors.New("redeem: token is expired or obtained_at is invalid")
++		return empty, errors.New("redeem: token is expired or obtained_at is invalid")
+ 	}
+ 	if !hasScope(doc.Scope, "user.credit.exchange") {
+-		return "", errors.New("redeem: token scope is insufficient")
++		return empty, errors.New("redeem: token scope is insufficient")
+ 	}
+-	return doc.AccessToken, nil
++	return doc, nil
+ }
+ 
+ func hasScope(scope, required string) bool {
+diff --git a/examples/clients/codebuddy.models.json b/examples/clients/codebuddy.models.json
+new file mode 100644
+index 0000000..83ead9c
+--- /dev/null
++++ b/examples/clients/codebuddy.models.json
+@@ -0,0 +1,10 @@
++{
++  "models": [{
++    "id": "cn:deepseek-v4-flash",
++    "name": "Local maintained gateway (choose an available model)",
++    "vendor": "OpenAI Compatible",
++    "apiKey": "${WB2A_API_KEY}",
++    "url": "http://127.0.0.1:7863/v1/chat/completions"
++  }],
++  "availableModels": ["cn:deepseek-v4-flash"]
++}
+diff --git a/internal/activities/activities.go b/internal/activities/activities.go
+index 535a76d..019444a 100644
+--- a/internal/activities/activities.go
++++ b/internal/activities/activities.go
+@@ -9,6 +9,7 @@ import (
+ )
+ 
+ const DocsURL = "https://open.workbuddy.cn/docs/openapi"
++const SourceVerifiedAt = "2026-11-03"
+ 
+ type SupportStatus string
+ 
+@@ -45,16 +46,18 @@ func EligibilityFailure(err error) Eligibility {
+ }
+ 
+ type Activity struct {
+-	ID              string        `json:"id"`
+-	Name            string        `json:"name"`
+-	Enabled         bool          `json:"enabled"`
+-	Support         SupportStatus `json:"support"`
+-	DocsURL         string        `json:"docs_url"`
+-	SupportReason   string        `json:"support_reason"`
+-	Mode            string        `json:"mode"`
+-	RewardAvailable bool          `json:"reward_available"`
+-	StartsAt        *time.Time    `json:"starts_at,omitempty"`
+-	ExpiresAt       *time.Time    `json:"expires_at,omitempty"`
++	ID               string        `json:"id"`
++	Name             string        `json:"name"`
++	Enabled          bool          `json:"enabled"`
++	Support          SupportStatus `json:"support"`
++	DocsURL          string        `json:"docs_url"`
++	SupportReason    string        `json:"support_reason"`
++	Mode             string        `json:"mode"`
++	RewardAvailable  bool          `json:"reward_available"`
++	PublicClaimAPI   bool          `json:"public_claim_api"`
++	SourceVerifiedAt string        `json:"source_verified_at"`
++	StartsAt         *time.Time    `json:"starts_at,omitempty"`
++	ExpiresAt        *time.Time    `json:"expires_at,omitempty"`
+ }
+ 
+ // Registry returns the small, source-backed set currently exposed to callers.
+@@ -62,10 +65,10 @@ type Activity struct {
+ // private endpoints or to claim anything.
+ func Registry() []Activity {
+ 	sep30 := time.Date(2026, 10, 1, 0, 0, 0, 0, time.FixedZone("UTC+8", 8*3600)) // exclusive end
+-	return []Activity{
++	entries := []Activity{
+ 		{
+ 			ID: "credit_redemption", Name: "Credit redemption", Enabled: true,
+-			Support: SupportOfficial, DocsURL: DocsURL,
++			Support: SupportOfficial, DocsURL: DocsURL, Mode: "opt_in_api", PublicClaimAPI: true,
+ 			SupportReason:   "official contract; requires approved app, user OAuth, and a valid code; eligibility is unknown until verified",
+ 			RewardAvailable: false,
+ 		},
+@@ -93,7 +96,60 @@ func Registry() []Activity {
+ 			SupportReason:   "historical record; expired 2026-09-30 and not an active entitlement",
+ 			RewardAvailable: false, ExpiresAt: &sep30,
+ 		},
++		{
++			ID: "referral_invite_2026", Name: "2026 referral invitation (historical)", Enabled: false,
++			Support: SupportOfficial, DocsURL: "https://www.codebuddy.cn/events/invite/", Mode: "rules_only",
++			SupportReason: "published invitation campaign ended 2026-09-30; no public claim API established", ExpiresAt: &sep30,
++		},
++		{
++			ID: "campus_freshman_2026", Name: "Campus freshman campaign (historical)", Enabled: false,
++			Support: SupportOfficial, DocsURL: "https://www.workbuddy.cn/events/campus-freshman/", Mode: "rules_only",
++			SupportReason: "published campaign ended 2026-10-31; student verification was required; no public claim API established",
++			StartsAt:      datePointer(2026, time.August, 24), ExpiresAt: datePointer(2026, time.November, 1),
++		},
++		{
++			ID: "buddy_one_reward_rules", Name: "Buddy One platform reward credit rules", Enabled: true,
++			Support: SupportOfficial, DocsURL: "https://www.codebuddy.cn/docs/workbuddy/Buddy-One/Credits", Mode: "rules_only",
++			SupportReason: "credit sharing and validity rules only; rewards depend on individual invitation/compensation campaigns, no general free-credit claim API established",
++		},
++	}
++	for i := range entries {
++		entries[i].SourceVerifiedAt = SourceVerifiedAt
++	}
++	return entries
++}
++
++func datePointer(year int, month time.Month, day int) *time.Time {
++	value := time.Date(year, month, day, 0, 0, 0, 0, time.FixedZone("UTC+8", 8*3600))
++	return &value
++}
++
++type ActivityStatus struct {
++	Activity
++	Availability string `json:"availability"`
++	Eligibility  string `json:"eligibility"`
++}
++
++// Catalog reports dated public-source facts, never an account claim entitlement.
++func Catalog(now time.Time) []ActivityStatus {
++	result := make([]ActivityStatus, 0)
++	for _, activity := range Registry() {
++		phase := "requires_authorization"
++		switch {
++		case activity.ExpiresAt != nil && !now.Before(*activity.ExpiresAt):
++			phase = "expired"
++		case activity.StartsAt != nil && now.Before(*activity.StartsAt):
++			phase = "not_started"
++		case !activity.Enabled:
++			phase = "disabled"
++		case activity.Support != SupportOfficial:
++			phase = "legacy_unverified"
++		case activity.Mode == "rules_only":
++			phase = "rules_only"
++		}
++		result = append(result, ActivityStatus{Activity: activity, Availability: phase, Eligibility: "unknown"})
+ 	}
++	return result
+ }
+ 
+ type DecisionReason string
+diff --git a/internal/activities/activities_test.go b/internal/activities/activities_test.go
+index 8ec6b7b..53a6619 100644
+--- a/internal/activities/activities_test.go
++++ b/internal/activities/activities_test.go
+@@ -12,7 +12,7 @@ func officialActivity() Activity {
+ 
+ func TestRegistryIsSourceBackedAndStable(t *testing.T) {
+ 	got := Registry()
+-	if len(got) != 5 || got[0].ID != "credit_redemption" || got[1].ID != "checkin_status" || got[2].ID != "compensation_status" || got[3].ID != "referral_fission_rules" || got[4].ID != "enterprise_doublecredits_2026" {
++	if len(got) != 8 || got[0].ID != "credit_redemption" || got[1].ID != "checkin_status" || got[2].ID != "compensation_status" || got[3].ID != "referral_fission_rules" || got[4].ID != "enterprise_doublecredits_2026" {
+ 		t.Fatalf("registry IDs = %#v", got)
+ 	}
+ 	if got[0].DocsURL != DocsURL || got[0].Support != SupportOfficial {
+@@ -84,3 +84,31 @@ func TestDecideDisabledAndUnsupported(t *testing.T) {
+ 		t.Fatalf("unsupported = %#v", got)
+ 	}
+ }
++
++func TestCatalogExpiryAndNoInventedEntitlements(t *testing.T) {
++	now := time.Date(2026, time.November, 3, 12, 0, 0, 0, time.FixedZone("UTC+8", 8*3600))
++	for _, item := range Catalog(now) {
++		if item.RewardAvailable || item.Eligibility != "unknown" || item.SourceVerifiedAt != SourceVerifiedAt {
++			t.Fatalf("invented entitlement: %+v", item)
++		}
++		if item.ID == "credit_redemption" {
++			if !item.PublicClaimAPI || item.Availability != "requires_authorization" {
++				t.Fatalf("bad redemption metadata: %+v", item)
++			}
++		} else if item.PublicClaimAPI {
++			t.Fatalf("undocumented claimAPI: %+v", item)
++		}
++		switch item.ID {
++		case "referral_invite_2026", "campus_freshman_2026", "enterprise_doublecredits_2026":
++			if item.Availability != "expired" || item.Enabled {
++				t.Fatalf("expired channel appears active: %+v", item)
++			}
++		}
++	}
++	campusEnd := datePointer(2026, time.November, 1)
++	for _, item := range Catalog(*campusEnd) {
++		if item.ID == "campus_freshman_2026" && item.Availability != "expired" {
++			t.Fatal("exclusive campus expiry boundary wrong")
++		}
++	}
++}
+diff --git a/internal/panel/activities.go b/internal/panel/activities.go
+index f772294..61447cd 100644
+--- a/internal/panel/activities.go
++++ b/internal/panel/activities.go
+@@ -2,6 +2,7 @@ package panel
+ 
+ import (
+ 	"net/http"
++	"time"
+ 
+ 	"github.com/linguo2625469/workbuddy2api-panel/internal/activities"
+ )
+@@ -10,7 +11,8 @@ import (
+ // accounts, call upstream services, or claim rewards.
+ func (p *Panel) activities(w http.ResponseWriter, _ *http.Request) {
+ 	writeJSON(w, http.StatusOK, map[string]any{
+-		"verified_at": "2026-11-02",
+-		"activities":  activities.Registry(),
++		"verified_at":       activities.SourceVerifiedAt,
++		"verification_type": "public_document_review",
++		"activities":        activities.Catalog(time.Now()),
+ 	})
+ }
+diff --git a/internal/panel/activities_test.go b/internal/panel/activities_test.go
+index d90088f..8f7ced9 100644
+--- a/internal/panel/activities_test.go
++++ b/internal/panel/activities_test.go
+@@ -31,7 +31,7 @@ func TestActivitiesEndpointIsReadOnlyCatalog(t *testing.T) {
+ 	if err := json.Unmarshal(r.Body.Bytes(), &body); err != nil {
+ 		t.Fatal(err)
+ 	}
+-	if body.VerifiedAt != "2026-11-02" || len(body.Activities) != 5 {
++	if body.VerifiedAt != "2026-11-03" || len(body.Activities) != 8 {
+ 		t.Fatalf("body=%s", r.Body.String())
+ 	}
+ 	for _, activity := range body.Activities {
+diff --git a/internal/panel/checkin_concurrency_test.go b/internal/panel/checkin_concurrency_test.go
+new file mode 100644
+index 0000000..73c661d
+--- /dev/null
++++ b/internal/panel/checkin_concurrency_test.go
+@@ -0,0 +1,57 @@
++package panel
++
++import (
++	"github.com/linguo2625469/workbuddy2api-panel/internal/auth"
++	"github.com/linguo2625469/workbuddy2api-panel/internal/pool"
++	"github.com/linguo2625469/workbuddy2api-panel/internal/upstream"
++	"io"
++	"net/http"
++	"net/http/httptest"
++	"strings"
++	"sync/atomic"
++	"testing"
++	"time"
++)
++
++func TestManualCheckinConcurrentCallsMakeOneClaim(t *testing.T) {
++	accounts := pool.New("")
++	accounts.Add(&auth.Auth{UID: "checkin-fixture", AccessToken: "fixture", ExpiresAt: time.Now().Add(time.Hour).Unix()})
++	entered, release := make(chan struct{}), make(chan struct{})
++	var claims atomic.Int32
++	c := upstream.New()
++	c.HTTP = &http.Client{Transport: loginRoundTripFunc(func(r *http.Request) (*http.Response, error) {
++		if strings.Contains(r.URL.Path, "daily-checkin") {
++			if claims.Add(1) == 1 {
++				close(entered)
++				<-release
++			}
++			return &http.Response{StatusCode: 200, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(`{"code":0,"data":{}}`))}, nil
++		}
++		return &http.Response{StatusCode: 400, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(`{"code":1,"msg":"fixture balance failure"}`))}, nil
++	})}
++	p := New(Config{Pool: accounts, Upstream: c, APIKey: "fixture-key"})
++	request := func() *http.Request {
++		r := httptest.NewRequest("POST", "/panel/api/accounts/checkin-fixture/checkin", nil)
++		r.Header.Set("Authorization", "Bearer fixture-key")
++		return r
++	}
++	first := httptest.NewRecorder()
++	done := make(chan struct{})
++	go func() { defer close(done); p.ServeHTTP(first, request()) }()
++	<-entered
++	second := httptest.NewRecorder()
++	p.ServeHTTP(second, request())
++	close(release)
++	<-done
++	if second.Code != 409 || first.Code != 200 || claims.Load() != 1 {
++		t.Fatalf("status first=%d second=%d claims=%d", first.Code, second.Code, claims.Load())
++	}
++	st, _ := accounts.Status("checkin-fixture")
++	if !st.CheckinDone {
++		t.Fatal("successful signin was not retained after balance error")
++	}
++	if !p.tryLockAccount("checkin-fixture") {
++		t.Fatal("checkin lock not released")
++	}
++	p.unlockAccount("checkin-fixture")
++}
+diff --git a/internal/panel/panel.go b/internal/panel/panel.go
+index bd9d29d..676e0c6 100644
+--- a/internal/panel/panel.go
++++ b/internal/panel/panel.go
+@@ -633,6 +633,12 @@ func (p *Panel) accountCheckin(w http.ResponseWriter, r *http.Request) {
+ 		writeErr(w, http.StatusNotFound, "account not found")
+ 		return
+ 	}
++	if !p.tryLockAccount(uid) {
++		writeErr(w, http.StatusConflict, "该账号有签到或其他操作正在执行，请等待本次操作完成")
++		return
++	}
++	defer p.unlockAccount(uid)
++
+ 	checkinMsg := ""
+ 	checkinDone := false
+ 	// 企业版无签到体系（上游 400 code 10001「企业账号不支持该操作」）：不发起该调用，
+diff --git a/internal/server/handler.go b/internal/server/handler.go
+index 28f444b..2ea0706 100644
+--- a/internal/server/handler.go
++++ b/internal/server/handler.go
+@@ -1052,6 +1052,7 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
+ 				if strings.TrimSpace(msg) == "" {
+ 					msg = "upstream capacity is full (queue.full); retry after a short wait"
+ 				}
++				setRetryAfter(w, uerr.RetryAfter)
+ 				writeOpenAIErrorHint(w, http.StatusServiceUnavailable, "upstream_busy", msg,
+ 					h.hintOf(upstream.ErrUpstreamBusy, string(respBody), bareModel, reqHasImage, uerr))
+ 				st.status = http.StatusServiceUnavailable
+@@ -1119,6 +1120,16 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
+ 				st.outcome = reqlog.OutcomeStreamError
+ 				log.Printf("WARN: [server] stream acct=%s model=%s: upstream error frame kind=%s payload=%s",
+ 					logfmt.Label(acct.UID, acct.Nickname), bareModel, kind, logfmt.Truncate(errFrame, 200))
++			case upstream.IsTruncatedStreamError(sErr) && r.Context().Err() == nil:
++				// Upstream EOF is not a client disconnect and must not bind sticky state.
++				st.status = http.StatusBadGateway
++				st.outcome = reqlog.OutcomeStreamError
++				_, _ = io.WriteString(w, "data: {\"error\":{\"message\":\"upstream stream ended before completion\",\"type\":\"upstream_error\",\"code\":\"upstream_parse\"}}\n\n")
++				if fl, ok := w.(http.Flusher); ok {
++					fl.Flush()
++				}
++				log.Printf("WARN: [server] upstream stream truncated before terminal marker")
++
+ 			case sErr != nil:
+ 				// 客户端写失败（断连）：上游帧无恙，账号健康——账号侧照常记成功
+ 				// （与 default 同语义），请求日志归为 Interrupted（人已走，未完成）。
+@@ -1310,11 +1321,37 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
+ 		}
+ 		status = http.StatusBadRequest
+ 	}
++	if status == http.StatusTooManyRequests || status == http.StatusServiceUnavailable {
++		wait := time.Duration(0)
++		if ue != nil && ue.RetryAfter > 0 {
++			wait = ue.RetryAfter
++		} else if !modelBlock.Until.IsZero() {
++			wait = time.Until(modelBlock.Until)
++		}
++		setRetryAfter(w, wait)
++	}
+ 	writeOpenAIErrorHint(w, status, code, msg, hint)
+ 	st.status = status
+ 	st.outcome = reqlog.OutcomeHTTPError
+ }
+ 
++func setRetryAfter(w http.ResponseWriter, wait time.Duration) {
++	if wait <= 0 {
++		return
++	}
++	if wait > 24*time.Hour {
++		wait = 24 * time.Hour
++	}
++	secs := int64(wait / time.Second)
++	if wait%time.Second != 0 {
++		secs++
++	}
++	if secs < 1 {
++		secs = 1
++	}
++	w.Header().Set("Retry-After", fmt.Sprintf("%d", secs))
++}
++
+ // tokensPerSecond 计算吐字速率（token/s），返回 (速率, 是否有意义)。
+ //
+ // 分母用「生成耗时」= 端到端耗时 - 首 token 等待（TTFB），不是端到端耗时。
+diff --git a/internal/server/request_validation.go b/internal/server/request_validation.go
+index c414742..8f2e86b 100644
+--- a/internal/server/request_validation.go
++++ b/internal/server/request_validation.go
+@@ -37,6 +37,13 @@ func validateChatRequest(body []byte) error {
+ 		return fmt.Errorf("model must be a non-empty string")
+ 	}
+ 
++	if raw, exists := request["stream"]; exists {
++		value := strings.TrimSpace(string(raw))
++		if value != "true" && value != "false" {
++			return fmt.Errorf("stream must be a boolean")
++		}
++	}
++
+ 	messages, ok := request["messages"]
+ 	if !ok {
+ 		return fmt.Errorf("messages is required")
+@@ -45,5 +52,11 @@ func validateChatRequest(body []byte) error {
+ 	if err := json.Unmarshal(messages, &messageItems); err != nil || messageItems == nil {
+ 		return fmt.Errorf("messages must be an array")
+ 	}
++	for _, item := range messageItems {
++		var object map[string]json.RawMessage
++		if len(item) == 0 || string(item) == "null" || json.Unmarshal(item, &object) != nil || object == nil {
++			return fmt.Errorf("messages entries must be objects")
++		}
++	}
+ 	return nil
+ }
+diff --git a/internal/server/request_validation_test.go b/internal/server/request_validation_test.go
+index 4108b5e..3c4f4a9 100644
+--- a/internal/server/request_validation_test.go
++++ b/internal/server/request_validation_test.go
+@@ -28,6 +28,9 @@ func TestChatValidationRejectsInvalidBodiesBeforeUpstream(t *testing.T) {
+ 		`{"messages":[]}`, `{"model":"  ","messages":[]}`,
+ 		`{"model":7,"messages":[]}`, `{"model":"m"}`,
+ 		`{"model":"m","messages":null}`, `{"model":"m","messages":"text"}`,
++		`{"model":"m","messages":[null]}`, `{"model":"m","messages":[7]}`, `{"model":"m","messages":[[]]}`,
++		`{"model":"m","messages":[],"stream":null}`, `{"model":"m","messages":[],"stream":"yes"}`,
++		`{"model":"m","messages":[],"stream":1}`, `{"model":"m","messages":[],"stream":[]}`, `{"model":"m","messages":[],"stream":{}}`,
+ 	} {
+ 		rec := httptest.NewRecorder()
+ 		h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body)))
+diff --git a/internal/server/v2_compat_test.go b/internal/server/v2_compat_test.go
+new file mode 100644
+index 0000000..38fb48a
+--- /dev/null
++++ b/internal/server/v2_compat_test.go
+@@ -0,0 +1,147 @@
++package server
++
++import (
++	"errors"
++	"fmt"
++	"github.com/linguo2625469/workbuddy2api-panel/internal/auth"
++	"github.com/linguo2625469/workbuddy2api-panel/internal/reqlog"
++	"github.com/linguo2625469/workbuddy2api-panel/internal/session"
++	"github.com/linguo2625469/workbuddy2api-panel/internal/upstream"
++	"io"
++	"net/http"
++	"net/http/httptest"
++	"strings"
++	"sync/atomic"
++	"testing"
++	"time"
++)
++
++func TestRetryAfterGatewayErrors(t *testing.T) {
++	for _, tc := range []struct {
++		name, body     string
++		upStatus, want int
++	}{
++		{"rate_limit", `{"code":6004,"msg":"rate limit"}`, 429, 429},
++		{"capacity", `{"code":6021,"msg":"queue.full.title"}`, 429, 503},
++	} {
++		t.Run(tc.name, func(t *testing.T) {
++			var calls atomic.Int32
++			up := &upstream.Client{ChatBaseCN: "https://fixture.invalid", HTTP: &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
++				calls.Add(1)
++				return &http.Response{StatusCode: tc.upStatus, Header: http.Header{"Retry-After": []string{"17"}}, Body: io.NopCloser(strings.NewReader(tc.body))}, nil
++			})}}
++			p := testPoolWith(&auth.Auth{UID: "retry", AccessToken: "fixture-secret", ExpiresAt: 9999999999})
++			h := NewHandler(Config{Pool: p, Upstream: up, MaxRotate: 1})
++			rec := httptest.NewRecorder()
++			h.ServeHTTP(rec, httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"m","messages":[]}`)))
++			if rec.Code != tc.want || rec.Header().Get("Retry-After") != "17" || calls.Load() != 1 {
++				t.Fatalf("status=%d retry=%q calls=%d body=%s", rec.Code, rec.Header().Get("Retry-After"), calls.Load(), rec.Body)
++			}
++			if strings.Contains(rec.Body.String(), "fixture-secret") {
++				t.Fatal("credential leaked")
++			}
++		})
++	}
++}
++func TestRetryAfterBoundsAndCeiling(t *testing.T) {
++	for _, tc := range []struct {
++		wait time.Duration
++		want string
++	}{{0, ""}, {-1, ""}, {time.Nanosecond, "1"}, {time.Second + 1, "2"}, {time.Duration(1<<63 - 1), "86400"}} {
++		rec := httptest.NewRecorder()
++		setRetryAfter(rec, tc.wait)
++		if rec.Header().Get("Retry-After") != tc.want {
++			t.Fatalf("wait=%v got=%s", tc.wait, rec.Header().Get("Retry-After"))
++		}
++	}
++}
++func TestTruncatedStreamIsNotSuccessOrRetried(t *testing.T) {
++	for _, stream := range []bool{false, true} {
++		t.Run(fmt.Sprint(stream), func(t *testing.T) {
++			var calls atomic.Int32
++			up := newFakeUpstream(t, func(string) (int, string, bool) {
++				calls.Add(1)
++				return 200, "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"partial\"}}]}\n\n", true
++			})
++			p := testPoolWith(&auth.Auth{UID: "truncated", AccessToken: "fixture", ExpiresAt: 9999999999})
++			metrics := reqlog.New(reqlog.Config{})
++			sess := session.New(session.Config{TTL: time.Hour})
++			h := NewHandler(Config{Pool: p, Upstream: up, RequestLog: metrics, Session: sess, MaxRotate: 3})
++			rec := httptest.NewRecorder()
++			h.ServeHTTP(rec, httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(fmt.Sprintf(`{"model":"m","stream":%t,"metadata":{"conversation_id":"truncated-fixture"},"messages":[{"role":"user","content":"fixture"}]}`, stream))))
++			st, _ := p.Status("truncated")
++			if st.SuccessCount != 0 || !st.LastSuccessTime.IsZero() || calls.Load() != 1 || sess.Count() != 0 {
++				t.Fatalf("partial stream recorded success/retried: success=%d calls=%d", st.SuccessCount, calls.Load())
++			}
++			if strings.Contains(rec.Body.String(), "data: [DONE]") {
++				t.Fatal("truncation falsely completed")
++			}
++			if !strings.Contains(rec.Body.String(), "upstream_parse") {
++				t.Fatalf("missing parse error: %s", rec.Body)
++			}
++			entries := metrics.Snapshot().Recent
++			if len(entries) != 1 || entries[0].OK {
++				t.Fatalf("false-success metrics: %+v", entries)
++			}
++			if stream && entries[0].Outcome != reqlog.OutcomeStreamError {
++				t.Fatalf("wrong stream outcome: %+v", entries)
++			}
++		})
++	}
++}
++
++type partialReadFailure struct{ data []byte }
++
++func (r *partialReadFailure) Read(p []byte) (int, error) {
++	if len(r.data) == 0 {
++		return 0, errors.New("fixture upstream reset")
++	}
++	n := copy(p, r.data)
++	r.data = r.data[n:]
++	return n, errors.New("fixture upstream reset")
++}
++
++type disconnectedWriter struct{ *httptest.ResponseRecorder }
++
++func (w disconnectedWriter) Write(p []byte) (int, error) {
++	return 0, errors.New("fixture client disconnected")
++}
++func TestStreamReadFailureVsClientDisconnect(t *testing.T) {
++	for _, disconnect := range []bool{false, true} {
++		t.Run(fmt.Sprint(disconnect), func(t *testing.T) {
++			var calls atomic.Int32
++			up := &upstream.Client{ChatBaseCN: "https://fixture.invalid", HTTP: &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
++				calls.Add(1)
++				var reader io.Reader = strings.NewReader(sseOK)
++				if !disconnect {
++					reader = &partialReadFailure{data: []byte("data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"partial\"}}]}\n\n")}
++				}
++				return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(reader)}, nil
++			})}}
++			p := testPoolWith(&auth.Auth{UID: "read-fail", AccessToken: "fixture", ExpiresAt: 9999999999})
++			metrics := reqlog.New(reqlog.Config{})
++			sticky := session.New(session.Config{TTL: time.Hour})
++			h := NewHandler(Config{Pool: p, Upstream: up, RequestLog: metrics, Session: sticky, MaxRotate: 3})
++			rec := httptest.NewRecorder()
++			var writer http.ResponseWriter = rec
++			if disconnect {
++				writer = disconnectedWriter{rec}
++			}
++			h.ServeHTTP(writer, httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"m","stream":true,"metadata":{"conversation_id":"read-fixture"},"messages":[]}`)))
++			entries := metrics.Snapshot().Recent
++			if len(entries) != 1 || calls.Load() != 1 {
++				t.Fatal("missingmetrics or implicitretry")
++			}
++			if disconnect {
++				if entries[0].Outcome != reqlog.OutcomeInterrupted {
++					t.Fatalf("clientdisconnect misclassified: %+v", entries)
++				}
++			} else {
++				st, _ := p.Status("read-fail")
++				if st.SuccessCount != 0 || sticky.Count() != 0 || entries[0].Outcome != reqlog.OutcomeStreamError || !strings.Contains(rec.Body.String(), "upstream_parse") {
++					t.Fatalf("upstreamreadfailure misclassified: %+v", entries)
++				}
++			}
++		})
++	}
++}
+diff --git a/internal/upstream/sse.go b/internal/upstream/sse.go
+index d4688e3..00163d5 100644
+--- a/internal/upstream/sse.go
++++ b/internal/upstream/sse.go
+@@ -18,11 +18,48 @@ import (
+ // 「上游空流」与「客户端断连写失败」——空流是上游缺陷，应记 502 观测；写失败是
+ // 客户端已走，日志口径不同。Aggregate 与 StreamHint 共用同一哨兵（errors.Is 判定）。
+ var errEmptyStream = errors.New("upstream stream contained no valid data events")
++var errTruncatedStream = errors.New("upstream stream ended before terminal marker")
+ 
+ // IsEmptyStreamError 报告错误是否为「上游空流」（无有效 SSE 帧）——供 handler
+ // 在流式路径把空流记为失败观测（HTTP 头已发出只能 200，但日志/状态应收敛到
+ // upstream_parse 同语义），与客户端断连类错误区分。
+-func IsEmptyStreamError(err error) bool { return errors.Is(err, errEmptyStream) }
++func IsEmptyStreamError(err error) bool     { return errors.Is(err, errEmptyStream) }
++func IsTruncatedStreamError(err error) bool { return errors.Is(err, errTruncatedStream) }
++
++// choiceCompletion requires every observed choice to finish before accepting
++// EOF without [DONE]. It observes only upstream frames, never repaired output.
++type choiceCompletion map[float64]bool
++
++func (c choiceCompletion) observe(frame map[string]any) {
++	choices, _ := frame["choices"].([]any)
++	for ordinal, raw := range choices {
++		choice, ok := raw.(map[string]any)
++		if !ok {
++			continue
++		}
++		index, ok := choice["index"].(float64)
++		if !ok {
++			index = float64(ordinal)
++		}
++		if _, exists := c[index]; !exists {
++			c[index] = false
++		}
++		if reason, _ := choice["finish_reason"].(string); reason != "" {
++			c[index] = true
++		}
++	}
++}
++func (c choiceCompletion) complete() bool {
++	if len(c) == 0 {
++		return false
++	}
++	for _, done := range c {
++		if !done {
++			return false
++		}
++	}
++	return true
++}
+ 
+ // Aggregate 读取完整 SSE 流，聚合 delta.content 为单个 OpenAI chat.completion 响应。
+ // 分片/半行由 bufio.Reader.ReadString 处理；遇到 "data: [DONE]" 结束。
+@@ -30,18 +67,19 @@ func IsEmptyStreamError(err error) bool { return errors.Is(err, errEmptyStream)
+ func Aggregate(r io.Reader) (map[string]any, error) {
+ 	br := bufio.NewReaderSize(r, 64*1024)
+ 	var (
+-		id, model     string
+-		created       float64
+-		content       strings.Builder
+-		reasoning     strings.Builder
+-		role          = "assistant"
+-		finishReason  = "stop"
+-		usage         map[string]any
+-		gotAnyContent bool
+-		validEvents   int
+-		sawDone       bool // 上游显式发过 data: [DONE]（正常收尾）
+-		toolCalls     = map[int]map[string]any{}
+-		toolOrder     []int
++		id, model      string
++		created        float64
++		content        strings.Builder
++		reasoning      strings.Builder
++		role           = "assistant"
++		finishReason   = "stop"
++		usage          map[string]any
++		gotAnyContent  bool
++		validEvents    int
++		sawDone        bool // 上游显式发过 data: [DONE]（正常收尾）
++		terminalFrames = choiceCompletion{}
++		toolCalls      = map[int]map[string]any{}
++		toolOrder      []int
+ 		// toolSeq 缺 index 的 tool_call 的分配序号源：跨帧延续「最近分配」槽位，
+ 		// 同帧内递增（见 mergeToolCallsChunk 注释）。
+ 		toolSeq int
+@@ -155,7 +193,11 @@ func Aggregate(r io.Reader) (map[string]any, error) {
+ 				var chunk map[string]any
+ 				if json.Unmarshal([]byte(payload), &chunk) == nil {
+ 					// 有效事件计数：仅 JSON 解析成功的数据帧计入（解析失败沿用静默 continue）。
++					if _, failed := chunk["error"]; failed {
++						return nil, errors.New("upstream stream returned an error event")
++					}
+ 					validEvents++
++					terminalFrames.observe(chunk)
+ 					if v, ok := chunk["id"].(string); ok && id == "" {
+ 						id = v
+ 					}
+@@ -212,6 +254,9 @@ func Aggregate(r io.Reader) (map[string]any, error) {
+ 		// 不再合成空 content 的假成功响应，直接报错，由 handler 映射为 502 upstream_parse。
+ 		return nil, errEmptyStream
+ 	}
++	if !sawDone && !terminalFrames.complete() {
++		return nil, errTruncatedStream
++	}
+ 	if id == "" {
+ 		id = fmt.Sprintf("chatcmpl-%d", time.Now().UnixNano())
+ 	}
+@@ -674,6 +719,7 @@ func StreamHint(w http.ResponseWriter, r io.Reader, hintFn func(string) string,
+ 		return out
+ 	}
+ 
++	terminalFrames := choiceCompletion{}
+ 	// writeFrame 把 payload 按规范白名单重建后以 data: 帧写出并 flush。
+ 	// 仅 JSON 解析成功时计数记为一次有效转发（JSON 解析失败照常降级原样写出，但不计数）。
+ 	writeFrame := func(payload string) (int, error) {
+@@ -685,6 +731,7 @@ func StreamHint(w http.ResponseWriter, r io.Reader, hintFn func(string) string,
+ 			}
+ 			return 0, nil
+ 		}
++		terminalFrames.observe(obj)
+ 		// 上游错误帧透传（error-passthrough）：带 error 键的帧**原样写出**，不走
+ 		// normalizeFrame 白名单——白名单会剥掉 error 字段，客户端就看不到上游
+ 		// code/msg/requestId。error.message 即上游原文（如 6004 限流、审核拦截），
+@@ -709,14 +756,16 @@ func StreamHint(w http.ResponseWriter, r io.Reader, hintFn func(string) string,
+ 
+ 	br := bufio.NewReaderSize(r, 64*1024)
+ 	validFrames := 0
++	sawDone := false
+ readLoop:
+ 	for {
+ 		line, err := br.ReadString('\n')
+ 		trimmed := strings.TrimRight(line, "\r\n")
+ 		switch {
+-		case strings.HasPrefix(trimmed, "data: [DONE]"):
++		case strings.TrimSpace(trimmed) == "data: [DONE]":
+ 			// 上游显式结束：停止读取，DONE 之后的任何数据（含垃圾帧）一律不再透传。
+ 			// [DONE] 统一在循环结束后写出，保证恰好一个。
++			sawDone = true
+ 			break readLoop
+ 		case strings.HasPrefix(trimmed, "data: "):
+ 			n, werr := writeFrame(strings.TrimPrefix(trimmed, "data: "))
+@@ -738,9 +787,12 @@ readLoop:
+ 			if err == io.EOF {
+ 				break
+ 			}
+-			return err
++			return fmt.Errorf("%w: upstream read failed", errTruncatedStream)
+ 		}
+ 	}
++	if !sawDone && validFrames > 0 && !terminalFrames.complete() {
++		return errTruncatedStream
++	}
+ 	// 标记修复的尾部收尾：流结束时仍未判定的字节一律原文回吐（绝不吞字节，未闭合
+ 	// 的块连起始标记一起交还）；若本流还原过调用、但上游从未给出收尾帧，补一帧
+ 	// finish_reason: tool_calls，保证客户端不会把「工具调用回合」读成「模型只说了话」。
+@@ -771,7 +823,7 @@ readLoop:
+ 	if validFrames == 0 {
+ 		_ = writeRaw(`{"error":{"message":"empty upstream stream","type":"upstream_error","code":"upstream_parse"}}`)
+ 	}
+-	// 保证恰好写一个 [DONE]（上游漏发时兜底补上）。
++	// 仅在显式完成或所有观测 choice 已结束后补全 [DONE]；不掩盖中途 EOF。
+ 	if _, err := io.WriteString(w, "data: [DONE]\n\n"); err != nil {
+ 		return err
+ 	}
+diff --git a/internal/upstream/sse_test.go b/internal/upstream/sse_test.go
+index 8700d4d..177eb95 100644
+--- a/internal/upstream/sse_test.go
++++ b/internal/upstream/sse_test.go
+@@ -561,9 +561,9 @@ func TestStreamNoIdFallsBackToSentinel(t *testing.T) {
+ }
+ 
+ func TestStreamDoneFallback(t *testing.T) {
+-	// 上游流在无 [DONE] 时 EOF，Stream 必须兜底写一个 [DONE]
++	// 明确 finish_reason 收尾但漏发 [DONE] 的历史 provider 保持兼容。
+ 	rec := httptest.NewRecorder()
+-	err := Stream(rec, strings.NewReader("data: {\"id\":\"x1\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hi\"}}]}\n\n"))
++	err := Stream(rec, strings.NewReader("data: {\"id\":\"x1\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hi\"},\"finish_reason\":\"stop\"}]}\n\n"))
+ 	if err != nil {
+ 		t.Fatal(err)
+ 	}
+@@ -757,7 +757,7 @@ func TestStreamNormalPassthroughRegression(t *testing.T) {
+ 		raw  string
+ 	}{
+ 		{"带 DONE 的正常流", sseFixture},
+-		{"漏发 DONE 自动补", "data: {\"id\":\"x1\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hi\"}}]}\n\n"},
++		{"明确结束但漏发 DONE 自动补", "data: {\"id\":\"x1\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hi\"},\"finish_reason\":\"stop\"}]}\n\n"},
+ 	}
+ 	for _, c := range cases {
+ 		t.Run(c.name, func(t *testing.T) {
+diff --git a/internal/upstream/sse_truncation_test.go b/internal/upstream/sse_truncation_test.go
+new file mode 100644
+index 0000000..5ccd3e9
+--- /dev/null
++++ b/internal/upstream/sse_truncation_test.go
+@@ -0,0 +1,46 @@
++package upstream
++
++import (
++	"net/http/httptest"
++	"strings"
++	"testing"
++)
++
++func TestSSETerminalConditions(t *testing.T) {
++	for _, tc := range []struct {
++		name, raw string
++		truncated bool
++	}{
++		{"content_eof", "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"partial\"}}]}\n\n", true},
++		{"one_choice_unfinished", "data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"},{\"index\":1,\"delta\":{\"content\":\"partial\"}}]}\n\n", true},
++		{"all_choices_finished", "data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"},{\"index\":1,\"delta\":{},\"finish_reason\":\"length\"}]}\n\n", false},
++		{"explicit_done", "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ok\"}}]}\n\ndata: [DONE]\n\n", false},
++	} {
++		t.Run(tc.name, func(t *testing.T) {
++			_, err := Aggregate(strings.NewReader(tc.raw))
++			if IsTruncatedStreamError(err) != tc.truncated {
++				t.Fatalf("aggregate truncated=%v err=%v", tc.truncated, err)
++			}
++			rec := httptest.NewRecorder()
++			err = Stream(rec, strings.NewReader(tc.raw))
++			if IsTruncatedStreamError(err) != tc.truncated {
++				t.Fatalf("stream truncated=%v err=%v", tc.truncated, err)
++			}
++			if tc.truncated && strings.Contains(rec.Body.String(), "data: [DONE]") {
++				t.Fatal("truncated stream synthesized DONE")
++			}
++			if !tc.truncated && strings.Count(rec.Body.String(), "data: [DONE]") != 1 {
++				t.Fatal("completed stream missing uniqueDONE")
++			}
++		})
++	}
++}
++
++func TestAggregateRejectsErrorEventInsteadOfEmptySuccess(t *testing.T) {
++	for _, prefix := range []string{"", "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"partial\"}}]}\n\n"} {
++		got, err := Aggregate(strings.NewReader(prefix + "data: {\"error\":{\"message\":\"fixture upstream failure\"}}\n\ndata: [DONE]\n\n"))
++		if err == nil || got != nil {
++			t.Fatalf("error event became a successful response: got=%v err=%v", got, err)
++		}
++	}
++}

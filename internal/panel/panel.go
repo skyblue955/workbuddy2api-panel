@@ -127,8 +127,10 @@ const loginTTL = 15 * time.Minute
 
 // loginSession 进行中的 OAuth 会话：创建时刻 + realm（cn/global，用于落盘与端点切换）。
 type loginSession struct {
-	created time.Time
-	realm   string // "cn" / "global"，缺省 cn
+	created        time.Time
+	realm          string // "cn" / "global"，缺省 cn
+	reauthorizeUID string
+	processing     bool
 }
 
 // New 构建面板。
@@ -177,6 +179,8 @@ func (p *Panel) routes() {
 	p.mux.HandleFunc("POST /panel/api/accounts/{uid}/tasks/accept", p.withAuth(p.accountTaskAccept))
 	p.mux.HandleFunc("POST /panel/api/accounts/{uid}/tasks/accept_all", p.withAuth(p.taskAcceptAll))
 	p.mux.HandleFunc("POST /panel/api/accounts/{uid}/tasks/claim", p.withAuth(p.accountTaskClaim))
+	p.mux.HandleFunc("POST /panel/api/accounts/{uid}/tasks/claim_ready", p.withAuth(p.accountTasksClaimReady))
+	p.mux.HandleFunc("POST /panel/api/accounts/{uid}/tasks/workflow", p.withAuth(p.accountTaskWorkflow))
 	p.mux.HandleFunc("POST /panel/api/accounts/{uid}/tasks/auto", p.withAuth(p.accountTaskAuto))
 	p.mux.HandleFunc("POST /panel/api/accounts/{uid}/tasks/auto_all", p.withAuth(p.accountTaskAutoAll))
 	p.mux.HandleFunc("POST /panel/api/tasks/scan_all", p.withAuth(p.tasksScanAll))
@@ -261,6 +265,17 @@ func (p *Panel) overview(w http.ResponseWriter, r *http.Request) {
 	if p.cfg.StickyCount != nil {
 		sticky = p.cfg.StickyCount()
 	}
+	type accountView struct {
+		pool.Status
+		EnterpriseSession      bool                  `json:"enterprise_session"`
+		EnterpriseSwitchSource bool                  `json:"enterprise_switch_source"`
+		Authorization          auth.CredentialStatus `json:"authorization"`
+	}
+	accountViews := make([]accountView, 0)
+	for _, account := range p.cfg.Pool.List() {
+		a := p.cfg.Pool.AuthByUID(account.UID)
+		accountViews = append(accountViews, accountView{Status: account, EnterpriseSession: a != nil && a.IsEnterpriseSession(), EnterpriseSwitchSource: a != nil && a.HasEnterpriseSwitchSource(), Authorization: a.CredentialStatus(time.Now())})
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"version":         p.cfg.Version,
 		"uptime_sec":      int(time.Since(p.started).Seconds()),
@@ -273,14 +288,14 @@ func (p *Panel) overview(w http.ResponseWriter, r *http.Request) {
 		"disabled":        disabled,
 		"paused":          paused,
 		"in_flight_full":  inFlightFull,
-		"accounts":        p.cfg.Pool.List(),
+		"accounts":        accountViews,
 		// model_locks 模型级限流全清单（哪些模型不能用、锁了几个号、还要锁多久）：
 		// 与 accounts 的账号池视图互补，前端「模型锁池」表直接渲染。无锁时为 null。
 		"model_locks": p.cfg.Pool.ModelLockView(),
 		// 到期提醒快照的节奏与年龄：界面轮询是 5 秒级，但卡片数据只随余额后台刷新
 		// 更新（默认每 5 分钟）——把这两个数透出，前端才能如实标注「x 分钟前更新」。
-		"balance_refresh_sec":    p.balanceRefreshSec(),
-		"balance_refreshed_at":   p.balanceRefreshedAt(),
+		"balance_refresh_sec":  p.balanceRefreshSec(),
+		"balance_refreshed_at": p.balanceRefreshedAt(),
 	})
 }
 
@@ -620,6 +635,12 @@ func (p *Panel) accountCheckin(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "account not found")
 		return
 	}
+	if !p.tryLockAccount(uid) {
+		writeErr(w, http.StatusConflict, "该账号有签到或其他操作正在执行，请等待本次操作完成")
+		return
+	}
+	defer p.unlockAccount(uid)
+
 	checkinMsg := ""
 	checkinDone := false
 	// 企业版无签到体系（上游 400 code 10001「企业账号不支持该操作」）：不发起该调用，

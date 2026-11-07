@@ -1,0 +1,6 @@
+package upstream
+import("fmt";"strings";"testing")
+func TestV2BehaviorEvidence(t *testing.T) {
+ _,err:=Aggregate(strings.NewReader("data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"partial\"}}]}\n\n"))
+ fmt.Printf("TRUNCATED_EOF_ACCEPTED_AS_SUCCESS=%t\n",err==nil)
+}

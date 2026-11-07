@@ -7,7 +7,7 @@ let remarksCache = null;
 let theme = localStorage.getItem(LS_THEME) || 'auto';   // auto | light | dark
 let view = 'accounts';
 let overviewData = null, cfgLoaded = null;
-let logPin = true, loginState = null, loginTimer = null;
+let logPin = true, loginState = null, loginTimer = null, reauthUID = null;
 let refTimer = null;
 /* 视图级筛选状态（模块级声明放在文件顶部，避免顶层 go() 早于声明执行时踩 TDZ）。 */
 let mdFilter = { q: '', realm: '', cap: '', effort: '', promo: '', sort: 'default' };
@@ -51,7 +51,7 @@ async function api(path, opts = {}) {
   const r = await fetch('/panel/api/' + path, Object.assign({}, opts, { headers: h }));
   if (r.status === 401) { openKey(); throw new Error('密钥无效或未填写'); }
   const d = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(d.error || ('HTTP ' + r.status));
+  if (!r.ok) { const error = new Error(d.error || ('HTTP ' + r.status)); error.httpStatus = r.status; throw error; }
   return d;
 }
 function toast(msg, cls) {
@@ -379,6 +379,37 @@ setTimeout(() => {
 }, 0);
 
 /* ── 账号池 ───────────────────────────────────────────────────────── */
+/* AUTH_STATUS_START: local credential state is separate from account routing/identity. */
+const authorizationFeedback = new Map();
+let loginEpoch = 0, loginPending = false, loginCompleted = false, loginDeadline = 0, loginPolling = false;
+function authorizationView(account, feedback = authorizationFeedback.get(account.uid)) {
+  if (feedback === 'pending') return { state: 'pending', label: '授权中…', title: '正在等待官方授权，请在已打开的登录窗口完成操作', disabled: true };
+  if (feedback === 'failed') return { state: 'warning', label: '更新失败 · 重试', title: '本次授权更新失败，原凭证未因此删除；实际凭证状态仍以服务端为准' };
+  if (feedback === 'timeout') return { state: 'expired', label: '授权超时 · 重试', title: '本次授权链接已超时，不代表原账号被封禁；点击重新获取链接' };
+  const credential = account.authorization || {};
+  if (credential.state === 'expired' || (credential.expires_at > 0 && credential.expires_at * 1000 <= Date.now()))
+    return { state: 'expired', label: '凭证已过期 · 重登', title: '本地访问凭证已过期，可重新授权；不等于账号被封禁，刷新凭证后状态会自动更新' };
+  if (credential.state === 'missing') return { state: 'idle', label: '登录授权', title: '尚未保存访问凭证，点击进行官方登录授权' };
+  if (credential.state === 'valid') return { state: 'valid', label: '已授权 · 更新', title: '已保存未到期的本地凭证；这不是实时上游验证。点击可更新登录授权；限流、暂停和账号身份另行展示' };
+  return { state: 'warning', label: '有效期未知 · 核查', title: '现有凭证有效期未知，请核查或更新授权；不根据登录来源或最近 API 成功时间猜测登录状态' };
+}
+function authorizationButton(account) {
+  const status = authorizationView(account);
+  return '<button class="xs auth-action auth-' + status.state + '" data-auth-state="' + status.state + '" data-a="reauthorize" data-u="' + esc(account.uid) + '" data-r="' + esc(account.realm || 'cn') + '" title="' + esc(status.title) + '"' + (status.disabled ? ' disabled aria-busy="true"' : '') + '>' + esc(status.label) + '</button>';
+}
+function repaintAuthorization() {
+  if (overviewData && Array.isArray(overviewData.accounts)) renderAccounts(overviewData.accounts);
+}
+function setLoginVisual(state) {
+  const labels = { idle: '获取授权链接', pending: '等待授权中…', valid: '授权成功', warning: '授权失败 · 重试', expired: '授权超时 · 重试' };
+  const button = $('btnStartLogin');
+  button.hidden = false;
+  button.className = 'auth-action auth-' + state;
+  button.textContent = labels[state] || labels.idle;
+  button.disabled = state === 'pending' || state === 'valid';
+  button.setAttribute('aria-busy', String(state === 'pending'));
+}
+/* AUTH_STATUS_END */
 function renderAccounts(list) {
   const tb = $('accBody');
   if (!list.length) {
@@ -435,7 +466,7 @@ function renderAccounts(list) {
     const usageTitle = '最近一次：' + req + ' 次 / ' + totalTok + ' / 延迟 ' + latency + ' / ' + rate;
     return '<tr class="' + cls + '" title="uid: ' + esc(s.uid) + '">' +
       '<td class="mark" aria-hidden="true"><i></i></td>' +
-      '<td class="who"><div class="nm">' + remarkName(s.uid, s.nickname ? esc(s.nickname) : '<span style="color:var(--ink-3)">未命名</span>') + (s.realm === 'global' ? ' <span class="realm-tag">国际版</span>' : '') + (s.enterprise ? ' <span class="realm-tag">企业版</span>' : '') + '</div><div class="id">' + esc(short) + '</div></td>' +
+      '<td class="who"><div class="nm">' + remarkName(s.uid, s.nickname ? esc(s.nickname) : '<span style="color:var(--ink-3)">未命名</span>') + (s.realm === 'global' ? ' <span class="realm-tag">国际版</span>' : '') + (s.enterprise ? ' <span class="realm-tag">企业版</span>' : (s.enterprise_switch_source ? ' <span class="realm-tag">登录来源待核实</span>' : '')) + '</div><div class="id">' + esc(short) + '</div></td>' +
       '<td>' + tag + note + rateLimits + '</td>' +
       '<td class="cred" title="' + esc(credTip) + '"><div class="n">' + cred + '</div><div class="bar"><i style="width:' + pct + '%"></i></div></td>' +
       '<td class="num">' + (s.success_count || 0) + ' <span style="color:var(--ink-3)">/</span> <span style="color:var(--bad)">' + (s.err_total || 0) + '</span></td>' +
@@ -448,6 +479,7 @@ function renderAccounts(list) {
       '</span></td>' +
       '<td class="num" style="color:var(--ink-3)">' + ago(s.last_success) + '</td>' +
       '<td class="acts">' +
+        authorizationButton(s) +
         // 企业版无个人成长体系（签到 400「企业账号不支持该操作」/ 成长任务 403）：
         // 不渲染「签到」「任务」按钮，只留「额度」——点它走 /balance，企业额度由
         // upstream 的 get-enterprise-user-usage 口径填充。
@@ -455,7 +487,7 @@ function renderAccounts(list) {
           '<button class="xs ghost" data-a="checkin" data-u="' + esc(s.uid) + '"' + (s.checkin_done ? ' title="今日已签到；点击可重新签到并刷新余额"' : '') + '>' + (s.checkin_done ? '已签' : '签到') + '</button>') +
         '<button class="xs ghost" data-a="balance" data-u="' + esc(s.uid) + '"' + (s.enterprise ? ' title="刷新企业版已分配额度（上游 get-enterprise-user-usage）"' : '') + '>' + (s.enterprise ? '额度' : '余额') + '</button>' +
         (s.enterprise ? '' :
-          '<button class="xs ghost" data-a="tasks" data-u="' + esc(s.uid) + '">任务</button>') +
+          '<button class="xs ghost" data-a="tasks" data-u="' + esc(s.uid) + '">' + (s.enterprise_session ? '任务（只读）' : '任务') + '</button>') +
         (frozen ? '<button class="xs primary" data-a="revive" data-u="' + esc(s.uid) + '">解冻</button>'
                 : (s.paused ? '<button class="xs primary" data-a="resume" data-u="' + esc(s.uid) + '">恢复选号</button>'
                             : '<button class="xs ghost" data-a="pause" data-u="' + esc(s.uid) + '" title="' + (s.enterprise ? '退出选号，但照常保活 / 刷新额度' : '退出选号，但照常签到 / 活跃上报 / 保活 / 刷新余额') + '">暂停选号</button>')) +
@@ -562,6 +594,8 @@ $('accBody').addEventListener('click', async ev => {
       toast('已恢复选号', 'ok');
     } else if (a === 'tasks') {
       openTasks(u);
+    } else if (a === 'reauthorize') {
+      openAdd(u, b.dataset.r);
     } else if (a === 'remove') {
       const r = await api('accounts/' + encodeURIComponent(u) + '/remove', { method: 'POST' });
       toast(r.file_error ? '已移除（凭证文件删除失败：' + r.file_error + '）' : '已移除', 'ok');
@@ -1274,19 +1308,29 @@ $('cfgForm').onsubmit = async ev => {
 };
 
 /* ── 添加账号 ─────────────────────────────────────────────────────── */
-function openAdd() {
+function openAdd(targetUID, targetRealm) {
+  closeAdd(); // Invalidate requests belonging to the previous modal, if any.
+  reauthUID = targetUID || null;
+  loginCompleted = false;
   $('addVeil').classList.add('on');
-  // 重置到登录标签
   switchAddTab('login');
   $('addPick').hidden = false;
   $('addLoad').hidden = true; $('addReady').hidden = true;
   $('addDone').hidden = true; $('addErr').hidden = true;
   $('importDone').hidden = true; $('importErr').hidden = true;
   $('btnCopyUrl').hidden = true; $('btnOpenUrl').hidden = true;
-  $('btnStartLogin').hidden = false; $('btnStartLogin').disabled = false;
-  stopPoll();
+  setLoginVisual('idle');
+  document.querySelectorAll('input[name="addRealm"]').forEach(x => {
+    x.disabled = !!reauthUID;
+    x.checked = x.value === (reauthUID ? (targetRealm || 'cn') : 'cn');
+  });
+  document.querySelectorAll('#addTabs .tab').forEach(x => { x.disabled = !!reauthUID && x.dataset.tab === 'import'; });
+  $('addReauthNote').hidden = !reauthUID;
+  $('addReauthNote').textContent = reauthUID ? '请在官方授权页面登录同一账号和同一企业空间（如有）。原账号无需移除；本次仅更新凭证，不签到、不领取奖励。登录来源提示不决定账号身份；颜色展示凭证和本次授权进度，不表示 API 或任务资格已通过实时验证。' : '';
+  $('addPoll').textContent = '等待授权完成，自动检测中';
 }
 function switchAddTab(tab) {
+  if (reauthUID && tab === 'import') tab = 'login';
   document.querySelectorAll('#addTabs .tab').forEach(b => b.classList.toggle('on', b.dataset.tab === tab));
   $('addTabLogin').hidden = tab !== 'login';
   $('addTabImport').hidden = tab !== 'import';
@@ -1294,45 +1338,93 @@ function switchAddTab(tab) {
 document.querySelectorAll('#addTabs .tab').forEach(b => {
   b.onclick = () => switchAddTab(b.dataset.tab);
 });
-function startAddLogin() {
+function loginFailure(kind, message) {
+  ++loginEpoch; // Ignore any late response from the failed/expired attempt.
+  stopPoll();
+  loginPending = false; loginPolling = false;
+  loginState = null;
+  if (reauthUID) authorizationFeedback.set(reauthUID, kind);
+  setLoginVisual(kind === 'timeout' ? 'expired' : 'warning');
+  $('addLoad').hidden = true;
+  $('addReady').hidden = true;
+  $('addErr').hidden = false;
+  $('addErr').textContent = message + '；可以重试，原凭证会保留。';
+  repaintAuthorization();
+}
+async function startAddLogin() {
+  if (loginPending || loginCompleted) return;
+  const epoch = ++loginEpoch;
+  const target = reauthUID;
   const realm = (document.querySelector('input[name="addRealm"]:checked') || {}).value || 'cn';
-  $('btnStartLogin').disabled = true;
+  stopPoll();
+  loginPending = true; loginPolling = false; loginState = null;
+  loginDeadline = Date.now() + 15 * 60 * 1000;
+  loginTimer = setInterval(pollLogin, 3000); // Watchdog also covers a stalled login/start request.
+  if (target) authorizationFeedback.set(target, 'pending');
+  setLoginVisual('pending');
+  repaintAuthorization();
   $('addLoad').hidden = false; $('addErr').hidden = true;
-  api('login/start', { method: 'POST', body: JSON.stringify({ realm }) }).then(r => {
+  $('addDone').hidden = true; $('addReady').hidden = true;
+  const payload = { realm };
+  if (target) payload.reauthorize_uid = target;
+  try {
+    const r = await api('login/start', { method: 'POST', body: JSON.stringify(payload) });
+    if (epoch !== loginEpoch) return;
+    if (Date.now() >= loginDeadline) { loginFailure('timeout', '本次授权链接已超时'); return; }
+    if (!r.state || !r.url) throw new Error('授权服务未返回完整链接');
     loginState = r.state;
+    loginDeadline = Date.now() + 15 * 60 * 1000;
     $('addUrl').textContent = r.url;
-    $('addPick').hidden = true; // 选域锁定（会话已按该域发起）
+    $('addPick').hidden = true;
     $('addLoad').hidden = true; $('addReady').hidden = false;
-    $('btnStartLogin').hidden = true;
     $('btnCopyUrl').hidden = false; $('btnOpenUrl').hidden = false;
-    loginTimer = setInterval(pollLogin, 3000);
-  }).catch(e => {
-    $('addLoad').hidden = true;
-    $('btnStartLogin').disabled = false;
-    $('addErr').hidden = false;
-    $('addErr').textContent = e.message;
-  });
+  } catch (e) {
+    if (epoch !== loginEpoch) return;
+    loginFailure('failed', e.message);
+  }
 }
 function stopPoll() { if (loginTimer) { clearInterval(loginTimer); loginTimer = null; } }
 async function pollLogin() {
-  if (!loginState) return;
+  if (!loginPending) return;
+  if (Date.now() >= loginDeadline) { loginFailure('timeout', '本次授权链接已超时'); return; }
+  if (!loginState || loginPolling) return;
+  const epoch = loginEpoch, state = loginState, target = reauthUID;
+  loginPolling = true;
   try {
-    const r = await api('login/poll?state=' + encodeURIComponent(loginState));
+    const r = await api('login/poll?state=' + encodeURIComponent(state));
+    if (epoch !== loginEpoch) return;
+    if (Date.now() >= loginDeadline) { loginFailure('timeout', '本次授权链接已超时'); return; }
     if (r.done) {
       stopPoll();
+      loginPending = false; loginCompleted = true; loginState = null;
+      if (target) {
+        authorizationFeedback.delete(target);
+        const account = ((overviewData || {}).accounts || []).find(s => s.uid === target);
+        if (account && r.authorization) account.authorization = r.authorization;
+      }
+      setLoginVisual('valid');
+      repaintAuthorization();
       $('addReady').hidden = true;
       $('addDone').hidden = false;
-      $('addDone').textContent = '已添加 ' + (r.nickname || r.uid) + (r.realm === 'global' ? '（国际版）' : '') + (r.credits >= 0 ? ' · 积分 ' + r.credits + (r.credits_total > 0 ? '/' + r.credits_total : '') : '') + '，账号已载入池中';
-      setTimeout(() => { closeAdd(); loadOverview(true); }, 1600);
+      const updated = r.reauthorized || r.session_kind === 'personal_reauthorization';
+      $('addDone').textContent = (updated ? '登录授权已更新：' : '已添加 ') + (r.nickname || r.uid) + (updated ? '（未执行签到或奖励操作）' + (r.enterprise_switch_source ? ' · 登录来源提示仍在，但不代表企业账号；任务资格待核验' : '') : (r.realm === 'global' ? '（国际版）' : '') + (r.credits >= 0 ? ' · 积分 ' + r.credits + (r.credits_total > 0 ? '/' + r.credits_total : '') : '') + '，账号已载入池中');
+      loadOverview(true);
+      setTimeout(() => { if (epoch === loginEpoch) closeAdd(); }, 1600);
     }
   } catch (e) {
-    stopPoll();
-    $('addReady').hidden = true;
-    $('addErr').hidden = false;
-    $('addErr').textContent = e.message + '（关闭后重新添加）';
+    if (epoch === loginEpoch) loginFailure(e.httpStatus === 404 ? 'timeout' : 'failed', e.message);
+  } finally {
+    if (epoch === loginEpoch) loginPolling = false;
   }
 }
-function closeAdd() { stopPoll(); loginState = null; $('addVeil').classList.remove('on'); }
+function closeAdd() {
+  if (loginPending && reauthUID) authorizationFeedback.delete(reauthUID);
+  ++loginEpoch;
+  stopPoll();
+  loginState = null; loginPending = false; loginPolling = false;
+  $('addVeil').classList.remove('on');
+  repaintAuthorization();
+}
 $('btnCloseAdd').onclick = closeAdd;
 $('btnStartLogin').onclick = startAddLogin;
 $('btnOpenUrl').onclick = () => open($('addUrl').textContent, '_blank');
@@ -1365,7 +1457,7 @@ $('importFile').onchange = async () => {
 };
 
 /* ── 顶部动作 ─────────────────────────────────────────────────────── */
-$('btnAdd').onclick = openAdd;
+$('btnAdd').onclick = () => openAdd();
 $('btnRefresh').onclick = async () => {
   const b = $('btnRefresh');
   b.disabled = true; b.textContent = '刷新中…';
@@ -1572,6 +1664,87 @@ start();
 
 /* ── 积分任务 ─────────────────────────────────────────────────────── */
 let taskUID = null;
+let taskWorkflowPending = false;
+
+/* TASK_WORKFLOW_UI_START */
+const workflowPendingRequests = new Map();
+function workflowOperationID() {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') return crypto.randomUUID();
+  return 'wf-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 14);
+}
+function workflowResultText(r) {
+  if (!r || r.status === 'planned') return '仅完成条件检查，未执行';
+  const detail = '（请求 ' + (r.chat_calls || 0) + ' 次，进度 ' + (r.progress_before || 0) + ' → ' + (r.progress_after || 0) + '）';
+  if (r.reward_received === true && r.receipt_reward_reported === true && r.upstream_claimed === true && r.balance_verified === true) return '奖励已确认到账' + detail;
+  if (r.status === 'ready_to_claim') return '进度已达标，尚未领奖' + detail;
+  if (r.status === 'already_claimed') return '此前已领取，本轮未重复领取';
+  if (r.status === 'unconfirmed') return '未观察到任务计数增长，已停止，不追加对话' + detail;
+  if (r.status === 'chat_failed') return '对话未确认成功，已停止，不重试' + detail;
+  if (r.status === 'budget_exhausted') return '已到对话次数上限，未确认任务完成' + detail;
+  return '本轮未确认新增奖励：' + (r.status || 'unknown') + detail;
+}
+function workflowEnsureButton() {
+  const reload = $('btnTaskReload'), footer = reload && reload.parentNode;
+  if (!footer || $('btnTaskWorkflowCheck')) return;
+  const b = document.createElement('button'); b.id = 'btnTaskWorkflowCheck'; b.textContent = '检查真实自动化条件';
+  footer.insertBefore(b, reload); b.onclick = workflowCheck;
+}
+async function workflowCheck() {
+  const uid = taskUID; if (!uid || taskWorkflowPending) return;
+  taskWorkflowPending = true;
+  const b = $('btnTaskWorkflowCheck'); if (b) { b.disabled = true; b.textContent = '检查中…'; }
+  try {
+    const d = await api('accounts/' + encodeURIComponent(uid) + '/tasks/workflow', { method: 'POST', body: JSON.stringify({}) });
+    if (taskUID !== uid) return;
+    const st = $('taskState'); if (st) { st.hidden = false; st.textContent = (d.tasks || []).map(t => t.task_code + '：' + (t.reason || t.status)).join('；') || '任务条件暂未确认'; }
+    const chat = (d.tasks || []).find(t => t.task_code === 'chat_5');
+    if (d.ok === true && chat && chat.can_execute === true) workflowRenderExecute();
+  } catch (e) { if (taskUID === uid) toast('条件检查失败：' + e.message, 'err'); }
+  finally { taskWorkflowPending = false; if (b) { b.disabled = false; b.textContent = '检查真实自动化条件'; } }
+}
+function workflowRenderExecute() {
+  const body = $('taskBody'); if (!body) return;
+  const row = Array.from(body.querySelectorAll('tr')).find(x => x.dataset && x.dataset.taskCode === 'chat_5');
+  if (!row) return; const cell = row.querySelector('.acts'); if (!cell || cell.querySelector('[data-workflow]')) return;
+  const b = document.createElement('button'); b.className = 'xs primary'; b.dataset.workflow = 'true'; b.textContent = '尝试真实自动化'; cell.appendChild(b);
+}
+async function workflowExecute(task, button) {
+  const uid = taskUID;
+  if (!uid || taskWorkflowPending || !task || task.task_code !== 'chat_5' || !button || button.disabled) return;
+  taskWorkflowPending = true; const old = button.textContent; button.disabled = true;
+  try {
+    let body = workflowPendingRequests.get(uid);
+    if (!body) {
+      const plan = await api('accounts/' + encodeURIComponent(uid) + '/tasks/workflow', { method: 'POST', body: JSON.stringify({task_codes:['chat_5']}) });
+      if (taskUID !== uid) return;
+      const row = (plan.tasks || []).find(t => t.task_code === 'chat_5');
+      if (plan.ok !== true || !row || row.can_execute !== true) { toast('当前没有已核实可执行的真实任务，请查看条件', 'err'); return; }
+      const model = prompt('模型ID（不加cn:前缀）', 'deepseek-v4-flash'); if (model === null || !String(model).trim()) return;
+      const input = prompt('最多真实对话次数（1-5；无计数增长立即停止）', '1'); if (input === null) return;
+      const calls = Number(input); if (!Number.isInteger(calls) || calls < 1 || calls > 5) { toast('次数必须为1-5', 'err'); return; }
+      if (!confirm('将尝试真实短问答，最多' + calls + '次，每次最多16 tokens，关闭额外推理，可能消耗积分。失败或没有计数增长就停止，不上报虚构完成事件。确认执行？')) return;
+      const claim = confirm('仅当上游确认达标后，是否自动领取该任务奖励一次？取消表示不领奖，仍按上一确认执行对话。');
+      if (taskUID !== uid) return;
+      body = {task_codes:['chat_5'],execute:true,operation_id:workflowOperationID(),model:String(model).trim(),max_chat_calls:calls,max_output_tokens:16,claim_rewards:claim};
+      workflowPendingRequests.set(uid,body);
+    }
+    button.textContent = '执行／核对中…';
+    const result = await api('accounts/' + encodeURIComponent(uid) + '/tasks/workflow', {method:'POST',body:JSON.stringify(body)});
+    workflowPendingRequests.delete(uid);
+    if (taskUID === uid) {
+      toast(workflowResultText(result), result.reward_received === true && result.receipt_reward_reported === true && result.upstream_claimed === true && result.balance_verified === true ? 'ok' : 'err');
+      await loadTasks();
+    }
+  } catch (e) {
+    if ([400,401,404,422].includes(e.httpStatus)) workflowPendingRequests.delete(uid);
+    if (taskUID === uid) toast('执行结果未确认：' + e.message + '。不会自动重试；再次点击只核对原操作ID。', 'err');
+  } finally { taskWorkflowPending = false; button.disabled = false; button.textContent = workflowPendingRequests.has(uid) ? '核对上次执行' : old; }
+}
+$('taskBody').addEventListener('click', ev => {
+  const b = ev.target.closest('button[data-workflow]'); if (!b) return;
+  ev.stopPropagation(); workflowExecute({task_code:'chat_5'}, b);
+});
+/* TASK_WORKFLOW_UI_END */
 
 // 可自动完成的任务（与后端 autoActions 表一致）：判据为行为事件、可经网关复现。
 // 其余任务需在官方客户端内交互，面板只展示指引（行 title 提示）。
@@ -1604,11 +1777,17 @@ const AUTO_TASKS = {
   'Sequential_Tasks_7': '体验灵感功能（预留，疑 PC 口径）：accept → 灵感事件组（PC+mp 双形态）→ 领奖（判据待解锁验证）'
 };
 
+function taskSessionBlocked() {
+  return !!(((overviewData || {}).accounts || []).find(s => s.uid === taskUID) || {}).enterprise_session;
+}
 function openTasks(uid) {
   taskUID = uid;
   $('taskWho').textContent = uid.slice(0, 16);
   $('taskVeil').classList.add('on');
   $('btnTaskReload').hidden = false;
+  $('btnTaskAcceptAll').hidden = taskSessionBlocked();
+  $('btnTaskAutoAll').hidden = taskSessionBlocked();
+  workflowEnsureButton();
   loadTasks();
 }
 function closeTasks() { $('taskVeil').classList.remove('on'); taskUID = null; }
@@ -1617,7 +1796,7 @@ $('btnTaskReload').onclick = loadTasks;
 
 // 全部接受：把该账号未接受的任务一次性报名（幂等，跳过已接受/已领取）。
 $('btnTaskAcceptAll').onclick = async () => {
-  if (!taskUID) return;
+  if (!taskUID || taskSessionBlocked()) return;
   const btn = $('btnTaskAcceptAll');
   btn.disabled = true; btn.textContent = '接受中…';
   try {
@@ -1632,19 +1811,28 @@ $('btnTaskAcceptAll').onclick = async () => {
   finally { btn.disabled = false; btn.textContent = '全部接受'; loadTasks(); }
 };
 
+function summarizeAutoResults(results) {
+  return results.reduce((out, item) => {
+    if (item.claim_error || item.no_reward === true) out.unconfirmedN++;
+    else if (item.status === 'done' && item.verified === true) out.verifiedN++;
+    else if (item.status === 'skipped') out.skippedN++;
+    else if (item.status === 'error') out.errorN++;
+    else out.unconfirmedN++;
+    return out;
+  }, { verifiedN: 0, skippedN: 0, unconfirmedN: 0, errorN: 0 });
+}
+
 // 一键完成全部可自动任务（耗时较长：含真实对话，逐项回读验证）。
 $('btnTaskAutoAll').onclick = async () => {
-  if (!taskUID) return;
+  if (!taskUID || taskSessionBlocked()) return;
   const btn = $('btnTaskAutoAll');
   if (!confirm('将依次执行：补报对话事件、领取 Buddy、glm-5.2 对话、尝试上报。\n过程约 1-2 分钟（含真实对话），确认继续？')) return;
   btn.disabled = true; btn.textContent = '执行中…';
   try {
     const r = await api('accounts/' + encodeURIComponent(taskUID) + '/tasks/auto_all', { method: 'POST' });
-    const okN = (r.results || []).filter(x => x.status === 'done').length;
-    const skipN = (r.results || []).filter(x => x.status === 'skipped').length;
-    const errN = (r.results || []).filter(x => x.status === 'error').length;
-    toast(`执行完成：成功 ${okN} 项，跳过 ${skipN} 项${errN ? '，失败 ' + errN + ' 项' : ''}`, errN ? 'err' : 'ok');
-    console.log('auto_all results:', r.results);
+    const summary = summarizeAutoResults(r.results || []);
+    const warning = summary.unconfirmedN + summary.errorN > 0;
+    toast(`执行完成：成功 ${summary.verifiedN} 项，跳过 ${summary.skippedN} 项${warning ? `，未确认 ${summary.unconfirmedN} 项，失败 ${summary.errorN} 项` : ''}`, warning ? 'err' : 'ok');
   } catch (e) { toast(e.message, 'err'); }
   finally { btn.disabled = false; btn.textContent = '一键完成可自动任务'; loadTasks(); }
 };
@@ -1680,22 +1868,24 @@ async function loadTasks() {
         : t.locked ? '<span class="tag mute">未解锁</span>'
         : t.accept_status === 'accepted' ? '<span class="tag mute">进行中</span>'
         : '<span class="tag mute">未接受</span>';
-      const acted = t.claimed || t.locked ? ''
+      const acted = taskSessionBlocked() ? '<span class="hint">自动化尚未验证</span>' : t.claimed || t.locked ? ''
         : t.claimable ? '<button class="xs primary" data-t="claim" data-c="' + esc(t.task_code) + '">领取</button>'
-        : AUTO_TASKS[t.task_code] ? '<button class="xs primary" data-t="auto" data-c="' + esc(t.task_code) + '" title="' + esc(AUTO_TASKS[t.task_code]) + '">一键完成</button>'
+        : AUTO_TASKS[t.task_code] && t.task_code !== 'chat_5' ? '<button class="xs primary" data-t="auto" data-c="' + esc(t.task_code) + '" title="' + esc(AUTO_TASKS[t.task_code]) + '">一键完成</button>'
         : t.accept_status === 'accepted' ? ''
         : '<button class="xs" data-t="accept" data-c="' + esc(t.task_code) + '">接受</button>';
       // 操作指引（description/task_desc）挂 title 提示：如何完成交给用户看
       const tip = [t.title, t.task_desc || t.description, t.jump_url ? '跳转：' + t.jump_url : ''].filter(Boolean).join('\n');
-      return '<tr title="' + esc(tip) + '"><td class="mark" aria-hidden="true"><i></i></td>' +
+      return '<tr data-task-code="' + esc(t.task_code) + '" title="' + esc(tip) + '"><td class="mark" aria-hidden="true"><i></i></td>' +
         '<td class="who"><div class="nm">' + esc(t.title || t.task_code) + '</div><div class="id">' + esc(t.task_code) + (t.tag ? ' · ' + esc(t.tag) : '') + '</div></td>' +
         '<td class="num">' + esc(prog) + '</td>' +
         '<td class="num">' + esc(reward) + '</td>' +
         '<td>' + badge + '</td>' +
         '<td class="acts">' + acted + '</td></tr>';
     }).join('');
-    st.hidden = true;
+    st.hidden = !taskSessionBlocked();
+    if (taskSessionBlocked()) st.textContent = '当前登录来源提示尚未核实，旧版任务自动化暂未验证；仅展示官方任务记录。这不等于企业账号，也不证明缺少个人权益。';
     tb.hidden = false;
+    if (list.some(t => t.task_code === 'chat_5' && !t.claimed && !t.locked)) workflowRenderExecute();
   } catch (e) {
     st.className = 'state err';
     st.textContent = e.message;
@@ -1703,6 +1893,7 @@ async function loadTasks() {
 }
 
 $('taskBody').addEventListener('click', async ev => {
+  if (taskSessionBlocked()) return;
   const b = ev.target.closest('button[data-t]');
   if (!b || !taskUID) return;
   const kind = b.dataset.t, code = b.dataset.c;
@@ -1723,15 +1914,24 @@ $('taskBody').addEventListener('click', async ev => {
         if (r.claimed) msg += '，奖励已自动到账';
         else if (r.claimable) msg += r.claim_error ? '，可点「领取」重试' : '';
         else if (r.attempt && !advanced) msg += '；进度未动，该任务可能需要官方客户端';
-        toast(msg, (r.claimed || advanced) ? 'ok' : 'err');
+        const confirmed = r.verified === true || r.claimed === true || r.already_claimed === true;
+        toast(msg, confirmed && !r.claim_error && r.no_reward !== true ? 'ok' : 'err');
       }
       loadOverview(true);
     } else {
       const path = 'accounts/' + encodeURIComponent(taskUID) + '/tasks/' + (kind === 'claim' ? 'claim' : 'accept');
       const body = kind === 'claim' ? { task_code: code } : { task_codes: [code] };
-      await api(path, { method: 'POST', body: JSON.stringify(body) });
-      toast(kind === 'claim' ? '已领取奖励' : '已接受任务', 'ok');
-      if (kind === 'claim') loadOverview(true);
+      const r = await api(path, { method: 'POST', body: JSON.stringify(body) });
+      if (kind === 'claim') {
+        if (r.credit > 0 || r.energy > 0) {
+          toast(`已领取奖励 +${r.credit || 0} 分 +${r.energy || 0} 能`, 'ok');
+          loadOverview(true);
+        } else if (r.already_claimed === true) {
+          toast('该奖励此前已领取', 'ok');
+        } else {
+          toast('领奖响应未确认新增奖励', 'err');
+        }
+      } else toast('已接受任务', 'ok');
     }
   } catch (e) { toast(e.message, 'err'); }
   finally { loadTasks(); }
@@ -2026,6 +2226,7 @@ function groupItems(d) {
   const groups = [];
   for (const a of (d.accounts || [])) {
     const rows = [];
+    if (a.growth_error) rows.push({ kind: 'growth', code: 'session_status', status: 'skipped', message: a.growth_error });
     for (const t of (a.growth || [])) {
       GROWTH_TITLES[t.task_code] = t.title || t.task_code;
       rows.push({ kind: 'growth', code: t.task_code, prog: t.target ? t.current + '/' + t.target : '—', status: 'scan' });

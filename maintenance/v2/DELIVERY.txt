@@ -1,0 +1,9 @@
+Maintenance v2 continuation delivery,2026-11-04
+Branch maintenance/v1-compat-rewards. Source baseline b8522fc.
+API commit64388b9; rewards/catalog/manualsignin commitb516c92.
+Fork integration PR https://github.com/skyblue955/workbuddy2api-panel/pull/2 .
+Final docs/evidence commit is the Git tip following those source commits; inspect git log and compare origin branch at delivery.
+Local manualtest http://127.0.0.1:7863/panel/ updated with immutable tested build; previous wb2api.before-v2 retained privately. Config/auth unchanged. No new upstream account calls in this batch.
+Completed: deterministic fixes/regressions, sourcecontracts, historicalactivity directory, independentreview, baseline/modified/rollback gates, crossbuilds, image+networknone smoke, localreadonly smoke.
+Not complete: fresh authorized allclient/model/account qualification, optional officialredemption liveapp+grant+validcode, newactivepublicfreeclaim channel. None is falsely declared restored. Ongoingmaintenance remains open.
+Deployment maintenance/v2/DEPLOY.txt; acceptance maintenance/v2/VERIFICATION.txt. Revert docs then rewards then API commits on a branch for source rollback, preserving private redemptionjournal. Isolatedcopy ROLLBACK.sh code patch exercised separately. Accountside effects are never undone by Git.

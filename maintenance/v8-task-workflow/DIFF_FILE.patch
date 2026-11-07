@@ -1,0 +1,1986 @@
+diff --git a/internal/panel/app.js b/internal/panel/app.js
+index 9036d3b..6205f4f 100644
+--- a/internal/panel/app.js
++++ b/internal/panel/app.js
+@@ -1664,6 +1664,87 @@ start();
+ 
+ /* ── 积分任务 ─────────────────────────────────────────────────────── */
+ let taskUID = null;
++let taskWorkflowPending = false;
++
++/* TASK_WORKFLOW_UI_START */
++const workflowPendingRequests = new Map();
++function workflowOperationID() {
++  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') return crypto.randomUUID();
++  return 'wf-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 14);
++}
++function workflowResultText(r) {
++  if (!r || r.status === 'planned') return '仅完成条件检查，未执行';
++  const detail = '（请求 ' + (r.chat_calls || 0) + ' 次，进度 ' + (r.progress_before || 0) + ' → ' + (r.progress_after || 0) + '）';
++  if (r.reward_received === true && r.receipt_reward_reported === true && r.upstream_claimed === true && r.balance_verified === true) return '奖励已确认到账' + detail;
++  if (r.status === 'ready_to_claim') return '进度已达标，尚未领奖' + detail;
++  if (r.status === 'already_claimed') return '此前已领取，本轮未重复领取';
++  if (r.status === 'unconfirmed') return '未观察到任务计数增长，已停止，不追加对话' + detail;
++  if (r.status === 'chat_failed') return '对话未确认成功，已停止，不重试' + detail;
++  if (r.status === 'budget_exhausted') return '已到对话次数上限，未确认任务完成' + detail;
++  return '本轮未确认新增奖励：' + (r.status || 'unknown') + detail;
++}
++function workflowEnsureButton() {
++  const reload = $('btnTaskReload'), footer = reload && reload.parentNode;
++  if (!footer || $('btnTaskWorkflowCheck')) return;
++  const b = document.createElement('button'); b.id = 'btnTaskWorkflowCheck'; b.textContent = '检查真实自动化条件';
++  footer.insertBefore(b, reload); b.onclick = workflowCheck;
++}
++async function workflowCheck() {
++  const uid = taskUID; if (!uid || taskWorkflowPending) return;
++  taskWorkflowPending = true;
++  const b = $('btnTaskWorkflowCheck'); if (b) { b.disabled = true; b.textContent = '检查中…'; }
++  try {
++    const d = await api('accounts/' + encodeURIComponent(uid) + '/tasks/workflow', { method: 'POST', body: JSON.stringify({}) });
++    if (taskUID !== uid) return;
++    const st = $('taskState'); if (st) { st.hidden = false; st.textContent = (d.tasks || []).map(t => t.task_code + '：' + (t.reason || t.status)).join('；') || '任务条件暂未确认'; }
++    const chat = (d.tasks || []).find(t => t.task_code === 'chat_5');
++    if (d.ok === true && chat && chat.can_execute === true) workflowRenderExecute();
++  } catch (e) { if (taskUID === uid) toast('条件检查失败：' + e.message, 'err'); }
++  finally { taskWorkflowPending = false; if (b) { b.disabled = false; b.textContent = '检查真实自动化条件'; } }
++}
++function workflowRenderExecute() {
++  const body = $('taskBody'); if (!body) return;
++  const row = Array.from(body.querySelectorAll('tr')).find(x => x.dataset && x.dataset.taskCode === 'chat_5');
++  if (!row) return; const cell = row.querySelector('.acts'); if (!cell || cell.querySelector('[data-workflow]')) return;
++  const b = document.createElement('button'); b.className = 'xs primary'; b.dataset.workflow = 'true'; b.textContent = '尝试真实自动化'; cell.appendChild(b);
++}
++async function workflowExecute(task, button) {
++  const uid = taskUID;
++  if (!uid || taskWorkflowPending || !task || task.task_code !== 'chat_5' || !button || button.disabled) return;
++  taskWorkflowPending = true; const old = button.textContent; button.disabled = true;
++  try {
++    let body = workflowPendingRequests.get(uid);
++    if (!body) {
++      const plan = await api('accounts/' + encodeURIComponent(uid) + '/tasks/workflow', { method: 'POST', body: JSON.stringify({task_codes:['chat_5']}) });
++      if (taskUID !== uid) return;
++      const row = (plan.tasks || []).find(t => t.task_code === 'chat_5');
++      if (plan.ok !== true || !row || row.can_execute !== true) { toast('当前没有已核实可执行的真实任务，请查看条件', 'err'); return; }
++      const model = prompt('模型ID（不加cn:前缀）', 'deepseek-v4-flash'); if (model === null || !String(model).trim()) return;
++      const input = prompt('最多真实对话次数（1-5；无计数增长立即停止）', '1'); if (input === null) return;
++      const calls = Number(input); if (!Number.isInteger(calls) || calls < 1 || calls > 5) { toast('次数必须为1-5', 'err'); return; }
++      if (!confirm('将尝试真实短问答，最多' + calls + '次，每次最多16 tokens，关闭额外推理，可能消耗积分。失败或没有计数增长就停止，不上报虚构完成事件。确认执行？')) return;
++      const claim = confirm('仅当上游确认达标后，是否自动领取该任务奖励一次？取消表示不领奖，仍按上一确认执行对话。');
++      if (taskUID !== uid) return;
++      body = {task_codes:['chat_5'],execute:true,operation_id:workflowOperationID(),model:String(model).trim(),max_chat_calls:calls,max_output_tokens:16,claim_rewards:claim};
++      workflowPendingRequests.set(uid,body);
++    }
++    button.textContent = '执行／核对中…';
++    const result = await api('accounts/' + encodeURIComponent(uid) + '/tasks/workflow', {method:'POST',body:JSON.stringify(body)});
++    workflowPendingRequests.delete(uid);
++    if (taskUID === uid) {
++      toast(workflowResultText(result), result.reward_received === true && result.receipt_reward_reported === true && result.upstream_claimed === true && result.balance_verified === true ? 'ok' : 'err');
++      await loadTasks();
++    }
++  } catch (e) {
++    if ([400,401,404,422].includes(e.httpStatus)) workflowPendingRequests.delete(uid);
++    if (taskUID === uid) toast('执行结果未确认：' + e.message + '。不会自动重试；再次点击只核对原操作ID。', 'err');
++  } finally { taskWorkflowPending = false; button.disabled = false; button.textContent = workflowPendingRequests.has(uid) ? '核对上次执行' : old; }
++}
++$('taskBody').addEventListener('click', ev => {
++  const b = ev.target.closest('button[data-workflow]'); if (!b) return;
++  ev.stopPropagation(); workflowExecute({task_code:'chat_5'}, b);
++});
++/* TASK_WORKFLOW_UI_END */
+ 
+ // 可自动完成的任务（与后端 autoActions 表一致）：判据为行为事件、可经网关复现。
+ // 其余任务需在官方客户端内交互，面板只展示指引（行 title 提示）。
+@@ -1706,6 +1787,7 @@ function openTasks(uid) {
+   $('btnTaskReload').hidden = false;
+   $('btnTaskAcceptAll').hidden = taskSessionBlocked();
+   $('btnTaskAutoAll').hidden = taskSessionBlocked();
++  workflowEnsureButton();
+   loadTasks();
+ }
+ function closeTasks() { $('taskVeil').classList.remove('on'); taskUID = null; }
+@@ -1788,12 +1870,12 @@ async function loadTasks() {
+         : '<span class="tag mute">未接受</span>';
+       const acted = taskSessionBlocked() ? '<span class="hint">自动化尚未验证</span>' : t.claimed || t.locked ? ''
+         : t.claimable ? '<button class="xs primary" data-t="claim" data-c="' + esc(t.task_code) + '">领取</button>'
+-        : AUTO_TASKS[t.task_code] ? '<button class="xs primary" data-t="auto" data-c="' + esc(t.task_code) + '" title="' + esc(AUTO_TASKS[t.task_code]) + '">一键完成</button>'
++        : AUTO_TASKS[t.task_code] && t.task_code !== 'chat_5' ? '<button class="xs primary" data-t="auto" data-c="' + esc(t.task_code) + '" title="' + esc(AUTO_TASKS[t.task_code]) + '">一键完成</button>'
+         : t.accept_status === 'accepted' ? ''
+         : '<button class="xs" data-t="accept" data-c="' + esc(t.task_code) + '">接受</button>';
+       // 操作指引（description/task_desc）挂 title 提示：如何完成交给用户看
+       const tip = [t.title, t.task_desc || t.description, t.jump_url ? '跳转：' + t.jump_url : ''].filter(Boolean).join('\n');
+-      return '<tr title="' + esc(tip) + '"><td class="mark" aria-hidden="true"><i></i></td>' +
++      return '<tr data-task-code="' + esc(t.task_code) + '" title="' + esc(tip) + '"><td class="mark" aria-hidden="true"><i></i></td>' +
+         '<td class="who"><div class="nm">' + esc(t.title || t.task_code) + '</div><div class="id">' + esc(t.task_code) + (t.tag ? ' · ' + esc(t.tag) : '') + '</div></td>' +
+         '<td class="num">' + esc(prog) + '</td>' +
+         '<td class="num">' + esc(reward) + '</td>' +
+@@ -1803,6 +1885,7 @@ async function loadTasks() {
+     st.hidden = !taskSessionBlocked();
+     if (taskSessionBlocked()) st.textContent = '当前登录来源提示尚未核实，旧版任务自动化暂未验证；仅展示官方任务记录。这不等于企业账号，也不证明缺少个人权益。';
+     tb.hidden = false;
++    if (list.some(t => t.task_code === 'chat_5' && !t.claimed && !t.locked)) workflowRenderExecute();
+   } catch (e) {
+     st.className = 'state err';
+     st.textContent = e.message;
+diff --git a/internal/panel/model_chat_completion.go b/internal/panel/model_chat_completion.go
+index c268dbb..fac3ff0 100644
+--- a/internal/panel/model_chat_completion.go
++++ b/internal/panel/model_chat_completion.go
+@@ -72,7 +72,7 @@ func consumeModelChatCompletion(r io.Reader) error {
+ 								return fmt.Errorf("non-assistant stream role")
+ 							}
+ 						}
+-						if call, exists := part["function_call"]; exists && call != nil {
++						if call, exists := part["function_call"]; exists && call != nil && !emptyModelChatFunctionPlaceholder(call) {
+ 							return fmt.Errorf("completion requires function execution")
+ 						}
+ 						if tools, ok := part["tool_calls"].([]any); ok && len(tools) > 0 {
+@@ -164,3 +164,23 @@ func validModelChatFinishReason(reason string) bool {
+ 		return false
+ 	}
+ }
++
++// Some domestic streams serialize an unused function_call on the final text
++// frame. Only the known all-empty placeholder is noise; never accept actual
++// tool/function instructions, unknown fields, or malformed values here.
++func emptyModelChatFunctionPlaceholder(value any) bool {
++	fields, ok := value.(map[string]any)
++	if !ok {
++		return false
++	}
++	for key, raw := range fields {
++		if key != "name" && key != "arguments" {
++			return false
++		}
++		v, ok := raw.(string)
++		if !ok || v != "" {
++			return false
++		}
++	}
++	return true
++}
+diff --git a/internal/panel/model_chat_completion_test.go b/internal/panel/model_chat_completion_test.go
+index 642f0a6..44db2d4 100644
+--- a/internal/panel/model_chat_completion_test.go
++++ b/internal/panel/model_chat_completion_test.go
+@@ -161,3 +161,23 @@ func TestRunModelChatCompleteRequestContract(t *testing.T) {
+ 		t.Fatal("request body changed")
+ 	}
+ }
++
++func TestModelChatEmptyFunctionPlaceholderCompatibility(t *testing.T) {
++	for _, tc := range []struct {
++		name, call string
++		valid      bool
++	}{
++		{"empty-fields", `{"name":"","arguments":""}`, true}, {"empty-object", `{}`, true}, {"empty-name", `{"name":""}`, true},
++		{"actual-name", `{"name":"tool","arguments":""}`, false}, {"actual-arguments", `{"name":"","arguments":"{}"}`, false},
++		{"unknown-key", `{"other":""}`, false}, {"invalid-type", `""`, false}, {"invalid-member", `{"name":0}`, false}, {"null-member", `{"name":null}`, false},
++	} {
++		t.Run(tc.name, func(t *testing.T) {
++			stream := `data: {"choices":[{"index":0,"delta":{"role":"assistant","content":"OK","function_call":null},"finish_reason":""}]}` + "\n\n" +
++				`data: {"choices":[{"index":0,"delta":{"role":"assistant","content":"","function_call":` + tc.call + `},"finish_reason":"stop"}]}` + "\n\ndata: [DONE]\n\n"
++			err := consumeModelChatCompletion(strings.NewReader(stream))
++			if (err == nil) != tc.valid {
++				t.Fatalf("valid=%t error=%v", tc.valid, err)
++			}
++		})
++	}
++}
+diff --git a/internal/panel/panel.go b/internal/panel/panel.go
+index 7c3c0e1..72b277f 100644
+--- a/internal/panel/panel.go
++++ b/internal/panel/panel.go
+@@ -180,6 +180,7 @@ func (p *Panel) routes() {
+ 	p.mux.HandleFunc("POST /panel/api/accounts/{uid}/tasks/accept_all", p.withAuth(p.taskAcceptAll))
+ 	p.mux.HandleFunc("POST /panel/api/accounts/{uid}/tasks/claim", p.withAuth(p.accountTaskClaim))
+ 	p.mux.HandleFunc("POST /panel/api/accounts/{uid}/tasks/claim_ready", p.withAuth(p.accountTasksClaimReady))
++	p.mux.HandleFunc("POST /panel/api/accounts/{uid}/tasks/workflow", p.withAuth(p.accountTaskWorkflow))
+ 	p.mux.HandleFunc("POST /panel/api/accounts/{uid}/tasks/auto", p.withAuth(p.accountTaskAuto))
+ 	p.mux.HandleFunc("POST /panel/api/accounts/{uid}/tasks/auto_all", p.withAuth(p.accountTaskAutoAll))
+ 	p.mux.HandleFunc("POST /panel/api/tasks/scan_all", p.withAuth(p.tasksScanAll))
+diff --git a/internal/panel/task_workflow.go b/internal/panel/task_workflow.go
+new file mode 100644
+index 0000000..62704fe
+--- /dev/null
++++ b/internal/panel/task_workflow.go
+@@ -0,0 +1,656 @@
++package panel
++
++import (
++	"bytes"
++	"context"
++	"crypto/sha256"
++	"encoding/hex"
++	"encoding/json"
++	"errors"
++	"io"
++	"net/http"
++	"os"
++	"path/filepath"
++	"regexp"
++	"strings"
++	"time"
++
++	"github.com/linguo2625469/workbuddy2api-panel/internal/auth"
++	"github.com/linguo2625469/workbuddy2api-panel/internal/upstream"
++)
++
++type taskWorkflowRequest struct {
++	TaskCodes       []string `json:"task_codes"`
++	Execute         bool     `json:"execute"`
++	OperationID     string   `json:"operation_id"`
++	Model           string   `json:"model"`
++	MaxChatCalls    int      `json:"max_chat_calls"`
++	MaxOutputTokens int      `json:"max_output_tokens"`
++	ClaimRewards    bool     `json:"claim_rewards"`
++}
++type taskWorkflowTask struct {
++	TaskCode   string `json:"task_code"`
++	Status     string `json:"status"`
++	Reason     string `json:"reason,omitempty"`
++	Current    int64  `json:"current"`
++	Target     int64  `json:"target"`
++	CanExecute bool   `json:"can_execute"`
++	CanClaim   bool   `json:"can_claim"`
++	Channel    string `json:"channel"`
++}
++type taskWorkflowResponse struct {
++	OK                    bool               `json:"ok"`
++	Support               string             `json:"support"`
++	Execute               bool               `json:"execute"`
++	OperationID           string             `json:"operation_id,omitempty"`
++	Status                string             `json:"status"`
++	ChatCalls             int                `json:"chat_calls"`
++	ClaimAttempts         int                `json:"claim_attempts"`
++	ProgressBefore        int64              `json:"progress_before"`
++	ProgressAfter         int64              `json:"progress_after"`
++	RewardReceived        bool               `json:"reward_received"`
++	ReceiptRewardReported bool               `json:"receipt_reward_reported"`
++	UpstreamClaimed       bool               `json:"upstream_claimed"`
++	BalanceVerified       bool               `json:"balance_verified"`
++	Credit                int64              `json:"credit"`
++	Energy                int64              `json:"energy"`
++	BalanceDelta          int64              `json:"balance_delta"`
++	Tasks                 []taskWorkflowTask `json:"tasks"`
++}
++type workflowJournal struct {
++	Digest   string               `json:"digest"`
++	State    string               `json:"state"`
++	Response taskWorkflowResponse `json:"response"`
++}
++
++var workflowOpRE = regexp.MustCompile(`^[a-zA-Z0-9_-]{8,64}$`)
++
++func decodeTaskWorkflow(r *http.Request) (taskWorkflowRequest, error) {
++	if r.Body == nil {
++		return taskWorkflowRequest{}, errors.New("invalid request")
++	}
++	q := taskWorkflowRequest{MaxOutputTokens: 16}
++	b, err := io.ReadAll(io.LimitReader(r.Body, 8193))
++	if err != nil || len(b) > 8192 {
++		return q, errors.New("invalid request")
++	}
++	var raw map[string]json.RawMessage
++	dec := json.NewDecoder(bytes.NewReader(b))
++	tok, err := dec.Token()
++	if err != nil || tok != json.Delim('{') {
++		return q, errors.New("object required")
++	}
++	raw = map[string]json.RawMessage{}
++	for dec.More() {
++		key, err := dec.Token()
++		if err != nil {
++			return q, errors.New("invalid request")
++		}
++		ks, ok := key.(string)
++		if !ok {
++			return q, errors.New("invalid request")
++		}
++		if _, exists := raw[ks]; exists {
++			return q, errors.New("duplicate field")
++		}
++		var v json.RawMessage
++		if err := dec.Decode(&v); err != nil {
++			return q, errors.New("invalid request")
++		}
++		raw[ks] = v
++	}
++	if _, err := dec.Token(); err != nil {
++		return q, errors.New("invalid request")
++	}
++	var extra any
++	if err := dec.Decode(&extra); err != io.EOF {
++		return q, errors.New("trailing data")
++	}
++	allowed := map[string]bool{"task_codes": true, "execute": true, "operation_id": true, "model": true, "max_chat_calls": true, "max_output_tokens": true, "claim_rewards": true}
++	for k := range raw {
++		if !allowed[k] {
++			return q, errors.New("unknown field")
++		}
++	}
++	if v, ok := raw["task_codes"]; ok {
++		if string(bytes.TrimSpace(v)) == "null" || json.Unmarshal(v, &q.TaskCodes) != nil {
++			return q, errors.New("invalid task_codes")
++		}
++		for _, s := range q.TaskCodes {
++			if strings.TrimSpace(s) == "" {
++				return q, errors.New("invalid task_codes")
++			}
++		}
++		if len(q.TaskCodes) > 10 {
++			return q, errors.New("invalid task_codes")
++		}
++		seen := map[string]bool{}
++		for _, s := range q.TaskCodes {
++			if seen[s] {
++				return q, errors.New("duplicate task_codes")
++			}
++			seen[s] = true
++		}
++	}
++	if v, ok := raw["execute"]; ok {
++		if string(bytes.TrimSpace(v)) == "null" {
++			return q, errors.New("invalid execute")
++		}
++		if json.Unmarshal(v, &q.Execute) != nil {
++			return q, errors.New("invalid execute")
++		}
++	}
++	if v, ok := raw["operation_id"]; ok {
++		if string(bytes.TrimSpace(v)) == "null" {
++			return q, errors.New("invalid operation_id")
++		}
++		if json.Unmarshal(v, &q.OperationID) != nil {
++			return q, errors.New("invalid operation_id")
++		}
++	}
++	if v, ok := raw["model"]; ok {
++		if string(bytes.TrimSpace(v)) == "null" {
++			return q, errors.New("invalid model")
++		}
++		if json.Unmarshal(v, &q.Model) != nil {
++			return q, errors.New("invalid model")
++		}
++	}
++	if v, ok := raw["max_chat_calls"]; ok {
++		if string(bytes.TrimSpace(v)) == "null" {
++			return q, errors.New("invalid max_chat_calls")
++		}
++		if json.Unmarshal(v, &q.MaxChatCalls) != nil {
++			return q, errors.New("invalid max_chat_calls")
++		}
++	}
++	if v, ok := raw["max_output_tokens"]; ok {
++		if string(bytes.TrimSpace(v)) == "null" {
++			return q, errors.New("invalid max_output_tokens")
++		}
++		if json.Unmarshal(v, &q.MaxOutputTokens) != nil {
++			return q, errors.New("invalid max_output_tokens")
++		}
++	}
++	if v, ok := raw["claim_rewards"]; ok {
++		if string(bytes.TrimSpace(v)) == "null" {
++			return q, errors.New("invalid claim_rewards")
++		}
++		if json.Unmarshal(v, &q.ClaimRewards) != nil {
++			return q, errors.New("invalid claim_rewards")
++		}
++	}
++	if q.MaxChatCalls < 0 || q.MaxChatCalls > 5 || q.MaxOutputTokens < 1 || q.MaxOutputTokens > 64 {
++		return q, errors.New("invalid caps")
++	}
++	if _, ok := raw["max_output_tokens"]; !ok {
++		q.MaxOutputTokens = 16
++	}
++	seen := map[string]bool{}
++	for _, code := range q.TaskCodes {
++		if strings.TrimSpace(code) != code || code == "" || seen[code] {
++			return q, errors.New("invalid task_codes")
++		}
++		seen[code] = true
++	}
++	if len(q.TaskCodes) > 10 {
++		return q, errors.New("too many task codes")
++	}
++	if _, provided := raw["task_codes"]; provided && len(q.TaskCodes) == 0 {
++		return q, errors.New("empty task codes")
++	}
++	return q, nil
++}
++
++var workflowProgressGap = time.Second
++
++func workflowJournalPath(dir, uid, op string) string {
++	h := sha256.Sum256([]byte(uid + "\x00" + op))
++	return filepath.Join(dir, "task-workflows", hex.EncodeToString(h[:])+".json")
++}
++func workflowDigest(q taskWorkflowRequest) string {
++	b, _ := json.Marshal(q)
++	h := sha256.Sum256(b)
++	return hex.EncodeToString(h[:])
++}
++func syncWorkflowDir(dir string) error {
++	f, e := os.Open(dir)
++	if e != nil {
++		return e
++	}
++	defer f.Close()
++	return f.Sync()
++}
++func writeWorkflowJournal(path string, j workflowJournal) error {
++	b, e := json.Marshal(j)
++	if e != nil {
++		return e
++	}
++	f, e := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
++	if e != nil {
++		return e
++	}
++	if _, e = f.Write(b); e == nil {
++		e = f.Sync()
++	}
++	ce := f.Close()
++	if e != nil {
++		return e
++	}
++	if ce != nil {
++		return ce
++	}
++	return syncWorkflowDir(filepath.Dir(path))
++}
++func updateWorkflowJournal(path string, j workflowJournal) error {
++	b, e := json.Marshal(j)
++	if e != nil {
++		return e
++	}
++	st, e := os.Lstat(path)
++	if e != nil || !st.Mode().IsRegular() {
++		return errors.New("journal unavailable")
++	}
++	f, e := os.CreateTemp(filepath.Dir(path), ".workflow-")
++	if e != nil {
++		return e
++	}
++	tmp := f.Name()
++	defer os.Remove(tmp)
++	if e = f.Chmod(0600); e == nil {
++		_, e = f.Write(b)
++	}
++	if e == nil {
++		e = f.Sync()
++	}
++	ce := f.Close()
++	if e != nil {
++		return e
++	}
++	if ce != nil {
++		return ce
++	}
++	if e = os.Rename(tmp, path); e != nil {
++		return e
++	}
++	return syncWorkflowDir(filepath.Dir(path))
++}
++func readWorkflowJournal(path string) (workflowJournal, error) {
++	var j workflowJournal
++	st, e := os.Lstat(path)
++	if e != nil {
++		return j, e
++	}
++	if !st.Mode().IsRegular() || st.Size() > 1<<20 {
++		return j, errors.New("invalid journal")
++	}
++	b, e := os.ReadFile(path)
++	if e != nil {
++		return j, e
++	}
++	e = json.Unmarshal(b, &j)
++	if e == nil && (j.Digest == "" || (j.State != "complete" && j.State != "pending")) {
++		e = errors.New("invalid journal")
++	}
++	return j, e
++}
++func (p *Panel) accountTaskWorkflow(w http.ResponseWriter, r *http.Request) {
++	req, e := decodeTaskWorkflow(r)
++	if e != nil {
++		writeErr(w, 400, "invalid workflow request")
++		return
++	}
++	if req.Execute && (!workflowOpRE.MatchString(req.OperationID) || strings.TrimSpace(req.Model) == "" || strings.TrimSpace(req.Model) != req.Model || len(req.Model) > 128 || req.MaxChatCalls < 1 || len(req.TaskCodes) != 1 || req.TaskCodes[0] != "chat_5") {
++		writeErr(w, 400, "invalid execute request")
++		return
++	}
++	uid := r.PathValue("uid")
++	a := p.accountByUID(w, uid)
++	if a == nil {
++		return
++	}
++	if a.IsEnterprise() || a.IsGlobal() || a.NeedsRefresh(0) || strings.TrimSpace(a.UID) == "" || strings.TrimSpace(a.AccessTokenValue()) == "" {
++		writeErr(w, 422, "account unavailable")
++		return
++	}
++	if !p.tryLockAccount(uid) {
++		writeErr(w, 409, "account task operation is busy")
++		return
++	}
++	defer p.unlockAccount(uid)
++	if !req.Execute {
++		p.workflowPlan(w, r, a, req)
++		return
++	}
++	if strings.TrimSpace(p.cfg.AuthDir) == "" {
++		writeErr(w, 409, "workflow persistence unavailable")
++		return
++	}
++	dir := filepath.Join(p.cfg.AuthDir, "task-workflows")
++	if e = os.MkdirAll(dir, 0700); e != nil {
++		writeErr(w, 409, "workflow persistence unavailable")
++		return
++	}
++	if e = syncWorkflowDir(p.cfg.AuthDir); e != nil {
++		writeErr(w, 409, "workflow persistence unavailable")
++		return
++	}
++	path := workflowJournalPath(p.cfg.AuthDir, uid, req.OperationID)
++	digest := workflowDigest(req)
++	j, e := readWorkflowJournal(path)
++	if e == nil {
++		if j.Digest != digest {
++			writeErr(w, 409, "operation conflict")
++			return
++		}
++		if j.State != "complete" {
++			writeErr(w, 409, "operation pending")
++			return
++		}
++		writeJSON(w, 200, j.Response)
++		return
++	} else if !os.IsNotExist(e) {
++		writeErr(w, 409, "operation journal invalid")
++		return
++	}
++	resp := taskWorkflowResponse{Support: "legacy_unverified", Execute: true, OperationID: req.OperationID, Status: "starting", Tasks: []taskWorkflowTask{}}
++	j = workflowJournal{Digest: digest, State: "pending", Response: resp}
++	if e = writeWorkflowJournal(path, j); e != nil {
++		writeErr(w, 409, "workflow persistence unavailable")
++		return
++	}
++	// Every network mutation is preceded by a durable reservation. A failure of
++	// the final commit leaves the old pending reservation, never a replayable run.
++	finish := func() {
++		j.State = "complete"
++		j.Response = resp
++		if updateWorkflowJournal(path, j) != nil {
++			resp.OK = false
++			resp.Status = "journal_write_failed"
++			writeJSON(w, 503, resp)
++			return
++		}
++		writeJSON(w, 200, resp)
++	}
++	reserve := func() bool { j.Response = resp; return updateWorkflowJournal(path, j) == nil }
++	ctx, cancel := context.WithTimeout(r.Context(), 120*time.Second)
++	defer cancel()
++	tasks, defaults, e := p.workflowTasks(ctx, a)
++	if e != nil {
++		resp.Status = "task_read_failed"
++		finish()
++		return
++	}
++	resp.Tasks = workflowTaskRows(tasks, req.TaskCodes, defaults)
++	t := findWorkflowTask(tasks, "chat_5")
++	if !defaults["chat_5"] || t == nil || t.Target <= 0 || t.Current < 0 || t.RewardBuddy || t.IsInactive() || isMPTaskCode(t.TaskCode) {
++		resp.Status = "blocked"
++		finish()
++		return
++	}
++	resp.ProgressBefore = t.Current
++	resp.ProgressAfter = t.Current
++	if t.Claimed {
++		resp.Status = "already_claimed"
++		resp.UpstreamClaimed = true
++		resp.OK = true
++		finish()
++		return
++	}
++	if t.AcceptStatus != "accepted" && t.AcceptStatus != "in_progress" && t.AcceptStatus != "completed" {
++		resp.Status = "requires_enrollment"
++		finish()
++		return
++	}
++	target := t.Target
++	for t.Current < target && resp.ChatCalls < req.MaxChatCalls {
++		if ctx.Err() != nil {
++			resp.Status = "cancelled"
++			finish()
++			return
++		}
++		previous := t.Current
++		resp.ChatCalls++
++		if !reserve() {
++			resp.Status = "journal_write_failed"
++			writeJSON(w, 503, resp)
++			return
++		}
++		cctx, ccancel := context.WithTimeout(ctx, 20*time.Second)
++		rc, status, ce := p.cfg.Upstream.WorkflowChat(cctx, a, req.Model, req.MaxOutputTokens)
++		if ce == nil {
++			if status < 200 || status >= 300 || rc == nil {
++				ce = errors.New("invalid chat response")
++			} else {
++				ce = consumeModelChatCompletion(rc)
++			}
++		}
++		if rc != nil {
++			rc.Close()
++		}
++		ccancel()
++		if ce != nil {
++			resp.Status = "chat_failed"
++			finish()
++			return
++		}
++		progressed := false
++		for poll := 0; poll < 2; poll++ {
++			if poll > 0 {
++				timer := time.NewTimer(workflowProgressGap)
++				select {
++				case <-ctx.Done():
++					timer.Stop()
++					resp.Status = "cancelled"
++					finish()
++					return
++				case <-timer.C:
++				}
++			}
++			tasks, defaults, e = p.workflowTasks(ctx, a)
++			if e != nil {
++				resp.Status = "task_read_failed"
++				finish()
++				return
++			}
++			resp.Tasks = workflowTaskRows(tasks, req.TaskCodes, defaults)
++			nt := findWorkflowTask(tasks, "chat_5")
++			if !defaults["chat_5"] || nt == nil || nt.Target != target || nt.IsInactive() || nt.RewardBuddy || nt.Claimed || nt.Current < previous || (nt.AcceptStatus != "accepted" && nt.AcceptStatus != "in_progress" && nt.AcceptStatus != "completed") {
++				resp.Status = "task_state_changed"
++				if nt != nil {
++					resp.ProgressAfter = nt.Current
++					resp.UpstreamClaimed = nt.Claimed
++				}
++				finish()
++				return
++			}
++			t = nt
++			resp.ProgressAfter = t.Current
++			if t.Current > previous {
++				progressed = true
++				break
++			}
++		}
++		if !progressed {
++			resp.Status = "unconfirmed"
++			finish()
++			return
++		}
++	}
++	if t.Current < target {
++		resp.Status = "budget_exhausted"
++		finish()
++		return
++	}
++	if !t.CanClaimReward() {
++		resp.Status = "qualification_unconfirmed"
++		finish()
++		return
++	}
++	if !req.ClaimRewards {
++		resp.Status = "ready_to_claim"
++		resp.OK = true
++		finish()
++		return
++	}
++	bctx, bcancel := context.WithTimeout(ctx, 10*time.Second)
++	before, be := p.cfg.Upstream.WorkflowBalance(bctx, a)
++	bcancel()
++	if be != nil {
++		resp.Status = "balance_unavailable"
++		finish()
++		return
++	}
++	if ctx.Err() != nil {
++		resp.Status = "cancelled"
++		finish()
++		return
++	}
++	resp.ClaimAttempts = 1
++	if !reserve() {
++		resp.Status = "journal_write_failed"
++		writeJSON(w, 503, resp)
++		return
++	}
++	cctx, ccancel := context.WithTimeout(ctx, 10*time.Second)
++	receipt, claimErr := p.cfg.Upstream.WorkflowClaim(cctx, a, "chat_5")
++	ccancel()
++	if claimErr == nil {
++		resp.Credit = receipt.Credit
++		resp.Energy = receipt.Energy
++		resp.ReceiptRewardReported = receipt.HasReward() && !receipt.AlreadyClaimed
++	}
++	// Both post-write facts are observed even after an uncertain claim response.
++	tasks, postDefaults, readErr := p.workflowTasks(ctx, a)
++	if readErr == nil {
++		defaults = postDefaults
++		resp.Tasks = workflowTaskRows(tasks, req.TaskCodes, defaults)
++		if done := findWorkflowTask(tasks, "chat_5"); done != nil && defaults["chat_5"] {
++			resp.UpstreamClaimed = done.Claimed
++			resp.ProgressAfter = done.Current
++		}
++	}
++	bctx, bcancel = context.WithTimeout(ctx, 10*time.Second)
++	after, afterErr := p.cfg.Upstream.WorkflowBalance(bctx, a)
++	bcancel()
++	if afterErr == nil {
++		resp.BalanceVerified = true
++		resp.BalanceDelta = after - before
++	}
++	resp.RewardReceived = claimErr == nil && readErr == nil && resp.ReceiptRewardReported && resp.UpstreamClaimed && resp.BalanceVerified && resp.BalanceDelta == receipt.Credit
++	if resp.RewardReceived {
++		resp.Status = "reward_confirmed"
++		resp.OK = true
++	} else {
++		resp.Status = "claim_outcome_uncertain"
++	}
++	finish()
++}
++func (p *Panel) workflowTasks(ctx context.Context, a *auth.Auth) ([]upstream.Task, map[string]bool, error) {
++	read := func(mp bool) ([]upstream.Task, error) {
++		c, cancel := context.WithTimeout(ctx, 10*time.Second)
++		defer cancel()
++		return p.cfg.Upstream.WorkflowTasks(c, a, mp)
++	}
++	d, e := read(false)
++	if e != nil {
++		return nil, nil, e
++	}
++	m, e := read(true)
++	if e != nil {
++		return nil, nil, e
++	}
++	seen := map[string]upstream.Task{}
++	defaults := map[string]bool{}
++	for _, t := range d {
++		if _, exists := seen[t.TaskCode]; exists {
++			return nil, nil, errors.New("ambiguous tasks")
++		}
++		seen[t.TaskCode] = t
++		defaults[t.TaskCode] = true
++	}
++	for _, t := range m {
++		if old, exists := seen[t.TaskCode]; exists {
++			if old.Current != t.Current || old.Target != t.Target || old.Claimed != t.Claimed || old.Locked != t.Locked || old.Status != t.Status || old.AcceptStatus != t.AcceptStatus || old.Claimable != t.Claimable || old.RewardBuddy != t.RewardBuddy {
++				return nil, nil, errors.New("qualification conflict")
++			}
++		} else {
++			d = append(d, t)
++			seen[t.TaskCode] = t
++		}
++	}
++	return d, defaults, nil
++}
++func findWorkflowTask(ts []upstream.Task, code string) *upstream.Task {
++	for i := range ts {
++		if ts[i].TaskCode == code {
++			return &ts[i]
++		}
++	}
++	return nil
++}
++func workflowTaskRows(ts []upstream.Task, codes []string, defaults map[string]bool) []taskWorkflowTask {
++	want := map[string]bool{}
++	for _, code := range codes {
++		want[code] = true
++	}
++	out := []taskWorkflowTask{}
++	for _, t := range ts {
++		if len(codes) > 0 && !want[t.TaskCode] {
++			continue
++		}
++		row := taskWorkflowTask{TaskCode: t.TaskCode, Current: t.Current, Target: t.Target, CanClaim: defaults[t.TaskCode] && t.CanClaimReward() && !isMPTaskCode(t.TaskCode) && !t.RewardBuddy}
++		row.Channel = "mp"
++		if defaults[t.TaskCode] {
++			row.Channel = "default"
++		}
++		switch {
++		case t.Claimed:
++			row.Status = "already_claimed"
++			row.Reason = "already_claimed"
++		case t.IsInactive():
++			row.Status = "blocked"
++			row.Reason = "inactive_or_locked"
++		case t.RewardBuddy:
++			row.Status = "blocked"
++			row.Reason = "buddy_side_effect"
++		case t.Target <= 0 || t.Current < 0:
++			row.Status = "blocked"
++			row.Reason = "unknown_progress"
++		case !defaults[t.TaskCode] || isMPTaskCode(t.TaskCode):
++			row.Status = "blocked"
++			row.Reason = "channel_not_verified"
++		case t.TaskCode != "chat_5":
++			row.Status = "blocked"
++			row.Reason = "no_verified_executor"
++		case t.AcceptStatus != "accepted" && t.AcceptStatus != "in_progress" && t.AcceptStatus != "completed":
++			row.Status = "blocked"
++			row.Reason = "requires_enrollment"
++		case t.CanClaimReward():
++			row.Status = "ready_to_claim"
++			row.CanExecute = true
++		case t.Current >= t.Target:
++			row.Status = "blocked"
++			row.Reason = "qualification_unconfirmed"
++		default:
++			row.Status = "requires_paid_opt_in"
++			row.CanExecute = true
++		}
++		out = append(out, row)
++		delete(want, t.TaskCode)
++	}
++	for code := range want {
++		out = append(out, taskWorkflowTask{TaskCode: code, Status: "blocked", Reason: "missing_task"})
++	}
++	return out
++}
++func (p *Panel) workflowPlan(w http.ResponseWriter, r *http.Request, a *auth.Auth, q taskWorkflowRequest) {
++	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
++	defer cancel()
++	ts, defaults, e := p.workflowTasks(ctx, a)
++	if e != nil {
++		writeJSON(w, 200, taskWorkflowResponse{Support: "legacy_unverified", Status: "task_read_failed", Tasks: []taskWorkflowTask{}})
++		return
++	}
++	writeJSON(w, 200, taskWorkflowResponse{OK: true, Support: "legacy_unverified", Status: "planned", Tasks: workflowTaskRows(ts, q.TaskCodes, defaults)})
++}
+diff --git a/internal/panel/task_workflow_test.go b/internal/panel/task_workflow_test.go
+new file mode 100644
+index 0000000..71d7652
+--- /dev/null
++++ b/internal/panel/task_workflow_test.go
+@@ -0,0 +1,385 @@
++package panel
++
++import (
++	"context"
++	"encoding/json"
++	"errors"
++	"github.com/linguo2625469/workbuddy2api-panel/internal/auth"
++	"github.com/linguo2625469/workbuddy2api-panel/internal/pool"
++	"github.com/linguo2625469/workbuddy2api-panel/internal/upstream"
++	"io"
++	"net/http"
++	"net/http/httptest"
++	"os"
++	"strings"
++	"testing"
++	"time"
++)
++
++type realWorkflowRT struct {
++	t                                                       *testing.T
++	current, target, balance                                int64
++	advance, claimed, locked, mpOnly, conflict, readFailure bool
++	stream                                                  string
++	chats, claims, reads, balances                          int
++	stateAfterChat                                          string
++	dir, op                                                 string
++	claimMode                                               string
++	stopAfter                                               int
++	breakClaimJournal                                       bool
++}
++type contextFixtureBody struct {
++	io.Reader
++	ctx  context.Context
++	fail bool
++}
++
++func (b *contextFixtureBody) Read(p []byte) (int, error) {
++	if e := b.ctx.Err(); e != nil {
++		return 0, e
++	}
++	n, e := b.Reader.Read(p)
++	if e == io.EOF && b.fail {
++		return n, errors.New("private-fixture-secret")
++	}
++	return n, e
++}
++func (b *contextFixtureBody) Close() error { return nil }
++func (x *realWorkflowRT) response(r *http.Request, body string) *http.Response {
++	return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body)), Request: r}
++}
++func (x *realWorkflowRT) reservation(kind string, want int) {
++	if x.dir == "" {
++		return
++	}
++	j, e := readWorkflowJournal(workflowJournalPath(x.dir, "u", x.op))
++	if e != nil {
++		x.t.Fatal(e)
++	}
++	if j.State != "pending" {
++		x.t.Fatal("mutation before pending journal")
++	}
++	if kind == "chat" && j.Response.ChatCalls != want {
++		x.t.Fatalf("chat reservation=%d want%d", j.Response.ChatCalls, want)
++	}
++	if kind == "claim" && j.Response.ClaimAttempts != want {
++		x.t.Fatal("claim not durably reserved")
++	}
++}
++func (x *realWorkflowRT) RoundTrip(r *http.Request) (*http.Response, error) {
++	switch r.URL.Path {
++	case "/v2/activity/growth/tasks":
++		x.reads++
++		mp := r.Header.Get("X-Client-Platform") == "miniprogram"
++		rows := []any{}
++		if !x.mpOnly || mp {
++			cur := x.current
++			if x.conflict && mp {
++				cur++
++			}
++			status := "accepted"
++			if x.claimed {
++				status = "claimed"
++			}
++			state := ""
++			target := x.target
++			if x.chats > 0 {
++				switch x.stateAfterChat {
++				case "locked":
++					x.locked = true
++				case "expired":
++					state = "expired"
++				case "target":
++					target++
++				case "claimed":
++					status = "claimed"
++				}
++			}
++			rows = append(rows, map[string]any{"task_code": "chat_5", "progress": map[string]int64{"current": cur, "target": target}, "accept_status": status, "status": state, "locked": x.locked, "reward_credit": 100, "reward_energy": 5, "has_reward": true})
++		}
++		b, _ := json.Marshal(map[string]any{"code": 0, "data": map[string]any{"tasks": rows}})
++		return x.response(r, string(b)), nil
++	case "/v2/chat/completions":
++		x.reservation("chat", x.chats+1)
++		x.chats++
++		if x.advance && (x.stopAfter == 0 || x.chats <= x.stopAfter) {
++			x.current++
++		}
++		var raw map[string]any
++		b, _ := io.ReadAll(r.Body)
++		if json.Unmarshal(b, &raw) != nil || raw["max_tokens"] != float64(16) {
++			x.t.Fatal("missing token cap")
++		}
++		body := x.stream
++		if body == "" {
++			body = "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"OK\"}}]}\n\ndata: [DONE]\n\n"
++		}
++		return &http.Response{StatusCode: 200, Header: make(http.Header), Body: &contextFixtureBody{Reader: strings.NewReader(body), ctx: r.Context(), fail: x.readFailure}, Request: r}, nil
++	case "/activity/growth/tasks/chat_5/claim":
++		x.reservation("claim", 1)
++		x.claims++
++		if x.claimMode == "error" {
++			return x.response(r, `{"code":9,"message":"private-fixture-secret"}`), nil
++		}
++		x.claimed = x.claimMode != "not_claimed"
++		if x.claimMode != "no_balance" {
++			x.balance += 100
++		}
++		if x.claimMode == "empty" {
++			return x.response(r, `{"code":0,"data":{}}`), nil
++		}
++		return x.response(r, `{"code":0,"data":{"credit":100,"energy":5}}`), nil
++	case "/v2/billing/meter/get-user-resource":
++		x.balances++
++		b, _ := json.Marshal(map[string]any{"code": 0, "data": map[string]any{"Response": map[string]any{"Data": map[string]any{"Accounts": []any{map[string]any{"CapacitySize": 1000, "CapacityRemain": x.balance}}}}}})
++		if x.breakClaimJournal {
++			path := workflowJournalPath(x.dir, "u", x.op)
++			if e := os.Remove(path); e != nil {
++				x.t.Fatal(e)
++			}
++			if e := os.Mkdir(path, 0700); e != nil {
++				x.t.Fatal(e)
++			}
++		}
++		return x.response(r, string(b)), nil
++	default:
++		x.t.Fatalf("forbidden outbound %s %s", r.Method, r.URL.Path)
++		return nil, errors.New("forbidden")
++	}
++}
++func newRealWorkflowPanel(t *testing.T, x *realWorkflowRT) *Panel {
++	t.Helper()
++	old := workflowProgressGap
++	workflowProgressGap = 0
++	t.Cleanup(func() { workflowProgressGap = old })
++	x.t = t
++	x.target = 5
++	x.balance = 500
++	x.op = "operation_001"
++	x.dir = t.TempDir()
++	q := pool.New("")
++	t.Cleanup(q.Close)
++	q.Add(&auth.Auth{UID: "u", AccessToken: "fixture-token", ExpiresAt: time.Now().Add(time.Hour).Unix()})
++	c := upstream.New()
++	c.HTTP = &http.Client{Transport: x}
++	c.ChatHTTP = c.HTTP
++	c.ChatBaseCN = "https://chat.fixture"
++	c.BillingBaseCN = "https://billing.fixture"
++	c.WebBaseCN = "https://web.fixture"
++	return New(Config{Pool: q, Upstream: c, APIKey: "k", AuthDir: x.dir})
++}
++func workflowBody(op string) string {
++	b, _ := json.Marshal(taskWorkflowRequest{TaskCodes: []string{"chat_5"}, Execute: true, OperationID: op, Model: "deepseek-v4-flash", MaxChatCalls: 5, MaxOutputTokens: 16, ClaimRewards: true})
++	return string(b)
++}
++func callRealWorkflow(t *testing.T, p *Panel, body string) (int, taskWorkflowResponse) {
++	t.Helper()
++	r := httptest.NewRequest("POST", "/panel/api/accounts/u/tasks/workflow", strings.NewReader(body))
++	r.Header.Set("Authorization", "Bearer k")
++	w := httptest.NewRecorder()
++	p.ServeHTTP(w, r)
++	var out taskWorkflowResponse
++	_ = json.Unmarshal(w.Body.Bytes(), &out)
++	return w.Code, out
++}
++func TestRealWorkflowPlanAndValidationHaveNoMutation(t *testing.T) {
++	x := &realWorkflowRT{}
++	p := newRealWorkflowPanel(t, x)
++	code, r := callRealWorkflow(t, p, `{}`)
++	if code != 200 || r.Status != "planned" || !r.Tasks[0].CanExecute || x.chats+x.claims != 0 {
++		t.Fatalf("plan %d %+v", code, r)
++	}
++	if files, _ := os.ReadDir(x.dir); len(files) != 0 {
++		t.Fatal("plan created journal")
++	}
++	for _, body := range []string{`null`, `{"execute":null}`, `{"task_codes":["chat_5","chat_5"]}`, `{"execute":false,"execute":true}`, `{"other":1}`, `{"max_chat_calls":6}`, `{"max_output_tokens":null}`, `{"task_codes":[" chat_5"]}`, `{}{}`} {
++		before := x.reads
++		c, _ := callRealWorkflow(t, p, body)
++		if c != 400 || x.reads != before {
++			t.Fatalf("invalid request reached upstream %s code%d", body, c)
++		}
++	}
++	r0 := httptest.NewRequest("POST", "/panel/api/accounts/u/tasks/workflow", strings.NewReader("{}"))
++	w := httptest.NewRecorder()
++	p.ServeHTTP(w, r0)
++	if w.Code != 401 {
++		t.Fatal("missing endpoint auth")
++	}
++}
++func TestRealWorkflowProgressClaimAndReplay(t *testing.T) {
++	x := &realWorkflowRT{advance: true}
++	p := newRealWorkflowPanel(t, x)
++	code, r := callRealWorkflow(t, p, workflowBody(x.op))
++	if code != 200 || r.Status != "reward_confirmed" || !r.RewardReceived || !r.UpstreamClaimed || !r.ReceiptRewardReported || !r.BalanceVerified || r.ChatCalls != 5 || r.ClaimAttempts != 1 || r.BalanceDelta != 100 || r.ProgressAfter != 5 || x.chats != 5 || x.claims != 1 {
++		t.Fatalf("result %d %+v chats%d claims%d", code, r, x.chats, x.claims)
++	}
++	before := x.reads + x.chats + x.claims + x.balances
++	c, again := callRealWorkflow(t, p, workflowBody(x.op))
++	if c != 200 || !again.RewardReceived || x.reads+x.chats+x.claims+x.balances != before {
++		t.Fatal("replay repeated outbound")
++	}
++	c, _ = callRealWorkflow(t, p, strings.Replace(workflowBody(x.op), `"max_chat_calls":5`, `"max_chat_calls":4`, 1))
++	if c != 409 {
++		t.Fatal("digest mismatch allowed")
++	}
++}
++func TestRealWorkflowStopsAfterUncountedOrFailedChat(t *testing.T) {
++	for _, kind := range []string{"no_progress", "error", "read_error", "locked", "expired", "target", "claimed"} {
++		t.Run(kind, func(t *testing.T) {
++			x := &realWorkflowRT{advance: kind != "no_progress"}
++			p := newRealWorkflowPanel(t, x)
++			switch kind {
++			case "error":
++				x.stream = "data: {\"error\":{\"message\":\"private-fixture-secret\"}}\n\n"
++			case "read_error":
++				x.readFailure = true
++			case "locked", "expired", "target", "claimed":
++				x.stateAfterChat = kind
++			}
++			c, r := callRealWorkflow(t, p, workflowBody(x.op))
++			if c != 200 || r.OK || r.RewardReceived || x.chats != 1 || x.claims != 0 {
++				t.Fatalf("%s result%d %+v chats%d claim%d", kind, c, r, x.chats, x.claims)
++			}
++			if kind == "no_progress" && (r.Status != "unconfirmed" || x.reads != 6) {
++				t.Fatalf("expected two polls %+v reads%d", r, x.reads)
++			}
++			if strings.Contains(string(mustWorkflowJSON(t, r)), "private-fixture-secret") {
++				t.Fatal("error leaked")
++			}
++			before := x.reads
++			c, _ = callRealWorkflow(t, p, workflowBody(x.op))
++			if c != 200 || x.chats != 1 || x.reads != before {
++				t.Fatal("failed terminal replay repeated activity")
++			}
++		})
++	}
++}
++func mustWorkflowJSON(t *testing.T, v any) []byte {
++	t.Helper()
++	b, e := json.Marshal(v)
++	if e != nil {
++		t.Fatal(e)
++	}
++	return b
++}
++func TestRealWorkflowBlockedAndReadyDoNotChat(t *testing.T) {
++	for _, kind := range []string{"mp_only", "conflict", "locked", "already_claimed", "ready"} {
++		t.Run(kind, func(t *testing.T) {
++			x := &realWorkflowRT{}
++			p := newRealWorkflowPanel(t, x)
++			switch kind {
++			case "mp_only":
++				x.mpOnly = true
++			case "conflict":
++				x.conflict = true
++			case "locked":
++				x.locked = true
++			case "already_claimed":
++				x.claimed = true
++				x.current = 5
++			case "ready":
++				x.current = 5
++			}
++			_, r := callRealWorkflow(t, p, workflowBody(x.op))
++			if x.chats != 0 {
++				t.Fatal("blocked/ready task consumed chat")
++			}
++			if kind == "ready" {
++				if x.claims != 1 || !r.RewardReceived {
++					t.Fatalf("ready %+v", r)
++				}
++			} else if x.claims != 0 || r.RewardReceived {
++				t.Fatalf("blocked task claimed %+v", r)
++			}
++		})
++	}
++}
++func TestRealWorkflowPendingPersistenceAndCancelledContext(t *testing.T) {
++	x := &realWorkflowRT{}
++	p := newRealWorkflowPanel(t, x)
++	dir := p.cfg.AuthDir
++	p.cfg.AuthDir = dir + "/file"
++	if e := os.WriteFile(p.cfg.AuthDir, []byte("x"), 0600); e != nil {
++		t.Fatal(e)
++	}
++	c, _ := callRealWorkflow(t, p, workflowBody(x.op))
++	if c != 409 || x.chats+x.claims+x.reads != 0 {
++		t.Fatal("unavailable storage reached upstream")
++	}
++	p.cfg.AuthDir = dir
++	path := workflowJournalPath(dir, "u", x.op)
++	if e := os.MkdirAll(dir+"/task-workflows", 0700); e != nil {
++		t.Fatal(e)
++	}
++	var req taskWorkflowRequest
++	_ = json.Unmarshal([]byte(workflowBody(x.op)), &req)
++	if e := writeWorkflowJournal(path, workflowJournal{Digest: workflowDigest(req), State: "pending"}); e != nil {
++		t.Fatal(e)
++	}
++	c, _ = callRealWorkflow(t, p, workflowBody(x.op))
++	if c != 409 || x.chats+x.claims+x.reads != 0 {
++		t.Fatal("pending op repeated")
++	}
++	ctx, cancel := context.WithCancel(context.Background())
++	cancel()
++	r := httptest.NewRequest("POST", "/panel/api/accounts/u/tasks/workflow", strings.NewReader(workflowBody("operation_002"))).WithContext(ctx)
++	r.Header.Set("Authorization", "Bearer k")
++	w := httptest.NewRecorder()
++	p.ServeHTTP(w, r)
++	if x.chats+x.claims+x.reads != 0 {
++		t.Fatal("cancelled request reached transport")
++	}
++}
++func TestRealWorkflowClaimReservationFailureMakesNoClaim(t *testing.T) {
++	x := &realWorkflowRT{current: 5, breakClaimJournal: true}
++	p := newRealWorkflowPanel(t, x)
++	c, r := callRealWorkflow(t, p, workflowBody(x.op))
++	if c != 503 || r.Status != "journal_write_failed" || x.claims+x.chats != 0 {
++		t.Fatalf("claim on failed reservation code%d %+v", c, r)
++	}
++}
++
++func TestRealWorkflowBudgetAndPerStepGrowth(t *testing.T) {
++	for _, kind := range []string{"budget", "stall_after_growth", "no_claim_opt_in"} {
++		t.Run(kind, func(t *testing.T) {
++			x := &realWorkflowRT{advance: true}
++			p := newRealWorkflowPanel(t, x)
++			body := workflowBody(x.op)
++			wantChats, wantProgress, wantStatus := 2, int64(2), "budget_exhausted"
++			switch kind {
++			case "budget":
++				body = strings.Replace(body, `"max_chat_calls":5`, `"max_chat_calls":2`, 1)
++			case "stall_after_growth":
++				x.stopAfter = 1
++				wantProgress = 1
++				wantStatus = "unconfirmed"
++			case "no_claim_opt_in":
++				body = strings.Replace(body, `"claim_rewards":true`, `"claim_rewards":false`, 1)
++				wantChats = 5
++				wantProgress = 5
++				wantStatus = "ready_to_claim"
++			}
++			code, r := callRealWorkflow(t, p, body)
++			if code != 200 || r.Status != wantStatus || x.chats != wantChats || x.claims != 0 || r.ProgressAfter != wantProgress || r.RewardReceived {
++				t.Fatalf("%d %+v chats%d claims%d", code, r, x.chats, x.claims)
++			}
++		})
++	}
++}
++func TestRealWorkflowUncertainClaimNeverReportsReward(t *testing.T) {
++	for _, kind := range []string{"error", "empty", "not_claimed", "no_balance"} {
++		t.Run(kind, func(t *testing.T) {
++			x := &realWorkflowRT{current: 5, claimMode: kind}
++			p := newRealWorkflowPanel(t, x)
++			code, r := callRealWorkflow(t, p, workflowBody(x.op))
++			if code != 200 || r.RewardReceived || r.OK || r.Status != "claim_outcome_uncertain" || x.claims != 1 || x.chats != 0 || x.balances != 2 {
++				t.Fatalf("%d %+v claims%d balances%d", code, r, x.claims, x.balances)
++			}
++			before := x.reads + x.balances + x.claims
++			callRealWorkflow(t, p, workflowBody(x.op))
++			if x.reads+x.balances+x.claims != before {
++				t.Fatal("uncertain claim repeated")
++			}
++		})
++	}
++}
+diff --git a/internal/panel/task_workflow_ui_test.go b/internal/panel/task_workflow_ui_test.go
+new file mode 100644
+index 0000000..11635c9
+--- /dev/null
++++ b/internal/panel/task_workflow_ui_test.go
+@@ -0,0 +1,55 @@
++package panel
++
++import (
++	"os"
++	"os/exec"
++	"path/filepath"
++	"runtime"
++	"strings"
++	"testing"
++)
++
++func TestTaskWorkflowUIBoundariesAndResultTruth(t *testing.T) {
++	node, err := exec.LookPath("node")
++	if err != nil {
++		t.Skip("node not installed")
++	}
++	_, file, _, _ := runtime.Caller(0)
++	src := filepath.Join(filepath.Dir(file), "app.js")
++	script := `(async()=>{const fs=require('fs'),vm=require('vm'),assert=require('assert');const src=fs.readFileSync(process.argv[2],'utf8');
++const a=src.indexOf('/* TASK_WORKFLOW_UI_START'),b=src.indexOf('/* TASK_WORKFLOW_UI_END */')+'/* TASK_WORKFLOW_UI_END */'.length;
++function harness({prompts=['deepseek-v4-flash','1'],confirms=[true,true],hook}={}) {
++ const calls=[],notices=[],btn={disabled:false,textContent:'run'},state={hidden:true,textContent:''};let confirmCount=0,loads=0;
++ const body={addEventListener:()=>{},querySelectorAll:()=>[]};
++ const ctx={crypto:{randomUUID:()=> '12345678-1234-4234-8234-123456789abc'},Date,Math,Number,String,JSON,encodeURIComponent,
++  $:id=>id==='taskBody'?body:id==='taskState'?state:btn,prompt:()=>prompts.shift(),confirm:()=>{confirmCount++;return confirms.shift()===true},
++  toast:(...v)=>notices.push(v),loadTasks:async()=>{loads++},api:async(path,opts)=>{const req={path,body:JSON.parse(opts.body)};calls.push(req);
++   if(hook)return hook(req,ctx,calls);
++   return req.body.execute?{status:'chat_failed',chat_calls:1}:{ok:true,tasks:[{task_code:'chat_5',can_execute:true}]};}};
++ vm.createContext(ctx);vm.runInContext("let taskUID='fixture',taskWorkflowPending=false;"+src.slice(a,b),ctx);
++ return {ctx,calls,btn,state,notices,get confirms(){return confirmCount},get loads(){return loads},run:()=>ctx.workflowExecute({task_code:'chat_5'},btn)};
++}
++for(const invalid of ['6','0','1.5','abc']){const h=harness({prompts:['deepseek-v4-flash',invalid]});await h.run();assert.equal(h.calls.length,1);assert(!h.calls[0].body.execute);assert.equal(h.confirms,0)}
++{const h=harness({confirms:[false]});await h.run();assert.equal(h.calls.length,1);assert.equal(h.confirms,1);assert(!h.btn.disabled)}
++{const h=harness({confirms:[true,false]});await h.run();assert.equal(h.calls.length,2);const req=h.calls[1].body;assert(req.execute);assert.equal(req.max_output_tokens,16);assert.equal(req.max_chat_calls,1);assert.equal(req.claim_rewards,false);assert(/^[A-Za-z0-9_-]{8,64}$/.test(req.operation_id));assert.equal(h.confirms,2);assert.equal(h.loads,1)}
++{const h=harness({confirms:[true,true]});await h.run();assert.equal(h.calls[1].body.claim_rewards,true)}
++{const h=harness();await h.ctx.workflowCheck();assert.deepEqual(h.calls[0].body,{});assert.equal(h.confirms,0)}
++{let release;const wait=new Promise(r=>release=r);const h=harness({hook:async(req)=>{await wait;return {ok:true,tasks:[{task_code:'chat_5',can_execute:true}]}}});const first=h.run();await h.run();assert.equal(h.calls.length,1);vm.runInContext("taskUID='different'",h.ctx);release();await first;assert.equal(h.calls.length,1);assert.equal(h.confirms,0);assert.equal(h.loads,0)}
++{const h=harness({hook:async(req)=>{if(req.body.execute)throw Error('network');return {ok:true,tasks:[{task_code:'chat_5',can_execute:true}]}}});await h.run();assert.equal(h.calls.length,2);const original=JSON.stringify(h.calls[1]);await h.run();assert.equal(h.calls.length,3);assert.equal(JSON.stringify(h.calls[2]),original);assert.equal(h.confirms,2);assert.equal(h.btn.textContent,'核对上次执行')}
++{const h=harness();const f=h.ctx.workflowResultText;
++ assert.equal(f({status:'planned'}),'仅完成条件检查，未执行');assert(f({status:'chat_failed'}).includes('对话未确认成功'));
++ for(const missing of ['reward_received','receipt_reward_reported','upstream_claimed','balance_verified']){const r={status:'claim_outcome_uncertain',reward_received:true,receipt_reward_reported:true,upstream_claimed:true,balance_verified:true};r[missing]=false;assert(!f(r).includes('已确认到账'))}
++ assert(f({status:'reward_confirmed',reward_received:true,receipt_reward_reported:true,upstream_claimed:true,balance_verified:true}).includes('已确认到账'));
++}
++process.stdout.write('ok');})().catch(e=>{console.error(e);process.exit(1)});`
++
++	tmp := filepath.Join(t.TempDir(), "workflow.cjs")
++	if err := os.WriteFile(tmp, []byte(script), 0600); err != nil {
++		t.Fatal(err)
++	}
++	cmd := exec.Command(node, tmp, src)
++	out, err := cmd.CombinedOutput()
++	if err != nil || strings.TrimSpace(string(out)) != "ok" {
++		t.Fatalf("workflow UI harness failed: %v output=%s", err, out)
++	}
++}
+diff --git a/internal/upstream/task_workflow.go b/internal/upstream/task_workflow.go
+new file mode 100644
+index 0000000..c8e06a3
+--- /dev/null
++++ b/internal/upstream/task_workflow.go
+@@ -0,0 +1,444 @@
++package upstream
++
++import (
++	"bytes"
++	"context"
++	"encoding/json"
++	"errors"
++	"io"
++	"math"
++	"net/http"
++	"net/url"
++	"strings"
++	"unicode"
++
++	"github.com/linguo2625469/workbuddy2api-panel/internal/auth"
++)
++
++const workflowMaxBody = 1 << 20
++
++func workflowUnsupported(a *auth.Auth) error {
++	if a == nil || a.IsEnterprise() || a.IsGlobal() || strings.TrimSpace(a.UID) == "" || strings.TrimSpace(a.AccessTokenValue()) == "" || a.NeedsRefresh(0) {
++		return errors.New("workflow supports domestic personal accounts only")
++	}
++	return nil
++}
++func workflowContext(ctx context.Context) context.Context {
++	if ctx == nil {
++		return context.Background()
++	}
++	return ctx
++}
++func workflowPreflight(ctx context.Context, a *auth.Auth) error {
++	ctx = workflowContext(ctx)
++	if err := ctx.Err(); err != nil {
++		return err
++	}
++	return workflowUnsupported(a)
++}
++
++// WorkflowTasks is the context-bound, single-request task listing used by the panel.
++func (c *Client) WorkflowTasks(ctx context.Context, a *auth.Auth, mp bool) ([]Task, error) {
++	ctx = workflowContext(ctx)
++	if err := workflowPreflight(ctx, a); err != nil {
++		return nil, err
++	}
++	path := tasksListPath
++	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.chatBase(a)+path, nil)
++	if err != nil {
++		return nil, errors.New("workflow request construction failed")
++	}
++	c.BillingHeaders(req, a)
++	if mp {
++		req.Header.Set("X-Client-Platform", mpPlatform)
++	}
++	data, err := c.workflowJSON(req)
++	if err != nil {
++		return nil, err
++	}
++	var top struct {
++		Tasks []json.RawMessage `json:"tasks"`
++	}
++	if err := strictUnmarshal(data, &top); err != nil || top.Tasks == nil {
++		return nil, errors.New("workflow task schema invalid")
++	}
++	validProgress := make([]bool, len(top.Tasks))
++	seen := make(map[string]struct{}, len(top.Tasks))
++	for i, raw := range top.Tasks {
++		var obj map[string]json.RawMessage
++		if err := strictObject(raw, &obj); err != nil {
++			return nil, errors.New("workflow task schema invalid")
++		}
++		var code string
++		v, ok := obj["task_code"]
++		if !ok || json.Unmarshal(v, &code) != nil || strings.TrimSpace(code) == "" {
++			return nil, errors.New("workflow task schema invalid")
++		}
++		if _, ok := seen[code]; ok {
++			return nil, errors.New("workflow task schema invalid")
++		}
++		seen[code] = struct{}{}
++		for _, key := range []string{"locked", "reward_buddy", "has_reward"} {
++			if v, ok := obj[key]; ok {
++				var x *bool
++				if json.Unmarshal(v, &x) != nil || x == nil {
++					return nil, errors.New("workflow task schema invalid")
++				}
++			}
++		}
++		if v, ok := obj["status"]; ok {
++			var x *string
++			if json.Unmarshal(v, &x) != nil || x == nil {
++				return nil, errors.New("workflow task schema invalid")
++			}
++		}
++		if nested, ok := obj["progress"]; ok {
++			pr, good := parseProgress(nested)
++			validProgress[i] = good && len(pr) == 2
++		} else {
++			var current, target *int64
++			ce := json.Unmarshal(obj["current"], &current)
++			te := json.Unmarshal(obj["target"], &target)
++			validProgress[i] = ce == nil && te == nil && current != nil && target != nil && *current >= 0 && *target >= 0
++		}
++	}
++	tasks, err := parseGrowthTasks(data)
++	if err != nil {
++		return nil, errors.New("workflow task schema invalid")
++	}
++	for i := range tasks {
++		if !validProgress[i] {
++			tasks[i].Current, tasks[i].Target, tasks[i].Claimable = 0, 0, false
++		}
++	}
++	return tasks, nil
++}
++
++// WorkflowBalance returns the SDK-normalized sum of personal resource remains.
++func (c *Client) WorkflowBalance(ctx context.Context, a *auth.Auth) (int64, error) {
++	ctx = workflowContext(ctx)
++	if err := workflowPreflight(ctx, a); err != nil {
++		return 0, err
++	}
++	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.billingBase(a)+billingMeterPathV2, bytes.NewReader([]byte(`{}`)))
++	if err != nil {
++		return 0, errors.New("workflow request construction failed")
++	}
++	c.BillingHeaders(req, a)
++	data, err := c.workflowJSON(req)
++	if err != nil {
++		return 0, err
++	}
++	var root map[string]json.RawMessage
++	if err := strictObject(data, &root); err != nil {
++		return 0, errors.New("workflow balance schema invalid")
++	}
++	respRaw, ok := root["Response"]
++	if !ok {
++		return 0, errors.New("workflow balance schema invalid")
++	}
++	var resp map[string]json.RawMessage
++	if err := strictObject(respRaw, &resp); err != nil {
++		return 0, errors.New("workflow balance schema invalid")
++	}
++	dRaw, ok := resp["Data"]
++	if !ok {
++		return 0, errors.New("workflow balance schema invalid")
++	}
++	var dat map[string]json.RawMessage
++	if err := strictObject(dRaw, &dat); err != nil {
++		return 0, errors.New("workflow balance schema invalid")
++	}
++	aRaw, ok := dat["Accounts"]
++	if !ok || string(aRaw) == "null" {
++		return 0, errors.New("workflow balance schema invalid")
++	}
++	var accounts []json.RawMessage
++	if err := strictUnmarshal(aRaw, &accounts); err != nil || len(accounts) == 0 {
++		return 0, errors.New("workflow balance schema invalid")
++	}
++	var total int64
++	for _, ar := range accounts {
++		var m map[string]json.RawMessage
++		if err := strictObject(ar, &m); err != nil {
++			return 0, errors.New("workflow balance schema invalid")
++		}
++		vals := make(map[string]int64)
++		for _, k := range []string{"CycleCapacitySize", "CycleCapacityRemain", "CycleCapacityUsed", "CapacitySize", "CapacityRemain", "CapacityUsed"} {
++			raw, ok := m[k]
++			if !ok {
++				continue
++			}
++			if string(raw) == "null" {
++				return 0, errors.New("workflow balance schema invalid")
++			}
++			var n int64
++			if err := json.Unmarshal(raw, &n); err != nil || n < 0 {
++				return 0, errors.New("workflow balance schema invalid")
++			}
++			vals[k] = n
++		}
++		var acc respAccount
++		acc.CycleCapacitySize, acc.CycleCapacityRemain, acc.CycleCapacityUsed = vals["CycleCapacitySize"], vals["CycleCapacityRemain"], vals["CycleCapacityUsed"]
++		acc.CapacitySize, acc.CapacityRemain, acc.CapacityUsed = vals["CapacitySize"], vals["CapacityRemain"], vals["CapacityUsed"]
++		if n, ok := vals["CycleCapacitySize"]; ok && n > 0 {
++			if _, present := vals["CycleCapacityRemain"]; !present {
++				return 0, errors.New("workflow balance schema invalid")
++			}
++		} else if _, ok := vals["CapacityRemain"]; !ok {
++			return 0, errors.New("workflow balance schema invalid")
++		}
++		r, _, size := packageRemainUsed(acc)
++		if r < 0 {
++			r = 0
++		}
++		if size < r {
++			size = r
++		}
++		if r > math.MaxInt64-total {
++			return 0, errors.New("workflow balance overflow")
++		}
++		total += r
++		_ = size
++	}
++	return total, nil
++}
++
++// WorkflowClaim performs only the default web claim endpoint; it never falls back.
++func (c *Client) WorkflowClaim(ctx context.Context, a *auth.Auth, taskCode string) (ClaimReceipt, error) {
++	ctx = workflowContext(ctx)
++	if err := workflowPreflight(ctx, a); err != nil {
++		return ClaimReceipt{}, err
++	}
++	if taskCode == "" || strings.TrimSpace(taskCode) != taskCode || strings.Contains(taskCode, "%") || strings.ContainsAny(taskCode, "/?#") {
++		return ClaimReceipt{}, errors.New("invalid task code")
++	}
++	for _, r := range taskCode {
++		if unicode.IsControl(r) {
++			return ClaimReceipt{}, errors.New("invalid task code")
++		}
++	}
++	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.webBase(a)+"/activity/growth/tasks/"+url.PathEscape(taskCode)+"/claim", nil)
++	if err != nil {
++		return ClaimReceipt{}, errors.New("workflow request construction failed")
++	}
++	req.Header.Set("Authorization", "Bearer "+a.AccessTokenValue())
++	req.Header.Set("Accept", "application/json, text/plain, */*")
++	req.Header.Set("Content-Type", "application/json")
++	req.Header.Set("Origin", "https://www.workbuddy.cn")
++	req.Header.Set("Referer", "https://www.workbuddy.cn/profile/growth-center")
++	req.Header.Set("x-client-platform", "web")
++	if ua := c.userAgent(a); ua != "" {
++		req.Header.Set("User-Agent", ua)
++	}
++	if a.UID != "" {
++		req.Header.Set("X-User-Id", a.UID)
++	}
++	if a.EnterpriseID != "" {
++		req.Header.Set("X-Enterprise-Id", a.EnterpriseID)
++		req.Header.Set("X-Tenant-Id", a.EnterpriseID)
++	}
++	if d := a.DomainValue(); d != "" {
++		req.Header.Set("X-Domain", d)
++	}
++	data, err := c.doClaimJSON(req)
++	if err != nil {
++		return ClaimReceipt{}, sanitizeWorkflowErr(ctx, err)
++	}
++	return parseClaimRewardReceipt(data)
++}
++
++func (c *Client) workflowJSON(req *http.Request) (json.RawMessage, error) {
++	if c.HTTP == nil {
++		return nil, errors.New("workflow http client unavailable")
++	}
++	hc := *c.HTTP
++	hc.CheckRedirect = func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }
++	resp, err := hc.Do(req)
++	if err != nil {
++		return nil, sanitizeWorkflowErr(req.Context(), err)
++	}
++	defer resp.Body.Close()
++	raw, err := io.ReadAll(io.LimitReader(resp.Body, workflowMaxBody+1))
++	if err != nil {
++		return nil, errors.New("workflow response unreadable")
++	}
++	if len(raw) > workflowMaxBody {
++		return nil, errors.New("workflow response too large")
++	}
++	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
++		return nil, &Error{Kind: Classify(resp.StatusCode, string(raw)), Status: resp.StatusCode, Msg: "workflow upstream request failed"}
++	}
++	var env map[string]json.RawMessage
++	if err := strictObject(raw, &env); err != nil {
++		return nil, errors.New("workflow response schema invalid")
++	}
++	cr, ok := env["code"]
++	if !ok {
++		return nil, errors.New("workflow response schema invalid")
++	}
++	var code *int64
++	if json.Unmarshal(cr, &code) != nil || code == nil {
++		return nil, errors.New("workflow response schema invalid")
++	}
++	if *code != 0 {
++		return nil, &Error{Kind: ErrClient, Status: resp.StatusCode, Msg: "workflow upstream request failed"}
++	}
++	d, ok := env["data"]
++	if !ok {
++		return nil, errors.New("workflow response schema invalid")
++	}
++	return d, nil
++}
++
++func strictObject(raw []byte, out *map[string]json.RawMessage) error {
++	dec := json.NewDecoder(bytes.NewReader(raw))
++	tok, err := dec.Token()
++	if err != nil {
++		return err
++	}
++	if d, ok := tok.(json.Delim); !ok || d != '{' {
++		return errors.New("object required")
++	}
++	m := map[string]json.RawMessage{}
++	for dec.More() {
++		k, err := dec.Token()
++		if err != nil {
++			return err
++		}
++		key, ok := k.(string)
++		if !ok {
++			return errors.New("key required")
++		}
++		if _, ok := m[key]; ok {
++			return errors.New("duplicate key")
++		}
++		var v json.RawMessage
++		if err := dec.Decode(&v); err != nil {
++			return err
++		}
++		m[key] = v
++	}
++	if _, err := dec.Token(); err != nil {
++		return err
++	}
++	var extra any
++	if err := dec.Decode(&extra); err != io.EOF {
++		return errors.New("trailing data")
++	}
++	*out = m
++	return nil
++}
++func strictUnmarshal(raw []byte, v any) error {
++	if err := validateStrictJSON(raw); err != nil {
++		return err
++	}
++	return json.Unmarshal(raw, v)
++}
++
++func validateStrictJSON(raw []byte) error {
++	dec := json.NewDecoder(bytes.NewReader(raw))
++	if err := validateStrictValue(dec); err != nil {
++		return err
++	}
++	var extra any
++	if err := dec.Decode(&extra); err != io.EOF {
++		return errors.New("trailing data")
++	}
++	return nil
++}
++
++func validateStrictValue(dec *json.Decoder) error {
++	t, err := dec.Token()
++	if err != nil {
++		return err
++	}
++	d, ok := t.(json.Delim)
++	if !ok {
++		return nil
++	}
++	switch d {
++	case '{':
++		seen := map[string]struct{}{}
++		for dec.More() {
++			k, err := dec.Token()
++			if err != nil {
++				return err
++			}
++			key, ok := k.(string)
++			if !ok {
++				return errors.New("invalid key")
++			}
++			if _, exists := seen[key]; exists {
++				return errors.New("duplicate key")
++			}
++			seen[key] = struct{}{}
++			if err := validateStrictValue(dec); err != nil {
++				return err
++			}
++		}
++		_, err = dec.Token()
++		return err
++	case '[':
++		for dec.More() {
++			if err := validateStrictValue(dec); err != nil {
++				return err
++			}
++		}
++		_, err = dec.Token()
++		return err
++	default:
++		return errors.New("invalid json delimiter")
++	}
++}
++func sanitizeWorkflowErr(ctx context.Context, err error) error {
++	if ctx != nil && ctx.Err() != nil {
++		return ctx.Err()
++	}
++	var ue *Error
++	if errors.As(err, &ue) {
++		return &Error{Kind: ue.Kind, Status: ue.Status, Msg: "workflow upstream request failed"}
++	}
++	return errors.New("workflow upstream request failed")
++}
++
++// WorkflowChat performs the bounded coordinator probe without sharing redirect
++// policy or mutating the ordinary chat client.
++func (c *Client) WorkflowChat(ctx context.Context, a *auth.Auth, model string, maxTokens int) (io.ReadCloser, int, error) {
++	ctx = workflowContext(ctx)
++	if err := workflowPreflight(ctx, a); err != nil {
++		return nil, 0, err
++	}
++	if maxTokens < 1 || maxTokens > 64 || strings.TrimSpace(model) == "" {
++		return nil, 0, errors.New("invalid workflow chat parameters")
++	}
++	body, err := json.Marshal(map[string]any{
++		"model": model, "messages": []map[string]string{{"role": "user", "content": "Reply only OK."}},
++		"stream": true, "max_tokens": maxTokens, "thinking": map[string]string{"type": "disabled"},
++		"enable_thinking": false, "stream_options": map[string]bool{"include_usage": true},
++	})
++	if err != nil {
++		return nil, 0, errors.New("workflow request construction failed")
++	}
++	prepared := c.prepareBody(body, a.Realm(), a.UID, "")
++	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.chatBase(a)+chatCompletionsPath, bytes.NewReader(prepared))
++	if err != nil {
++		return nil, 0, errors.New("workflow request construction failed")
++	}
++	c.ChatHeaders(req, a, "", ChatMeta{})
++	httpClient := c.chatHTTP()
++	if httpClient == nil {
++		return nil, 0, errors.New("workflow http client unavailable")
++	}
++	hc := *httpClient
++	hc.CheckRedirect = func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }
++	resp, err := hc.Do(req)
++	if err != nil {
++		return nil, 0, sanitizeWorkflowErr(req.Context(), err)
++	}
++	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
++		resp.Body.Close()
++		return nil, resp.StatusCode, &Error{Kind: Classify(resp.StatusCode, ""), Status: resp.StatusCode, Msg: "workflow upstream request failed"}
++	}
++	return resp.Body, resp.StatusCode, nil
++}
+diff --git a/internal/upstream/task_workflow_test.go b/internal/upstream/task_workflow_test.go
+new file mode 100644
+index 0000000..efbbb9f
+--- /dev/null
++++ b/internal/upstream/task_workflow_test.go
+@@ -0,0 +1,216 @@
++package upstream
++
++import (
++	"context"
++	"errors"
++	"io"
++	"net/http"
++	"net/url"
++	"strings"
++	"sync/atomic"
++	"testing"
++	"time"
++
++	"github.com/linguo2625469/workbuddy2api-panel/internal/auth"
++)
++
++type workflowFixtureRT struct {
++	status      int
++	body        string
++	location    string
++	n           atomic.Int32
++	last        atomic.Pointer[http.Request]
++	requestBody atomic.Pointer[string]
++}
++
++func (f *workflowFixtureRT) RoundTrip(r *http.Request) (*http.Response, error) {
++	f.n.Add(1)
++	f.last.Store(r.Clone(r.Context()))
++	if r.Body != nil {
++		b, _ := io.ReadAll(r.Body)
++		s := string(b)
++		f.requestBody.Store(&s)
++	}
++	h := make(http.Header)
++	if f.location != "" {
++		h.Set("Location", f.location)
++	}
++	return &http.Response{StatusCode: f.status, Header: h, Body: io.NopCloser(strings.NewReader(f.body)), Request: r}, nil
++}
++func workflowFixtureClient(rt http.RoundTripper) (*Client, *auth.Auth, *http.Client) {
++	hc := &http.Client{Transport: rt, Timeout: 3 * time.Second}
++	c := &Client{HTTP: hc, ChatHTTP: hc, ChatBaseCN: "https://chat.fixture", BillingBaseCN: "https://billing.fixture", WebBaseCN: "https://web.fixture", UserAgent: "fixture-agent"}
++	a := &auth.Auth{AccessToken: "fixture-token", UID: "fixture-uid", Domain: "www.codebuddy.cn", ExpiresAt: time.Now().Add(time.Hour).Unix()}
++	return c, a, hc
++}
++func TestWorkflowTasksFixtureSchemaMPProgressAndTransportPolicy(t *testing.T) {
++	rt := &workflowFixtureRT{status: 200, body: `{"code":0,"data":{"tasks":[{"task_code":"chat","task_type":"single","reward_credit":3,"progress":{"current":2,"target":2},"current":0,"target":99},{"task_code":"flat","task_type":"daily","current":1,"target":3}]}}`}
++	c, a, hc := workflowFixtureClient(rt)
++	sentinel := errors.New("sentinel redirect")
++	hc.CheckRedirect = func(*http.Request, []*http.Request) error { return sentinel }
++	jar := &workflowFixtureJar{}
++	hc.Jar = jar
++	got, err := c.WorkflowTasks(context.Background(), a, true)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if len(got) != 2 || got[0].Current != 2 || got[0].Target != 2 || got[0].TaskType != "single" || !got[0].Claimable {
++		t.Fatalf("tasks=%+v", got)
++	}
++	req := rt.last.Load()
++	if req == nil || req.Method != "GET" || req.URL.Path != tasksListPath || req.Header.Get("X-Client-Platform") != mpPlatform || req.Header.Get("Authorization") != "Bearer fixture-token" || req.Header.Get("X-User-Id") != "fixture-uid" {
++		t.Fatalf("request=%v headers=%v", req, req.Header)
++	}
++	if rt.n.Load() != 1 || hc.Transport != rt || hc.Jar != http.CookieJar(jar) || hc.Timeout != 3*time.Second || hc.CheckRedirect(nil, nil) != sentinel {
++		t.Fatal("HTTP client mutated or retried")
++	}
++	for _, body := range []string{`{"code":0,"data":{"tasks":[{"task_code":"x"},{"task_code":"x"}]}}`, `{"code":null,"data":{"tasks":[]}}`, `{"code":"0","data":{"tasks":[]}}`, `{"code":0,"data":{"tasks":null}}`, `{"code":0,"data":{"tasks":[]}} trailing`, `{"code":0,"code":0,"data":{"tasks":[]}}`, `{"code":0,"data":{"tasks":[{"progress":{"current":1}}]}}`, `{"code":0,"data":{"tasks":[{"task_code":"x"}]}}` + strings.Repeat("x", workflowMaxBody)} {
++
++		rt.body = body
++		if _, err := c.WorkflowTasks(context.Background(), a, false); err == nil {
++			t.Errorf("accepted malformed task fixture %q", body)
++		}
++	}
++	expired := &auth.Auth{AccessToken: a.AccessToken, UID: a.UID, Domain: a.Domain, ExpiresAt: time.Now().Add(-time.Hour).Unix()}
++	rt.body = `{"code":0,"data":{"tasks":[]}}`
++	if _, err := c.WorkflowTasks(context.Background(), expired, false); err == nil {
++		t.Error("expired auth accepted")
++	}
++	for name, bad := range map[string]*auth.Auth{"missing-token": {UID: a.UID, Domain: a.Domain, ExpiresAt: a.ExpiresAt}, "missing-uid": {AccessToken: a.AccessToken, Domain: a.Domain, ExpiresAt: a.ExpiresAt}, "unknown-expiry": {AccessToken: a.AccessToken, UID: a.UID, Domain: a.Domain}} {
++		t.Run(name, func(t *testing.T) {
++			rt.n.Store(0)
++			if _, err := c.WorkflowTasks(context.Background(), bad, false); err == nil {
++				t.Errorf("invalid auth accepted: %s", name)
++			}
++			if rt.n.Load() != 0 {
++				t.Errorf("invalid auth reached transport: %s", name)
++			}
++		})
++	}
++}
++
++type workflowFixtureJar struct{}
++
++func (*workflowFixtureJar) Cookies(*url.URL) []*http.Cookie     { return nil }
++func (*workflowFixtureJar) SetCookies(*url.URL, []*http.Cookie) {}
++
++func TestWorkflowBalanceFixtureCycleCapacityClampAndOverflow(t *testing.T) {
++	rt := &workflowFixtureRT{status: 200, body: `{"code":0,"data":{"Response":{"Data":{"Accounts":[{"CycleCapacitySize":10,"CycleCapacityRemain":99,"CycleCapacityUsed":0},{"CapacitySize":8,"CapacityRemain":3,"CapacityUsed":0}]}}}}`}
++	c, a, _ := workflowFixtureClient(rt)
++	got, err := c.WorkflowBalance(context.Background(), a)
++	if err != nil || got != 13 {
++		t.Fatalf("balance=%d err=%v", got, err)
++	}
++	for _, body := range []string{`{"code":0,"data":{"Response":{"Data":{"Accounts":[]}}}}`, `{"code":0,"data":{"Response":{"Data":{"Accounts":null}}}}`, `{"code":0,"data":{"Response":{"Data":{"Accounts":[{"CycleCapacitySize":1,"CycleCapacityRemain":null}]}}}}`, `{"code":0,"data":{"Response":{"Data":{"Accounts":[{"CapacityRemain":-1}]}}}}`, `{"code":0,"data":{"Response":{"Data":{"Accounts":[{"CycleCapacitySize":1,"CycleCapacityUsed":2}]}}}}`} {
++		rt.body = body
++		if _, err := c.WorkflowBalance(context.Background(), a); err == nil {
++			t.Errorf("accepted invalid balance %q", body)
++		}
++	}
++	rt.body = `{"code":0,"data":{"Response":{"Data":{"Accounts":[{"CapacitySize":9223372036854775807,"CapacityRemain":9223372036854775807},{"CapacitySize":1,"CapacityRemain":1}]}}}}`
++	if _, err := c.WorkflowBalance(context.Background(), a); err == nil {
++		t.Error("overflow accepted")
++	}
++}
++
++func TestWorkflowClaimFixtureShapeNoRetryNoRedirectAndSafeErrors(t *testing.T) {
++	for _, tc := range []struct {
++		name, body string
++		want       int64
++		already    bool
++	}{{"zero", `{"code":0,"data":{"credit":0,"energy":0}}`, 0, false}, {"positive", `{"code":0,"data":{"credit":7,"energy":2}}`, 7, false}, {"already", `{"code":0,"data":{"already_claimed":true}}`, 0, true}} {
++		t.Run(tc.name, func(t *testing.T) {
++			rt := &workflowFixtureRT{status: 200, body: tc.body}
++			c, a, _ := workflowFixtureClient(rt)
++			r, e := c.WorkflowClaim(context.Background(), a, "fixture-task")
++			if e != nil || r.Credit != tc.want || r.AlreadyClaimed != tc.already || rt.n.Load() != 1 {
++				t.Fatalf("receipt=%+v err=%v calls=%d", r, e, rt.n.Load())
++			}
++			q := rt.last.Load()
++			if q.URL.Path != "/activity/growth/tasks/fixture-task/claim" || q.Header.Get("x-client-platform") != "web" || q.Header.Get("Authorization") != "Bearer fixture-token" || (func() bool { b := rt.requestBody.Load(); return b != nil && *b != "" })() {
++				t.Fatal("claim shape mismatch")
++			}
++		})
++	}
++	for _, body := range []string{`{"code":0,"data":{"credit":1},"data":{}}`, `{"code":0,"data":[]}`, `{"code":0,"data":{"credit":null}}`, `{"code":0,"data":{"credit":1}} trailing`} {
++		rt := &workflowFixtureRT{status: 200, body: body}
++		c, a, _ := workflowFixtureClient(rt)
++		if _, err := c.WorkflowClaim(context.Background(), a, "fixture-task"); err == nil {
++			t.Errorf("accepted malformed claim fixture %q", body)
++		}
++	}
++	for _, status := range []int{307, 401, 429} {
++		rt := &workflowFixtureRT{status: status, location: "https://evil.invalid", body: `{"code":0,"data":{"credit":1}}`}
++		c, a, _ := workflowFixtureClient(rt)
++		if _, err := c.WorkflowClaim(context.Background(), a, "fixture-task"); err == nil {
++			t.Errorf("status %d accepted", status)
++		}
++		if rt.n.Load() != 1 {
++			t.Errorf("status %d calls=%d", status, rt.n.Load())
++		}
++	}
++	rt := &workflowFixtureRT{status: 200, body: `{"code":0,"data":{"credit":1}}`}
++	c, a, _ := workflowFixtureClient(rt)
++	for _, code := range []string{"../x", "a/b", "a?b", "a#b", " a", "a%2f"} {
++		if _, err := c.WorkflowClaim(context.Background(), a, code); err == nil {
++			t.Errorf("dangerous code accepted %q", code)
++		}
++		if rt.n.Load() != 0 {
++			t.Fatal("dangerous code reached transport")
++		}
++	}
++}
++
++func TestWorkflowChatFixturePreparedBodyHeadersAndSSE(t *testing.T) {
++	rt := &workflowFixtureRT{status: 200, body: "data: hello\\n\\n data: [DONE]\\n\\n"}
++	c, a, hc := workflowFixtureClient(rt)
++	body, status, err := c.WorkflowChat(context.Background(), a, "fixture-model", 16)
++	if err != nil || status != 200 {
++		t.Fatalf("status=%d err=%v", status, err)
++	}
++	raw, _ := io.ReadAll(body)
++	body.Close()
++	if !strings.Contains(string(raw), "[DONE]") {
++		t.Fatalf("sse=%q", raw)
++	}
++	req := rt.last.Load()
++	s := rt.requestBody.Load()
++	if req.Header.Get("Authorization") != "Bearer fixture-token" || req.Header.Get("Accept") != "application/json, text/event-stream" || req.Header.Get("Content-Type") != "application/json" {
++		t.Fatalf("headers=%v", req.Header)
++	}
++	for _, want := range []string{`"stream":true`, `"max_tokens":16`, `"include_usage":true`, `"enable_thinking":false`, `Reply only OK.`} {
++		if s == nil || !strings.Contains(*s, want) {
++			t.Fatalf("prepared body missing %q: %v", want, s)
++		}
++	}
++	if rt.n.Load() != 1 || hc.CheckRedirect != nil {
++		t.Fatal("chat retries/mutates client")
++	}
++	cancelCtx, cancel := context.WithCancel(context.Background())
++	cancel()
++	if _, _, err := c.WorkflowChat(cancelCtx, a, "m", 1); !errors.Is(err, context.Canceled) {
++		t.Fatalf("canceled chat err=%v", err)
++	}
++	for _, n := range []int{0, 65} {
++		rt.body = `data: x`
++		if _, _, err := c.WorkflowChat(context.Background(), a, "m", n); err == nil {
++			t.Errorf("max_tokens=%d accepted", n)
++		}
++	}
++	rt.status = 502
++	rt.body = `secret token=fixture-token uid=fixture-uid https://private.invalid`
++	if _, _, err := c.WorkflowChat(context.Background(), a, "m", 1); err == nil || strings.Contains(err.Error(), "fixture-token") || strings.Contains(err.Error(), "fixture-uid") || strings.Contains(err.Error(), "private.invalid") {
++		t.Fatalf("leaky error: %v", err)
++	}
++}
++
++func TestWorkflowUnknownProgressCannotTriggerPaidExecution(t *testing.T) {
++	for _, row := range []string{`"current":null,"target":5`, `"target":5`, `"current":5,"target":5,"progress":null`, `"progress":{"current":null,"target":5}`} {
++		rt := &workflowFixtureRT{status: 200, body: `{"code":0,"data":{"tasks":[{"task_code":"chat_5",` + row + `}]}}`}
++		c, a, _ := workflowFixtureClient(rt)
++		tasks, err := c.WorkflowTasks(context.Background(), a, false)
++		if err != nil || len(tasks) != 1 || tasks[0].Target != 0 || tasks[0].Claimable {
++			t.Fatalf("unknown progress accepted %s: %+v %v", row, tasks, err)
++		}
++	}
++}

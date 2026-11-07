@@ -37,6 +37,13 @@ func validateChatRequest(body []byte) error {
 		return fmt.Errorf("model must be a non-empty string")
 	}
 
+	if raw, exists := request["stream"]; exists {
+		value := strings.TrimSpace(string(raw))
+		if value != "true" && value != "false" {
+			return fmt.Errorf("stream must be a boolean")
+		}
+	}
+
 	messages, ok := request["messages"]
 	if !ok {
 		return fmt.Errorf("messages is required")
@@ -44,6 +51,12 @@ func validateChatRequest(body []byte) error {
 	var messageItems []json.RawMessage
 	if err := json.Unmarshal(messages, &messageItems); err != nil || messageItems == nil {
 		return fmt.Errorf("messages must be an array")
+	}
+	for _, item := range messageItems {
+		var object map[string]json.RawMessage
+		if len(item) == 0 || string(item) == "null" || json.Unmarshal(item, &object) != nil || object == nil {
+			return fmt.Errorf("messages entries must be objects")
+		}
 	}
 	return nil
 }

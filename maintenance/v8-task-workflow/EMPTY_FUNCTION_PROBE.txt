@@ -1,0 +1,3 @@
+package panel
+import("fmt";"strings";"testing")
+func TestV8EmptyFunctionProbe(t *testing.T){s:="data: {\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"OK\",\"function_call\":null},\"finish_reason\":\"\"}]}\n\ndata: {\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"\",\"function_call\":{\"name\":\"\",\"arguments\":\"\"}},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n";e:=consumeModelChatCompletion(strings.NewReader(s));fmt.Printf("EMPTY_FUNCTION_PROBE COMPLETE=%t CHAT=0 CLAIM=0\n",e==nil)}

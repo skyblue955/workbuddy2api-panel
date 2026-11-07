@@ -1,0 +1,6 @@
+Baseline93ce125, codefiles only. ABSENT means newly introduced.
+93d6785b861a938c5d869cb1b55b13f1b5ec81d5b33360b2ee1e0fc7eecc69e9  internal/panel/panel.go
+6a3d950150bfdd45d44a86d74e105eb813d3fad7b87a10843d5139c33ab73eea  internal/panel/tasks.go
+ABSENT  internal/panel/claimready.go
+ABSENT  internal/panel/claimready_test.go
+ABSENT  internal/panel/claimready_safety_test.go

@@ -1,0 +1,15 @@
+{
+  "local_http_statuses": [
+    200,
+    200,
+    200
+  ],
+  "workflow_status": "planned",
+  "tasks": 19,
+  "chat_posts": 0,
+  "claim_posts": 0,
+  "config_auth_unchanged": true,
+  "disabled_schedules": 8,
+  "global_enabled": false,
+  "embedded_workflow_ui": true
+}

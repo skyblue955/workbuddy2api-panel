@@ -1,0 +1,16 @@
+2026-11-07 delivery checkpoint（本记录提交前核验）
+branch maintenance/v1-compat-rewards
+origin https://github.com/skyblue955/workbuddy2api-panel.git
+source ce1525c fix(rewards): validate claim response envelopes without altering legacy requests
+source b3b20c1 test(maintenance): verify original code entries and reward readback
+records dffeebf199e9c85d8780e7a9f8dc118e1ecf9e47
+command git push origin maintenance/v1-compat-rewards
+literal result facf981..dffeebf maintenance/v1-compat-rewards -> maintenance/v1-compat-rewards ; exit0
+command git ls-remote origin refs/heads/maintenance/v1-compat-rewards
+literal result dffeebf199e9c85d8780e7a9f8dc118e1ecf9e47 refs/heads/maintenance/v1-compat-rewards ; exit0
+command gh pr view 2 --repo skyblue955/workbuddy2api-panel --json url,state,headRefName,baseRefName,headRefOid
+result OPEN; fork main <- fork maintenance/v1-compat-rewards; headRefOid matches dffeebf; exit0
+PR https://github.com/skyblue955/workbuddy2api-panel/pull/2
+actual acceptance comment https://github.com/skyblue955/workbuddy2api-panel/pull/2#issuecomment-6705291447
+worktree status at checkpoint clean; no main/upstream push, force push, release or production deploy.
+后续提交本checkpoint本身不改变上述源码/构建二进制，也不虚构未来的HEAD哈希。
