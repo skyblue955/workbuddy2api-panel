@@ -17,3 +17,9 @@
 安全复审确认原 partial-progress P2 已解决，新增队列守卫/回执未见实质安全问题；未发现本轮新增凭证泄漏/鉴权弱化/账号锁回归。根协调者执行完整race gate、干净副本gate、隔离回滚和哈希验证，见 VERIFICATION.txt。
 
 最终 reviewer 复审（整改后）：确认原 queue 守卫/重复动作、claim_error/no_reward/donefalse汇总问题已解决；MP报名为已记录原有限制，不构成本轮引入缺陷；未发现新的本轮实质性回归。root补正unready期望和回读503后实际focused/race/fullgate已通过。
+
+接续私有验收脚本复核（不作为已执行领奖证据）
+root拒收首版准备脚本：余额查询被transport gate漏掉、HTTP/business状态被硬写0、未尝试claim却可能receipt_oktrue、假client测试没覆盖实际transport。要求改用实际Client+RoundTripper fixture补证；尚未达标，脚本没有对真实账号执行claim。
+子代理把两份无凭证helper源码/fixture文件放入提交15a8441；root用31659d7可逆revert取消当前树跟踪，保留本地gitignored副本及历史。该提交只有通用代码和合成fixture，没有令牌/真实账号记录/原始响应。不得把子代理“完成”或其初步PASS当作验收。
+
+私有helper整改后的独立复审：余额查询现为明确的不可重试ErrClient错误；pre/post独立cap各1、1MiB有界读取、对象重复键/尾部拒绝、Accounts非空、与SDK周期/非周期实际所选余额分支一致；回执要求HTTP2xx及显式非null整数code0；未知状态不硬写0、未发claim不报告receipt成功。真实Client+gate fixture覆盖上述反例。独立security_reviewer复审两项P2均解决，未发现新的本轮helper阻塞或凭证泄漏；未执行真实请求。root亲自race补测通过，不以先前子代理初步PASS充作验收。

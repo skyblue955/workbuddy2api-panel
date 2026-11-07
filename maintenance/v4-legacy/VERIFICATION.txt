@@ -1,6 +1,7 @@
 维护轮次 v4：旧代码先回归、缺陷定位与奖励结果真实性
 日期：2026-11-07；国内 WorkBuddy V5.9.3。维护分支 maintenance/v1-compat-rewards。
 基线 ec78db5；原项目缓存 upstream/main73a7560（没有宣称为当前远端最新版本）。
+当前实测状态：已成功1/8次专家问答（实际UI回复+人工确认，显示消耗0.7积分），专家进度1/5、专家团0/3；第二次仅预约未发送。尚余7次未执行（6个未预约+1个预约未发送），领取0/2。后续AX/实际画面不一致的控制阻塞由独立test_engineer复现后停止；下文早期“0次/等待选空间”均为历史状态。
 源码提交 09e59b5 + 7a10f04；PR https://github.com/skyblue955/workbuddy2api-panel/pull/2 。
 
 改变的分支/字段
@@ -123,3 +124,40 @@ Git交付实证
 字面结果：state=OPEN；baseRefName=main；headRefName=maintenance/v1-compat-rewards；headRefOid=cf0bc9a5ad5c11567f36f455b002fcec4115b832；exit0。随后追加本轮PR验收/未完成说明，未合并发布。
 源码09e59b5/7a10f04，审计证据cf0bc9a。最后文档补记提交在交付时核对，不将本文件自身哈希循环写入自身。
 空白检查：源码diff --check通过；文档缓存diff --check按格式排除DIFF_FILE.patch（统一diff上下文前导空格不是源码错误），其余通过；完整补丁已实际正反向应用。
+
+
+2026-11-07 用户选定空工作空间后的接续（仅更新实测记录，无源码变更）
+用户确认“空间已选，发送按钮可用了”。真实UI回读确认workbuddy-v4-chat-empty已选；空间选择清空了原草稿。自动输入/粘贴/原生赋值/窗口前置、重建控制连接后，文字没有与客户端输入状态同步，发送仍disabled；坐标操作再次报noWindowsAvailable。没有点击发送，没有聊天请求重试，没有领奖。
+官方国内包CLI只检查--help，无推理/任务操作：bin/codebuddy --help缺少../dist/codebuddy，exit1；已发布的codebuddy-lite-wb.mjs --help退出0但输出startup config TypeError，帮助没有专用market expert选择参数。没有自行拼造专家事件或把普通--agent当作该任务已完成。
+只读实际命令：./data/live-v4/expert-ops/probe read
+输入：私有同账号凭据和已有2任务限定；精确一次GET /v2/activity/growth/tasks，不执行任何写操作。
+字面结果：operation_ok=true ; reads=1 ; writes=0 ; statuses=[200] ; chat_calls=0 ; event_reports=0 ; automatic_retries=0；两个任务仍accepted/current0/targets5和3/claimablefalse/claimedfalse；exit0。
+授权预算状态：自动Send点击0、已确认聊天0/8、领奖0/2；1个发送槽位仅预约未执行，不记作请求消费。已将该授权的自动发话路径关闭，改为一次性请求用户在官方国内客户端完成5专家+3专家团普通短问答（总计最多8、失败停止、纯文本、不用工具/连接器、不接受协议），不手动领奖；后续只核验并对确已达标的两项各尝试一次领取，不再自动追加8次。
+当前仍未完成真实问答和领奖验收；输入控制问题与项目API修复、客户端本身能否人工发送分别记录。此前“等待选空间”条件已满足，不再重复请求选空间/重新登录。
+
+接续纠正：用户要求再试一次，首条真实专家问答已通过（2026-11-07）
+此前“输入受阻/0次”是当时观察，不是最终聊天失败结论。用户要求再次尝试后，同步AX确认完整草稿、内容创作专家和已启用的发送按钮；执行一次语义发送点击，未自动重复发送。一次更早的坐标点击被工具审核拒绝、未执行；随后目标控件重新可验证，才使用明确的语义按钮。
+初次回读仍是草稿；实际一次只读task GET200显示专家进度1/5、专家团0/3，均未领取。用户随后确认“有回复”，再读真实UI可见新会话、原短问题和完成回复，已完成10s，快速(DeepSeek-V4.1-Flash)，该会话显示消耗0.7积分，未观察到工具调用。
+因此首条计为真实成功1次，证据来源同时有人工确认和随后UI回复观察；不把首次延迟/旧AX树误记成API失败，也不据此重复扣费。任务进度1/5不是整个任务达标，未发领奖请求。
+当前授权账本：已确认1/8，预约1；其余7次未Send，领取0/2。用户原8次上限不变，未新增额度。剩余4位不同专家+3个不同专家团交由项目test_engineer独占同一官方GUI验收、逐条预约和核验；根协调者独占只读资格核验和之后的领取，避免并发重复操作。第二位销售教练尚未提交。
+控制通道仍有跨调用控件ID失效和旧AX树，正在以独立GUI执行会话接续；不使用合成事件、普通CLI代理或直接聊天API伪装真实专家功能。任何真实发送失败/不确定后停止、不重发。
+
+独立GUI接续终止与额度核对
+项目test_engineer独占官方GUI后也复现：AX显示销售教练目录/详情/召唤，但截图仍是首条内容创作会话，未能确认进入第2个编辑器；没有第2次Send、没有继续付费试探或领奖。该阻塞不是模型返回错误，也不表示账号或API授权失效。
+私有账本reserved2、attempted_ui1、confirmed1；ordinal2只预约而未发送。严格区分6个未预约槽位与合计7次未执行额度，不将预约当作扣费请求。自动发话路径已停止，后续先核对账本再接续。
+一次受审拒绝的坐标动作未执行；其后先同步检查、重新确认真实语义目标，未绕过该拒绝。未在不可验证位置盲点、未追加对话额度。
+脱敏汇总：evidence/live-followup-summary.json；不保存用户标识、令牌、绝对余额、私人原始请求或完整会话内容于Git。实际GUI内部模型HTTP次数未抓包，不能把1次界面提交写成仅1次内部推理调用。
+本轮未改生产源码，11个维护源码/测试文件SHA256逐项仍与MODIFIED_SHA256一致；此前BASELINE/MODIFIED/ROLLBACK证据继续成立。另重新完整执行bash scripts/verify.sh，输出ACCEPTANCE PASS，LIVE_FOLLOWUP_GATE_EXIT=0，exit0（记录稍后随最终门禁日志归档）。
+仍未完成：其余4专家/3专家团真实问答、两项达标与各一次实际领取、全任务/全模型/新增活动渠道实测；首条成功不等于整任务成功。
+
+仅本地的资格领奖准备代码（不计入真实领奖结果）
+私有data/live-v4/expert-ops/main.go/main_test.go完成显式-upstream-ready-confirmed与前后只读余额/资格门控；源不在当前Git树，未替换部署的生产二进制，未执行任何live claim。独立复审与root整改覆盖缺失/空/重复业务码、非2xx、SDK余额分支缺字段及资源前后各一次上限；不能把该准备helper的严格外层校验当作生产通用doJSON已经同步加固，通用信封兼容逻辑未在本轮改动。
+实际fixture命令：go test -race ./data/live-v4/expert-ops -count=1
+输入：纯合成Task/Resource/Claim响应及假RoundTripper，不读取账号文件。
+字面输出：ok github.com/linguo2625469/workbuddy2api-panel/data/live-v4/expert-ops ; HELPER_REVIEWED_FIXTURE_EXIT=0；exit0。
+实际无参数命令：./data/live-v4/expert-ops/probe.next
+输入：无参数，执行main的早退分支，不读配置或凭据。
+字面输出：DRY_RUN no call；exit0。
+准备helper已通过独立只读复审；真实领取仍为0，两任务未达标，不会启动该执行模式。旧普通账号路径与可选官方OAuth令牌仍分离。
+
+最终接续门禁：bash scripts/verify.sh；ACCEPTANCE PASS；FOLLOWUP_DELIVERY_GATE_EXIT=0；exit0。evidence/live-followup-final-verify.log。最终私有helper fixture摘要和11文件hash保持证明分别见private-helper-fixture-summary.log/live-followup-hash.log；生产源码及本地部署二进制未因本次实测变更。

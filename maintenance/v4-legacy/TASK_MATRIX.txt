@@ -7,7 +7,7 @@ Source basis: `internal/panel/autotask.go` action registry and implementations; 
 
 * **Hybrid** means the implementation performs a real operation (or a real upstream conversation/lookup) and also emits task telemetry. It still requires the genuine condition/effect to count.
 * **Event-only** means the implementation emits telemetry or a synthetic event sequence without performing the product operation described by the task. The 17 event-only paths are not genuine completion; do not execute or repair them to obtain unearned rewards, and do not test which fake events work.
-* “Real fulfillment shown” records what the source/tests establish, not what a telemetry response might imply. No row below is live-verified on 2026-11-07.
+* “Real fulfillment shown” records what the source/tests establish, not what a telemetry response might imply. The matrix remains a static source inventory; the two rows below also record the bounded live validation evidence from 2026-11-07. Live evidence does not turn event-only paths into real completion.
 * Side effects are inferred only from the source implementation. `0` means no product side effect is shown by the implementation; counts are event/action families, not reward amounts.
 
 | # | code | source action | actual action vs event-only | real fulfillment shown | side effects / inference count | current validation |
@@ -23,8 +23,8 @@ Source basis: `internal/panel/autotask.go` action registry and implementations; 
 | 9 | `template_5` | `runTemplateUse`: emit five template event groups | event-only | No; source explicitly says it does not create tasks | 0 product actions; 5 telemetry groups | not live verified |
 | 10 | `playbook_prompt` | `runPlaybookPrompt`: emit playbook click/send sequence | event-only | No; no Dialog prompt is sent | 0 product actions; 1 telemetry sequence | not live verified |
 | 11 | `create_canvas` | `runCreateCanvas`: emit canvas create/open sequence | event-only | No; source emits telemetry and does not create a canvas | 0 product actions; 1 telemetry sequence | not live verified |
-| 12 | `expert_5` | `runExpertUse`/`runExpertBatch`: list experts, summon, real chat, report use | hybrid | Real expert list lookup and real chat request are shown; genuine expert availability/usage is required | up to 5 list-backed chats + summon/use telemetry; inference count 5 | not live verified |
-| 13 | `Expert_team_use_3` | `runExpertTeamUse`/`runExpertBatch`: list teams, summon, real chat, report use | hybrid | Real team list lookup and real chat request are shown; genuine team availability/usage is required | up to 3 list-backed chats + summon/use telemetry; inference count 3 | not live verified |
+| 12 | `expert_5` | `runExpertUse`/`runExpertBatch`: list experts, summon, real chat, report use | hybrid | Real expert list lookup and real chat request are shown; genuine expert availability/usage is required | up to 5 list-backed chats + summon/use telemetry; inference count 5 | live partial: 1/5 real expert conversation observed; task readback 1/5, not claimable; no claim; not full legacy runExpertBatch |
+| 13 | `Expert_team_use_3` | `runExpertTeamUse`/`runExpertBatch`: list teams, summon, real chat, report use | hybrid | Real team list lookup and real chat request are shown; genuine team availability/usage is required | up to 3 list-backed chats + summon/use telemetry; inference count 3 | live checked: task accepted, 0/3; second UI attempt stopped before Send; no confirmed team conversation; not claimable; no claim |
 | 14 | `Hp_Appearance` | `runAppearance`: set theme, then emit skin-apply event | hybrid | Theme-setting API call is shown; actual client application/effect must be genuine | 1 appearance mutation + 1 telemetry event; effect inference 1 | not live verified |
 | 15 | `skill_1` | `runSkillFresh`: real expert chat, then append `skill_info` telemetry | hybrid | Real chat is shown, but no actual skill invocation/loading is shown; skill completion is unproven | 1 chat + 1 synthetic skill event; actual-skill inference unresolved (0 shown) | not live verified; lacks actual skill proof |
 | 16 | `Expert_lighthouse` | `runExpertLighthouse`: summon telemetry, real chat, expert-use telemetry | hybrid | Real chat is shown, but no connector authorization/use proof is shown | 1 chat + summon/use telemetry; connector-effect inference unresolved (0 shown) | not live verified; lacks connector proof |
@@ -37,6 +37,14 @@ Source basis: `internal/panel/autotask.go` action registry and implementations; 
 | 23 | `Sequential_Tasks_5` | `runSequentialModelChat`: emit mini model event, then optional PC model event | event-only | No real GLM-5.2 chat is made by this function | 0 product actions; 1–2 telemetry events; fallback inference 1 | not live verified |
 | 24 | `Sequential_Tasks_6` | `runSequentialChat10`: accept and emit mini chat events at 45s cadence | event-only | No real mini-program conversations are shown | 0 product actions; up to target telemetry reports; target inference 1 | not live verified |
 | 25 | `Sequential_Tasks_7` | `runSequentialPlaybook`: emit PC playbook sequence, optionally mini fallback | event-only | No real inspiration workflow or prompt send is shown | 0 product actions; 1–2 telemetry sequences; fallback inference 1 | not live verified |
+
+## Current live validation (2026-11-07)
+
+本轮仅验收国内版 WorkBuddy，且只记录真实产品操作及只读回读。已确认 1 次内容创作专家普通短问答：真实 UI 出现新会话和完整纯文本回复，完成约 10 秒，界面显示快速（DeepSeek-V4.1-Flash）并显示消耗 0.7 积分；未观察到工具调用。一次坐标点击未执行，确认目标后只完成一次语义 Send，未自动付费重发。
+
+任务回读为 expert_5：in_progress、1/5、不可领取、未领取；Expert_team_use_3：accepted、0/3、不可领取、未领取。第二条销售教练只预约未发送，因 AX 目录/弹窗与截图状态不一致而停止。当前发送账面为 reserved 2、attempted UI 1、confirmed 1；其中 1 个预约槽未发送，另有 6 个未预约，未执行授权额度合计 7。领奖尝试为 0/2。以上是部分实证，不是旧版 runExpertBatch 全链路通过，也不是 25 项自动完成。
+
+后续验收入口：人工完成剩余 4 个不同专家及 3 个专家团普通短问答，不调用工具或连接器、不接受新协议、不领取奖励；然后仅做只读资格核验，只有上游明确 claimable 且未领取时，才按已批准额度对对应任务各领取一次。
 
 ## Count and release-note caveats
 
