@@ -25,7 +25,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log"
 	"math/rand/v2"
 	"net/http"
@@ -857,8 +856,11 @@ func runModelChat(p *Panel, a *auth.Auth) (string, error) {
 		rc.Close()
 		return "", fmt.Errorf("对话失败 http=%d: %s", status, truncateStr(string(respBody), 160))
 	}
-	// 读干 SSE（网关对上游强制 flow：不读完会残留连接）
-	_, _ = io.Copy(io.Discard, io.LimitReader(rc, 1<<20))
+	// 读完并校验 SSE；只有真实完整回答才允许触发进度上报。
+	if err := consumeModelChatCompletion(rc); err != nil {
+		rc.Close()
+		return "", fmt.Errorf("对话流未完成: %w", err)
+	}
 	rc.Close()
 	time.Sleep(reportGap)
 	// 3. 对齐模型的上报（触发进度）
