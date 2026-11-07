@@ -99,3 +99,5 @@ config/auth哈希相同，8计划关闭，global=false。服务首次快照为xp
 3 mobile新增UI、跨不同operation_id的全局exactly-once、pending自动恢复：本轮未实现。
 4 接入继续标注legacy_unverified，未把私有接口描述为官方Open API，也未申请不必要的开发者账号。
 部署/回滚见DEPLOY.txt；API契约与操作边界见API_WORKFLOW.txt；后续调查从代码/实际进度矛盾开始，不把客户端自动化或让用户代做设为默认前置。
+
+Git交付：代码及记录2b27384已推origin维护分支，PR2 OPEN/head一致，comment6706826837已保存；历史观测详GIT_DELIVERY.txt，后续仅回执文档提交不改已验收源码。

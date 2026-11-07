@@ -1,0 +1,17 @@
+2026-11-07 observed delivery checkpoint
+branch maintenance/v1-compat-rewards
+origin https://github.com/skyblue955/workbuddy2api-panel.git
+source commits a1b32ae (empty function_call compatibility), fce9f6b (opt-in workflow/tests)
+records checkpoint 2b27384a01390e3818450db6e875d15e37403601
+command git push origin maintenance/v1-compat-rewards
+literal output: 9c8b77a..2b27384 maintenance/v1-compat-rewards -> maintenance/v1-compat-rewards
+exit status 0
+command git ls-remote origin refs/heads/maintenance/v1-compat-rewards
+literal result 2b27384a01390e3818450db6e875d15e37403601 ; exit status 0 ; local/remote equal
+command gh pr view 2 --repo skyblue955/workbuddy2api-panel --json url,state,headRefName,baseRefName,headRefOid
+literal result OPEN, main <- maintenance/v1-compat-rewards, headRefOid 2b27384a01390e3818450db6e875d15e37403601 ; exit status 0
+PR https://github.com/skyblue955/workbuddy2api-panel/pull/2
+command gh pr comment 2 --repo skyblue955/workbuddy2api-panel --body-file /private/tmp/workbuddy-v8-pr-comment.md
+literal result https://github.com/skyblue955/workbuddy2api-panel/pull/2#issuecomment-6706826837 ; exit status 0
+tracked data/live-v8-* files=0; worktree clean at first checkpoint. No main/upstream/force/release/production operation.
+This receipt records an observed historical checkpoint; its subsequent commit does not change accepted source or pretend to predict a future Git hash. Final remote/PR equality is checked again after that commit.
