@@ -1,0 +1,13 @@
+=== RUN   TestStreamProbeBaseline
+=== RUN   TestStreamProbeBaseline/error-sse
+    STREAM_PROBE_temp_test.go:4: case=error-sse reports=1 err=<nil>
+=== RUN   TestStreamProbeBaseline/truncated
+    STREAM_PROBE_temp_test.go:4: case=truncated reports=1 err=<nil>
+=== RUN   TestStreamProbeBaseline/readfailure
+    STREAM_PROBE_temp_test.go:4: case=readfailure reports=1 err=<nil>
+--- PASS: TestStreamProbeBaseline (0.01s)
+    --- PASS: TestStreamProbeBaseline/error-sse (0.00s)
+    --- PASS: TestStreamProbeBaseline/truncated (0.00s)
+    --- PASS: TestStreamProbeBaseline/readfailure (0.00s)
+PASS
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/panel	0.488s

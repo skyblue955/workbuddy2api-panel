@@ -1,0 +1,8 @@
+package panel
+import("fmt";"io";"net/http";"strings";"testing";"errors";"github.com/linguo2625469/workbuddy2api-panel/internal/auth";"github.com/linguo2625469/workbuddy2api-panel/internal/upstream")
+type v6EvidenceRT struct{body string;fail bool;reports int}
+type v6EvidenceBody struct{io.Reader;fail bool}
+func(b *v6EvidenceBody)Close()error{return nil}
+func(b *v6EvidenceBody)Read(p []byte)(int,error){n,e:=b.Reader.Read(p);if e==io.EOF&&b.fail{return n,errors.New("fixture read failed")};return n,e}
+func(r *v6EvidenceRT)RoundTrip(q *http.Request)(*http.Response,error){if q.URL.Path=="/v2/chat/completions"{return &http.Response{StatusCode:200,Header:make(http.Header),Body:&v6EvidenceBody{Reader:strings.NewReader(r.body),fail:r.fail},Request:q},nil};if q.URL.Path=="/v2/report"{r.reports++};return &http.Response{StatusCode:200,Header:make(http.Header),Body:io.NopCloser(strings.NewReader(`{"code":0,"data":{}}`)),Request:q},nil}
+func TestV6StreamEvidence(t *testing.T){old:=reportGap;reportGap=0;defer func(){reportGap=old}();valid:="data: {\"choices\":[{\"delta\":{\"content\":\"OK\"}}]}\n\ndata: [DONE]\n\n";for _,x:=range []struct{name,body string;fail bool}{{"valid",valid,false},{"error_sse","data: {\"error\":{\"message\":\"fixture\"}}\n\n",false},{"truncated","data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n\n",false},{"read_failure",valid,true}}{r:=&v6EvidenceRT{body:x.body,fail:x.fail};c:=upstream.New();c.HTTP=&http.Client{Transport:r};c.ChatHTTP=c.HTTP;c.ChatBaseCN="https://fixture.invalid";c.BillingBaseCN="https://fixture.invalid";c.WebBaseCN="https://fixture.invalid";_,e:=runModelChat(New(Config{Upstream:c}),&auth.Auth{UID:"fixture",AccessToken:"fixture"});fmt.Printf("MODEL %s accepted=%t reports=%d\n",x.name,e==nil,r.reports)}}

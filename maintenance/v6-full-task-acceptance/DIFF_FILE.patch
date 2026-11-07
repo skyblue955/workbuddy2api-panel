@@ -1,0 +1,627 @@
+diff --git a/internal/panel/autotask.go b/internal/panel/autotask.go
+index 5967686..f2ba78d 100644
+--- a/internal/panel/autotask.go
++++ b/internal/panel/autotask.go
+@@ -25,7 +25,6 @@ import (
+ 	"context"
+ 	"encoding/json"
+ 	"fmt"
+-	"io"
+ 	"log"
+ 	"math/rand/v2"
+ 	"net/http"
+@@ -857,8 +856,11 @@ func runModelChat(p *Panel, a *auth.Auth) (string, error) {
+ 		rc.Close()
+ 		return "", fmt.Errorf("对话失败 http=%d: %s", status, truncateStr(string(respBody), 160))
+ 	}
+-	// 读干 SSE（网关对上游强制 flow：不读完会残留连接）
+-	_, _ = io.Copy(io.Discard, io.LimitReader(rc, 1<<20))
++	// 读完并校验 SSE；只有真实完整回答才允许触发进度上报。
++	if err := consumeModelChatCompletion(rc); err != nil {
++		rc.Close()
++		return "", fmt.Errorf("对话流未完成: %w", err)
++	}
+ 	rc.Close()
+ 	time.Sleep(reportGap)
+ 	// 3. 对齐模型的上报（触发进度）
+diff --git a/internal/panel/model_chat_completion.go b/internal/panel/model_chat_completion.go
+new file mode 100644
+index 0000000..c268dbb
+--- /dev/null
++++ b/internal/panel/model_chat_completion.go
+@@ -0,0 +1,166 @@
++package panel
++
++import (
++	"encoding/json"
++	"fmt"
++	"io"
++	"strings"
++
++	"github.com/linguo2625469/workbuddy2api-panel/internal/upstream"
++)
++
++const modelChatStreamLimit = 1 << 20
++
++func consumeModelChatCompletion(r io.Reader) error {
++	b, err := io.ReadAll(io.LimitReader(r, modelChatStreamLimit+1))
++	if err != nil {
++		return fmt.Errorf("stream read failed")
++	}
++	if len(b) > modelChatStreamLimit {
++		return fmt.Errorf("stream exceeds %d bytes", modelChatStreamLimit)
++	}
++	var sawDone, sawEvent, sawFinish bool
++	var canonical strings.Builder
++	// SSE joins data lines within an event and accepts LF, CRLF, or CR.
++	text := strings.ReplaceAll(strings.ReplaceAll(string(b), "\r\n", "\n"), "\r", "\n")
++	var data []string
++	flush := func() error {
++		if len(data) == 0 {
++			return nil
++		}
++		payload := strings.TrimSpace(strings.Join(data, "\n"))
++		data = nil
++		if payload == "" {
++			return nil
++		}
++		if sawDone {
++			return fmt.Errorf("SSE data after DONE")
++		}
++		if payload == "[DONE]" {
++			sawDone = true
++			canonical.WriteString("data: [DONE]\n\n")
++			return nil
++		}
++		var chunk map[string]any
++		if err := json.Unmarshal([]byte(payload), &chunk); err != nil || chunk == nil {
++			return fmt.Errorf("malformed SSE data")
++		}
++		if _, exists := chunk["error"]; exists {
++			return fmt.Errorf("SSE error event")
++		}
++		sawEvent = true
++		if choices, ok := chunk["choices"].([]any); ok {
++			// This task requests one answer (n defaults to 1), never teams of
++			// alternative choices. Do not merge an unexpected partial choice.
++			if len(choices) > 1 {
++				return fmt.Errorf("unexpected multiple choices")
++			}
++			for _, raw := range choices {
++				choice, ok := raw.(map[string]any)
++				if !ok {
++					return fmt.Errorf("invalid choice")
++				}
++				for _, field := range []string{"delta", "message"} {
++					if node, exists := choice[field]; exists && node != nil {
++						part, ok := node.(map[string]any)
++						if !ok {
++							return fmt.Errorf("invalid assistant message")
++						}
++						if rawRole, exists := part["role"]; exists && rawRole != nil {
++							role, ok := rawRole.(string)
++							if !ok || (role != "" && role != "assistant") {
++								return fmt.Errorf("non-assistant stream role")
++							}
++						}
++						if call, exists := part["function_call"]; exists && call != nil {
++							return fmt.Errorf("completion requires function execution")
++						}
++						if tools, ok := part["tool_calls"].([]any); ok && len(tools) > 0 {
++							return fmt.Errorf("completion requires tool execution")
++						}
++					}
++				}
++				if index, exists := choice["index"]; exists {
++					if v, ok := index.(float64); !ok || v != 0 {
++						return fmt.Errorf("unexpected choice index")
++					}
++				}
++				if reason, exists := choice["finish_reason"]; exists && reason != nil {
++					v, ok := reason.(string)
++					if !ok || (v != "" && !validModelChatFinishReason(v)) {
++						return fmt.Errorf("SSE did not finish a plain-text answer")
++					}
++					if v != "" {
++						sawFinish = true
++					}
++				}
++			}
++		}
++		compact, err := json.Marshal(chunk)
++		if err != nil {
++			return fmt.Errorf("invalid SSE data")
++		}
++		canonical.WriteString("data: ")
++		canonical.Write(compact)
++		canonical.WriteString("\n\n")
++		return nil
++	}
++	for _, line := range strings.Split(text, "\n") {
++		if line == "" {
++			if err := flush(); err != nil {
++				return err
++			}
++			continue
++		}
++		if strings.HasPrefix(line, ":") {
++			continue
++		}
++		field, value, hasColon := strings.Cut(line, ":")
++		if !hasColon {
++			value = ""
++		}
++		value = strings.TrimPrefix(value, " ")
++		if field == "event" && strings.TrimSpace(value) == "error" {
++			return fmt.Errorf("SSE error event")
++		}
++		if field == "data" {
++			data = append(data, value)
++		}
++	}
++	if err := flush(); err != nil {
++		return err
++	}
++	if !sawEvent || (!sawDone && !sawFinish) {
++		return fmt.Errorf("incomplete SSE stream")
++	}
++	completion, err := upstream.Aggregate(strings.NewReader(canonical.String()))
++	if err != nil {
++		return fmt.Errorf("aggregate stream: %w", err)
++	}
++	choices, _ := completion["choices"].([]any)
++	if len(choices) == 0 {
++		return fmt.Errorf("completion has no choices")
++	}
++	choice, _ := choices[0].(map[string]any)
++	message, _ := choice["message"].(map[string]any)
++	if role, _ := message["role"].(string); role != "assistant" {
++		return fmt.Errorf("completion role is not assistant")
++	}
++	if tools, ok := message["tool_calls"].([]any); ok && len(tools) > 0 {
++		return fmt.Errorf("completion requires tool execution")
++	}
++	content, _ := message["content"].(string)
++	if strings.TrimSpace(content) == "" {
++		return fmt.Errorf("completion has no assistant content")
++	}
++	return nil
++}
++
++func validModelChatFinishReason(reason string) bool {
++	switch reason {
++	case "stop", "length":
++		return true
++	default:
++		return false
++	}
++}
+diff --git a/internal/panel/model_chat_completion_test.go b/internal/panel/model_chat_completion_test.go
+new file mode 100644
+index 0000000..642f0a6
+--- /dev/null
++++ b/internal/panel/model_chat_completion_test.go
+@@ -0,0 +1,163 @@
++package panel
++
++import (
++	"bytes"
++	"encoding/json"
++	"errors"
++	"io"
++	"net/http"
++	"strings"
++	"testing"
++
++	"github.com/linguo2625469/workbuddy2api-panel/internal/auth"
++	"github.com/linguo2625469/workbuddy2api-panel/internal/upstream"
++)
++
++type modelChatRoundTripper struct {
++	stream               string
++	readErr              bool
++	reports              int
++	chatBody             []byte
++	chatHeader           http.Header
++	chatPath, chatMethod string
++}
++type modelChatBody struct {
++	io.Reader
++	readErr bool
++}
++
++func (b *modelChatBody) Close() error { return nil }
++func (b *modelChatBody) Read(p []byte) (int, error) {
++	n, err := b.Reader.Read(p)
++	if b.readErr && err == io.EOF {
++		return n, errors.New("fixture-private-read-error-token")
++	}
++	return n, err
++}
++func (rt *modelChatRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
++	if strings.Contains(req.URL.Path, "chat") {
++		rt.chatBody, _ = io.ReadAll(req.Body)
++		rt.chatHeader = req.Header.Clone()
++		rt.chatPath = req.URL.Path
++		rt.chatMethod = req.Method
++		return &http.Response{StatusCode: 200, Header: make(http.Header), Body: &modelChatBody{Reader: strings.NewReader(rt.stream), readErr: rt.readErr}, Request: req}, nil
++	}
++	if req.URL.Path == "/v2/report" {
++		rt.reports++
++	}
++	return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"code":0,"data":{}}`)), Request: req}, nil
++}
++
++func TestRunModelChatRequiresCompleteAssistantStream(t *testing.T) {
++	oldGap := reportGap
++	reportGap = 0
++	t.Cleanup(func() { reportGap = oldGap })
++	valid := "data: {\"id\":\"x\",\"choices\":[{\"delta\":{\"content\":\"hello\"},\"finish_reason\":null}]}\n\ndata: [DONE]\n\n"
++	cases := []struct {
++		name, stream string
++		readErr      bool
++		wantReport   int
++	}{
++		{"valid", valid, false, 1}, {"errorframe", "data: {\"error\":{\"message\":\"bad\"}}\n\n", false, 0},
++		{"truncated", "data: {\"choices\":[{\"delta\":{\"content\":\"hello\"}}]}\n", false, 0}, {"readerror", valid, true, 0},
++		{"idonly", "data: {\"id\":\"x\",\"choices\":[]}\n\ndata: [DONE]\n\n", false, 0},
++		{"empty", "data: [DONE]\n\n", false, 0}, {"reasoningonly", "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"thought\"}}]}\n\ndata: [DONE]\n\n", false, 0},
++		{"oversize", "data: {\"choices\":[{\"delta\":{\"content\":\"" + strings.Repeat("x", modelChatStreamLimit) + "\"}}]}\n\ndata: [DONE]\n\n", false, 0},
++		{"malformed", "data: {not-json}\n\ndata: [DONE]\n\n", false, 0},
++		{"event-error", "event: error\ndata: {\"message\":\"bad\"}\n\n", false, 0},
++		{"error-after-done", "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\ndata: [DONE]\n\ndata: {\"error\":{}}\n\n", false, 0},
++		{"nonassistant", "data: {\"choices\":[{\"delta\":{\"role\":\"user\",\"content\":\"hello\"}}]}\n\ndata: [DONE]\n\n", false, 0},
++		{"no-space", "data:{\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\ndata:[DONE]\n\n", false, 1},
++		{"empty-finish", "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"\"}]}\n\ndata: [DONE]\n\n", false, 1},
++		{"stop-eof", "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\n", false, 1},
++		{"filtered-done", "data: {\"choices\":[{\"delta\":{\"content\":\"partial\"},\"finish_reason\":\"content_filter\"}]}\n\ndata: [DONE]\n\n", false, 0},
++		{"tool-done", "data: {\"choices\":[{\"delta\":{\"content\":\"partial\"},\"finish_reason\":\"tool_calls\"}]}\n\ndata: [DONE]\n\n", false, 0},
++		{"multi-choice-done", "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"},{\"index\":1,\"delta\":{\"content\":\"partial\"}}]}\n\ndata: [DONE]\n\n", false, 0},
++		{"bare-cr", "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\r\rdata: [DONE]\r\r", false, 1},
++		{"multiline-data", "data: {\"choices\":[\ndata: {\"delta\":{\"content\":\"ok\"}}]}\n\ndata: [DONE]\n\n", false, 1},
++		{"comment-heartbeat", ": heartbeat\n\ndata: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\ndata: [DONE]\n\n", false, 1},
++		{"role-flip", "data: {\"choices\":[{\"delta\":{\"role\":\"user\",\"content\":\"x\"}}]}\n\ndata: {\"choices\":[{\"delta\":{\"role\":\"assistant\",\"content\":\"y\"},\"finish_reason\":\"stop\"}]}\n\n", false, 0},
++		{"empty-role", "data: {\"choices\":[{\"delta\":{\"role\":\"\",\"content\":\"ok\"}}]}\n\ndata: [DONE]\n\n", false, 1},
++		{"function-request", "data: {\"choices\":[{\"delta\":{\"content\":\"calling\",\"function_call\":{\"name\":\"fixture\"}}}]}\n\ndata: [DONE]\n\n", false, 0},
++		{"empty-finish-eof", "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"\"}]}\n\n", false, 0},
++		{"tool-finish-only", "data: {\"choices\":[{\"delta\":{\"content\":\"hello\"},\"finish_reason\":\"tool_calls\"}]}\n", false, 0},
++	}
++	for _, tc := range cases {
++		t.Run(tc.name, func(t *testing.T) {
++			rt := &modelChatRoundTripper{stream: tc.stream, readErr: tc.readErr}
++			c := upstream.New()
++			c.HTTP = &http.Client{Transport: rt}
++			c.ChatHTTP = &http.Client{Transport: rt}
++			c.ChatBaseCN = "http://fixture"
++			c.BillingBaseCN = "http://fixture"
++			c.WebBaseCN = "http://fixture"
++			msg, err := runModelChat(New(Config{Upstream: c}), &auth.Auth{UID: "fixture", AccessToken: "fixture"})
++			if rt.reports != tc.wantReport {
++				t.Fatalf("reports=%d want %d msg=%q err=%v", rt.reports, tc.wantReport, msg, err)
++			}
++			if tc.wantReport == 0 {
++				if err == nil || strings.Contains(msg, "已完成") || strings.Contains(err.Error(), "fixture-private-read-error-token") {
++					t.Fatalf("invalid stream claimed completion: msg=%q err=%v", msg, err)
++				}
++			}
++			if tc.wantReport == 1 && err != nil {
++				t.Fatalf("valid stream err=%v", err)
++			}
++		})
++	}
++}
++
++func TestRunModelChatPreservesChatRequest(t *testing.T) {
++	oldGap := reportGap
++	reportGap = 0
++	t.Cleanup(func() { reportGap = oldGap })
++	rt := &modelChatRoundTripper{stream: "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\ndata: [DONE]\n\n"}
++	c := upstream.New()
++	c.HTTP = &http.Client{Transport: rt}
++	c.ChatHTTP = &http.Client{Transport: rt}
++	c.ChatBaseCN = "http://fixture"
++	c.BillingBaseCN = "http://fixture"
++	c.WebBaseCN = "http://fixture"
++	if _, err := runModelChat(New(Config{Upstream: c}), &auth.Auth{UID: "fixture", AccessToken: "fixture"}); err != nil {
++		t.Fatal(err)
++	}
++	if !bytes.Contains(rt.chatBody, []byte(`"model":"glm-5.2"`)) || !bytes.Contains(rt.chatBody, []byte(`"stream":true`)) {
++		t.Fatalf("chat body changed: %s", rt.chatBody)
++	}
++}
++
++func TestRunModelChatCompleteRequestContract(t *testing.T) {
++	old := reportGap
++	reportGap = 0
++	t.Cleanup(func() { reportGap = old })
++	rt := &modelChatRoundTripper{stream: "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\ndata: [DONE]\n\n"}
++	c := upstream.New()
++	c.HTTP = &http.Client{Transport: rt}
++	c.ChatHTTP = c.HTTP
++	c.ChatBaseCN = "https://fixture.invalid"
++	c.BillingBaseCN = "https://fixture.invalid"
++	c.WebBaseCN = "https://fixture.invalid"
++	c.ClientName = "fixture-product"
++	if _, e := runModelChat(New(Config{Upstream: c}), &auth.Auth{UID: "fixture", AccessToken: "fixture"}); e != nil {
++		t.Fatal(e)
++	}
++	if rt.chatMethod != "POST" || rt.chatPath != "/v2/chat/completions" {
++		t.Fatal("wrong endpoint")
++	}
++	for k, want := range map[string]string{"Authorization": "Bearer fixture", "Content-Type": "application/json", "X-Product": "fixture-product", "X-User-Id": "fixture"} {
++		if rt.chatHeader.Get(k) != want {
++			t.Errorf("header %s mismatch", k)
++		}
++	}
++	var body struct {
++		Model    string `json:"model"`
++		Stream   bool   `json:"stream"`
++		Messages []struct {
++			Role    string `json:"role"`
++			Content string `json:"content"`
++		} `json:"messages"`
++	}
++	if json.Unmarshal(rt.chatBody, &body) != nil || body.Model != "glm-5.2" || !body.Stream || len(body.Messages) != 1 || body.Messages[0].Role != "user" || body.Messages[0].Content != "hi，请回复一句话" {
++		t.Fatal("request body changed")
++	}
++}
+diff --git a/internal/panel/full_action_acceptance_test.go b/internal/panel/full_action_acceptance_test.go
+new file mode 100644
+index 0000000..f2f3489
+--- /dev/null
++++ b/internal/panel/full_action_acceptance_test.go
+@@ -0,0 +1,254 @@
++package panel
++
++import (
++	"bytes"
++	"encoding/json"
++	"fmt"
++	"io"
++	"net/http"
++	"strings"
++	"sync"
++	"testing"
++	"time"
++
++	"github.com/linguo2625469/workbuddy2api-panel/internal/auth"
++	"github.com/linguo2625469/workbuddy2api-panel/internal/upstream"
++)
++
++// TestFullLegacyActionFixtures executes every registered legacy action against a
++// deterministic failing upstream.  The actions remain the production funcs: a
++// request is allowed to reach the real Client, while the fixture prevents any
++// account mutation or network access.  This intentionally records the first
++// method/path and the returned behavior rather than treating an HTTP 200 mock
++// as proof that a reward was earned.
++func TestFullLegacyActionFixtures(t *testing.T) {
++	oldReport, oldMP, oldPoll, oldGap := reportGap, mpActionGap, mpChatEventGap, claimPollGap
++	oldAttempts := claimPollAttempts
++	reportGap, mpActionGap, mpChatEventGap, claimPollGap, claimPollAttempts = 0, 0, 0, 0, 1
++	t.Cleanup(func() {
++		reportGap, mpActionGap, mpChatEventGap, claimPollGap, claimPollAttempts = oldReport, oldMP, oldPoll, oldGap, oldAttempts
++	})
++
++	// These are the actions whose production contract is telemetry-only.  The
++	// remaining actions attempt a product operation (chat, adoption, theme, or
++	// expert flow) before/alongside telemetry.
++	eventOnly := map[string]bool{
++		"chat_5":        true,
++		"RichMeow_Chat": true, "Buddy_App": true, "Buddy_App_QQ": true,
++		"automation_1": true, "Library_read": true, "template_5": true,
++		"playbook_prompt": true, "create_canvas": true,
++		"school_season": true, "Sequential_Tasks_1": true,
++		"Sequential_Tasks_2": true, "Sequential_Tasks_3": true,
++		"Sequential_Tasks_4": true, "Sequential_Tasks_5": true,
++		"Sequential_Tasks_6": true, "Sequential_Tasks_7": true,
++	}
++	failurePaths := map[string][]string{
++		"chat_5": {"GET /v2/activity/growth/tasks"}, "first_buddy": {"POST /v2/report"}, "Model_chat_GLM5.2": {"POST /v2/activity/growth/tasks/accept", "POST /v2/chat/completions"},
++		"RichMeow_Chat": {"POST /v2/report"}, "Buddy_App": {"POST /v2/report"}, "Buddy_App_QQ": {"POST /v2/report"}, "automation_1": {"POST /v2/report"}, "Library_read": {"POST /v2/report"}, "template_5": {"POST /v2/report"}, "playbook_prompt": {"POST /v2/report"}, "create_canvas": {"POST /v2/report"},
++		"expert_5": {"POST /portal/operation-platform/market/expert/list"}, "Expert_team_use_3": {"POST /portal/operation-platform/market/expert/list"}, "Hp_Appearance": {"POST /v2/user-asset/appearance/set"}, "skill_1": {"POST /v2/chat/completions"}, "Expert_lighthouse": {"POST /portal/operation-platform/market/expert/list", "POST /v2/report"}, "black_cat": {},
++		"school_season": {"GET /v2/activity/growth/tasks"}, "Sequential_Tasks_1": {"GET /v2/activity/growth/tasks"}, "Sequential_Tasks_2": {"GET /v2/activity/growth/tasks"}, "Sequential_Tasks_3": {"GET /v2/activity/growth/tasks"}, "Sequential_Tasks_4": {"GET /v2/activity/growth/tasks"}, "Sequential_Tasks_5": {"GET /v2/activity/growth/tasks"}, "Sequential_Tasks_6": {"GET /v2/activity/growth/tasks"}, "Sequential_Tasks_7": {"GET /v2/activity/growth/tasks"},
++	}
++
++	if upstream.InNightWindow(time.Now()) {
++		failurePaths["black_cat"] = []string{"GET /v2/activity/growth/tasks"}
++	}
++	if len(autoActions) != 25 {
++		t.Fatalf("legacy registry count = %d, want 25", len(autoActions))
++	}
++	seen := make(map[string]bool, len(autoActions))
++	for _, act := range autoActions {
++		if seen[act.TaskCode] {
++			t.Fatalf("duplicate legacy action code %q", act.TaskCode)
++		}
++		seen[act.TaskCode] = true
++
++		var mu sync.Mutex
++		var paths []string
++		rt := fullActionRoundTripFunc(func(r *http.Request) (*http.Response, error) {
++			mu.Lock()
++			paths = append(paths, r.Method+" "+r.URL.Path)
++			mu.Unlock()
++			// Non-2xx is deliberate: it exercises each real function's observed
++			// error/guard behavior without returning a fake completion or reward.
++			return &http.Response{
++				StatusCode: http.StatusBadGateway,
++				Status:     "502 Bad Gateway",
++				Header:     make(http.Header),
++				Body:       http.NoBody,
++				Request:    r,
++			}, nil
++		})
++		client := &upstream.Client{HTTP: &http.Client{Transport: rt}, ChatBaseCN: "http://fixture.invalid", BillingBaseCN: "http://fixture.invalid", WebBaseCN: "http://fixture.invalid"}
++		p := &Panel{cfg: Config{Upstream: client}}
++		msg, err := act.run(p, &auth.Auth{AccessToken: "fixture-token", UID: "fixture-user", Nickname: "fixture"})
++		mu.Lock()
++		gotPaths := append([]string(nil), paths...)
++		mu.Unlock()
++
++		// black_cat is time-gated by design; at daytime it has zero requests and
++		// its returned guard message is the expected behavior, not a live success.
++		if err == nil && strings.TrimSpace(msg) == "" {
++			t.Errorf("%s returned empty result with no error (paths=%v)", act.TaskCode, gotPaths)
++		}
++		if act.TaskCode != "black_cat" && len(gotPaths) == 0 {
++			t.Errorf("%s made no upstream request", act.TaskCode)
++		}
++		if containsPath(gotPaths, "/claim") {
++			t.Errorf("%s attempted reward claim after fixture failure: %v", act.TaskCode, gotPaths)
++		}
++		if err == nil {
++			switch act.TaskCode {
++			case "template_5":
++				if !strings.Contains(msg, "上报失败") {
++					t.Errorf("template failure not explicit: %q", msg)
++				}
++			case "black_cat":
++				if upstream.InNightWindow(time.Now()) || !strings.Contains(msg, "不在") {
++					t.Errorf("unexpected blackcat completion: %q", msg)
++				}
++			default:
++				t.Errorf("%s fixture failure lost its error: %q", act.TaskCode, msg)
++			}
++		}
++		if want := failurePaths[act.TaskCode]; !sameStrings(gotPaths, want) {
++			t.Errorf("%s failure continued past expected boundary: got=%v want=%v", act.TaskCode, gotPaths, want)
++		}
++		kind := "product+event"
++		if eventOnly[act.TaskCode] {
++			kind = "event-only"
++		}
++		result := "message"
++		if err != nil {
++			result = "error: " + err.Error()
++		}
++		t.Logf("%s | %s | requests=%d %v | %s", act.TaskCode, kind, len(gotPaths), gotPaths, result)
++	}
++}
++
++// TestFullLegacyActionNormalFixtures lets every action traverse its normal
++// success/event path with a non-complete task (0/1).  The fixture deliberately
++// never advances progress, so a 200 response cannot be mistaken for a reward:
++// no action may call a claim endpoint.
++func TestFullLegacyActionNormalFixtures(t *testing.T) {
++	oldReport, oldMP, oldPoll, oldGap := reportGap, mpActionGap, mpChatEventGap, claimPollGap
++	oldAttempts := claimPollAttempts
++	// Jitter is in [0,10s), so -10s + jitter is ALWAYS negative;
++	// time.Sleep returns immediately. This changes fixture timing only.
++	reportGap, mpActionGap, mpChatEventGap, claimPollGap, claimPollAttempts = 0, 0, -10*time.Second, 0, 1
++	t.Cleanup(func() {
++		reportGap, mpActionGap, mpChatEventGap, claimPollGap, claimPollAttempts = oldReport, oldMP, oldPoll, oldGap, oldAttempts
++	})
++
++	first := map[string]string{
++		"chat_5": "/v2/activity/growth/tasks", "first_buddy": "/v2/report", "Model_chat_GLM5.2": "/v2/activity/growth/tasks/accept",
++		"RichMeow_Chat": "/v2/report", "Buddy_App": "/v2/report", "Buddy_App_QQ": "/v2/report", "automation_1": "/v2/report", "Library_read": "/v2/report",
++		"template_5": "/v2/report", "playbook_prompt": "/v2/report", "create_canvas": "/v2/report", "expert_5": "/portal/operation-platform/market/expert/list",
++		"Expert_team_use_3": "/portal/operation-platform/market/expert/list", "Hp_Appearance": "/v2/user-asset/appearance/set", "skill_1": "/v2/chat/completions",
++		"Expert_lighthouse": "/portal/operation-platform/market/expert/list", "black_cat": "", "school_season": "/v2/activity/growth/tasks",
++		"Sequential_Tasks_1": "/v2/activity/growth/tasks", "Sequential_Tasks_2": "/v2/activity/growth/tasks", "Sequential_Tasks_3": "/v2/activity/growth/tasks",
++		"Sequential_Tasks_4": "/v2/activity/growth/tasks", "Sequential_Tasks_5": "/v2/activity/growth/tasks", "Sequential_Tasks_6": "/v2/activity/growth/tasks", "Sequential_Tasks_7": "/v2/activity/growth/tasks",
++	}
++	night := upstream.InNightWindow(time.Now())
++	if night {
++		first["black_cat"] = "/v2/activity/growth/tasks"
++	}
++	required := map[string][]string{
++		"first_buddy":       {"/activity/growth/buddy/agreement", "/activity/growth/buddy/first"},
++		"Model_chat_GLM5.2": {"/v2/chat/completions", "/v2/report"},
++		"expert_5":          {"/v2/chat/completions", "/v2/report"}, "Expert_team_use_3": {"/v2/chat/completions", "/v2/report"},
++		"Hp_Appearance": {"/v2/user-asset/appearance/set", "/v2/report"},
++		"skill_1":       {"/v2/chat/completions", "/v2/report"}, "Expert_lighthouse": {"/v2/chat/completions", "/v2/report"},
++	}
++	for _, act := range autoActions {
++		var mu sync.Mutex
++		var paths []string
++		rt := fullActionRoundTripFunc(func(r *http.Request) (*http.Response, error) {
++			mu.Lock()
++			paths = append(paths, r.Method+" "+r.URL.Path)
++			mu.Unlock()
++			if r.Method == http.MethodPost && r.Body != nil {
++				raw, e := io.ReadAll(r.Body)
++				r.Body = io.NopCloser(bytes.NewReader(raw))
++				if e != nil || !json.Valid(raw) {
++					t.Errorf("%s invalid JSON request at %s", act.TaskCode, r.URL.Path)
++				}
++				if r.URL.Path == "/portal/operation-platform/market/expert/list" {
++					var fields map[string]any
++					_ = json.Unmarshal(raw, &fields)
++					if act.TaskCode == "Expert_team_use_3" && fields["expert_type"] != "team" {
++						t.Error("team request lost expert_type")
++					}
++				}
++			}
++			if (strings.HasPrefix(act.TaskCode, "Sequential_Tasks_") || act.TaskCode == "school_season") && r.URL.Path == "/v2/activity/growth/tasks" && r.Header.Get("X-Client-Platform") != "miniprogram" {
++				t.Errorf("%s lost MP header", act.TaskCode)
++			}
++			path := r.URL.Path
++			body := `{"code":0,"msg":"OK","data":{}}`
++			header := make(http.Header)
++			header.Set("Content-Type", "application/json")
++			if path == "/v2/activity/growth/tasks" {
++				body = fmt.Sprintf(`{"code":0,"msg":"OK","data":{"tasks":[{"task_code":%q,"target":1,"current":0,"accept_status":"accepted"}]}}`, act.TaskCode)
++			}
++			if path == "/portal/operation-platform/market/expert/list" {
++				body = `{"code":0,"msg":"OK","data":{"experts":[{"expert_id":"ex_fixture","expert_type":"agent","display_name_zh":"Fixture专家","profession_zh":"Fixture专家","version":"1.0"}]}}`
++			}
++			if path == "/v2/chat/completions" {
++				header.Set("Content-Type", "text/event-stream")
++				return &http.Response{StatusCode: 200, Status: "200 OK", Header: header, Body: io.NopCloser(strings.NewReader("data: {\"id\":\"cmb-0123456789abcdef0123456789abcdef\",\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\ndata: [DONE]\n\n")), Request: r}, nil
++			}
++			return &http.Response{StatusCode: 200, Status: "200 OK", Header: header, Body: io.NopCloser(strings.NewReader(body)), Request: r}, nil
++		})
++		client := &upstream.Client{HTTP: &http.Client{Transport: rt}, ChatBaseCN: "http://fixture.invalid", BillingBaseCN: "http://fixture.invalid", WebBaseCN: "http://fixture.invalid"}
++		msg, err := act.run(&Panel{cfg: Config{Upstream: client}}, &auth.Auth{AccessToken: "fixture-token", UID: "fixture-user", Nickname: "fixture"})
++		mu.Lock()
++		got := append([]string(nil), paths...)
++		mu.Unlock()
++		if err != nil {
++			t.Errorf("%s normal fixture error: %v paths=%v", act.TaskCode, err, got)
++		}
++		if strings.TrimSpace(msg) == "" {
++			t.Errorf("%s normal fixture empty result", act.TaskCode)
++		}
++		if want := first[act.TaskCode]; want != "" && (len(got) == 0 || strings.TrimPrefix(strings.TrimPrefix(got[0], "GET "), "POST ") != want) {
++			t.Errorf("%s missing expected path %s: %v", act.TaskCode, want, got)
++		}
++		if act.TaskCode == "black_cat" && !night && len(got) != 0 {
++			t.Errorf("daytime blackcat requests=%v", got)
++		}
++		for _, path := range required[act.TaskCode] {
++			if !containsPath(got, path) {
++				t.Errorf("%s missing required product request %s: %v", act.TaskCode, path, got)
++			}
++		}
++		if containsPath(got, "/claim") {
++			t.Errorf("%s claimed non-complete task: %v", act.TaskCode, got)
++		}
++		t.Logf("%s | normal non-complete | first=%s requests=%d paths=%v", act.TaskCode, first[act.TaskCode], len(got), got)
++	}
++}
++
++func containsPath(paths []string, want string) bool {
++	for _, path := range paths {
++		if strings.Contains(path, want) {
++			return true
++		}
++	}
++	return false
++}
++
++func sameStrings(got, want []string) bool {
++	if len(got) != len(want) {
++		return false
++	}
++	for i := range got {
++		if got[i] != want[i] {
++			return false
++		}
++	}
++	return true
++}
++
++type fullActionRoundTripFunc func(*http.Request) (*http.Response, error)
++
++func (f fullActionRoundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }

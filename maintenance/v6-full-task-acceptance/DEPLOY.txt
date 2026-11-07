@@ -1,0 +1,15 @@
+2026-11-07 v6 本地部署与回滚
+面板 http://127.0.0.1:7863/panel/ ；维护源码1c44e75+4dd5aab。
+binary /Users/jinyanya/Code/Codex/workbuddy/data/local-dev/wb2api
+SHA256 a5820d588f94e5bb2f2617b75276192da8d7a214d49124bf53999f3d2ee4a1d3
+backup /Users/jinyanya/Code/Codex/workbuddy/data/local-dev/wb2api.before-v6
+SHA256 55dc6850292e0a17677816dec29333187d11d03a6509e0bcaa81a20700c9fe5c
+实际构建go build -buildvcs=false -o data/local-dev/wb2api.next ./cmd/server exit0。
+停止service→等旧PID退出→替换→启动，running PID81010当时观测；只读smoke PASSexit0；8计划off/globalfalse，config/auth未变，未部署生产或发布版本/镜像。
+源码回滚保留历史：git revert 4dd5aab 1c44e75，再bash scripts/verify.sh，不强推。
+隔离演练：bash /Users/jinyanya/Code/Codex/workbuddy/maintenance/v6-full-task-acceptance/ROLLBACK.sh /绝对路径/隔离源码副本
+脚本拒绝维护工作区；本轮正反补丁+4hash/absence+完整门禁实际PASS。
+本地二进制回滚：service.sh stop→确认旧PID退出→cp data/local-dev/wb2api.before-v6 data/local-dev/wb2api→service.sh start→只读smoke。
+二进制副本cmp/-help演练PASS，未回滚当前新部署。不要不等待进程退出就快速restart。
+源码/二进制回滚不撤销真实14项报名，也不授权重复报名、签到、聊天或领奖。
+干净源码构建以Node22/fnm、Go1.27.3和README私有config/auth配置为基础；测试使用缓存依赖。普通账号继续原登录，不要求开发者应用；可选OAuth集成仍分开。

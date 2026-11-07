@@ -1,0 +1,8 @@
+2026-11-07 独立审查结论
+/root/v6_public_review：公开runModelChat流分支/局部validator/入口测试/25动作fixtures，最终无新增实质阻断。
+先后发现并整改multi-choice、角色翻转、finish空串、SSE多data/裸CR、readerror泄露、失败fixture断言缺失、请求contract不全；最后 go test ./internal/panel -run 'TestRunModelChat|TestFullLegacyAction' -count=1 -v 与-race均exit0。
+负gap随机等待P1误报已撤回，-10s+[0,10s)始终为负；未改生产jitter。
+/root/v5_probe_review：私有inventory和register助手独立审核，首次与整改复核都仅mock，不读真实配置/凭据/ledger、不网络/GUI。
+root核查修复包括body恢复/真实attempt、marker、auth实际文件hash、null/重复code、schema/体积、失败summary、302固定拒绝等；最后go test ./data/live-v6/task-inventory -count=1与-race均exit0，无实质阻断。
+报名302 fixture：1个accept失败后仍4GET，总confirmed0，不发后batch；成功fixture：13+1 actualJSONbody到达、14回读确认、不可重放；ack-only fixture必须err且confirmed0。
+root以真实执行结果另外确认：14报名回读全部成功、6HTTP200/code0、无chat/report/claim、配置凭据未变。子代理“完成”并不被直接当验收通过。

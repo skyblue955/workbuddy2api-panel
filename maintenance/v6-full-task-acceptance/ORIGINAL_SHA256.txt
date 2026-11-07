@@ -1,0 +1,4 @@
+886f4d52e6c33a641893b57763920e56a4ea256f4c605a96e1b88b132b6d87a9  internal/panel/autotask.go
+ABSENT  internal/panel/model_chat_completion.go
+ABSENT  internal/panel/model_chat_completion_test.go
+ABSENT  internal/panel/full_action_acceptance_test.go

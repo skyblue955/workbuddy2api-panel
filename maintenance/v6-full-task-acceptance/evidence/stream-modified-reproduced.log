@@ -1,0 +1,8 @@
+=== RUN   TestV6StreamEvidence
+MODEL valid accepted=true reports=1
+MODEL error_sse accepted=false reports=0
+MODEL truncated accepted=false reports=0
+MODEL read_failure accepted=false reports=0
+--- PASS: TestV6StreamEvidence (0.00s)
+PASS
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/panel	0.538s
