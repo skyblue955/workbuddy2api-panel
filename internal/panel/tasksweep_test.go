@@ -268,7 +268,10 @@ func TestTaskSweepSkipsBusyAccount(t *testing.T) {
 	p.unlockAccount("u1")
 	// 解锁后同一轮即可正常清扫（下一周期自动补）。
 	st = p.RunTaskSweepOnce()
-	if st.Skipped != 0 || st.Claimed != 1 {
-		t.Errorf("解锁后 stats = %+v, want skipped=0 claimed=1", st)
+	if st.Skipped != 0 || st.Claimed != 0 || st.Attempted != 1 || st.AlreadyClaimed != 1 {
+		t.Errorf("解锁后 stats = %+v, want skipped=0 claimed=0 attempted=1 already_claimed=1", st)
+	}
+	if got := b.claims.Load(); got != 1 {
+		t.Errorf("解锁后领奖请求数 = %d, want 1", got)
 	}
 }

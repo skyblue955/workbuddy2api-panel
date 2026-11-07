@@ -36,7 +36,7 @@ type scanAccountItem struct {
 
 // growthPending 任务是否"未完成且可自动化"。
 func growthPending(t upstream.Task) bool {
-	if t.Claimed {
+	if t.Claimed || t.IsInactive() {
 		return false
 	}
 	// 上游锁定的任务不出待办：Sequential 族每日零点解锁一环，刚做完上一环时
@@ -46,7 +46,7 @@ func growthPending(t upstream.Task) bool {
 	if t.Locked {
 		return false
 	}
-	if t.Target > 0 && t.Current >= t.Target {
+	if t.CanClaimReward() {
 		// 达标未领：也入队（队列执行后会自动领）——但仅限有自动化动作的任务，
 		// 否则队列执行时会因 autoActionFor 为 nil 直接报错。
 		return autoActionFor(t.TaskCode) != nil
@@ -405,8 +405,20 @@ func (p *Panel) acceptPendingTasks(a *auth.Auth) int {
 		return 0
 	}
 	var codes []string
+	seen := make(map[string]bool)
+	ambiguous := make(map[string]bool)
 	for _, t := range tasks {
-		if !t.Claimed && !t.Locked && t.AcceptStatus != "accepted" && t.AcceptStatus != "completed" {
+		if t.TaskCode == "" {
+			ambiguous[""] = true
+			continue
+		}
+		if seen[t.TaskCode] {
+			ambiguous[t.TaskCode] = true
+		}
+		seen[t.TaskCode] = true
+	}
+	for _, t := range tasks {
+		if t.TaskCode != "" && !ambiguous[t.TaskCode] && !t.Claimed && !t.IsInactive() && t.AcceptStatus != "accepted" && t.AcceptStatus != "completed" {
 			codes = append(codes, t.TaskCode)
 		}
 	}
@@ -417,7 +429,7 @@ func (p *Panel) acceptPendingTasks(a *auth.Auth) int {
 		log.Printf("panel: 队列 accept uid=%s: %v（不阻塞）", a.UID, err)
 		return 0
 	}
-	log.Printf("panel: 队列 accept uid=%s: 已接受 %d 个任务", a.UID, len(codes))
+	log.Printf("panel: 队列 accept uid=%s: 已提交 %d 个任务报名请求（待回读）", a.UID, len(codes))
 	return len(codes)
 }
 
@@ -434,11 +446,30 @@ func (p *Panel) runGrowthQueued(a *auth.Auth, code string) (string, error) {
 		return "", err
 	}
 	if before == nil {
-		return "该账号无此任务", nil
+		return "", fmt.Errorf("该账号无此任务")
 	}
 	isMP := isMPTaskCode(code)
 	if before.Claimed {
 		return "已完成（已领取）", nil
+	}
+	if before.IsInactive() {
+		return "", fmt.Errorf("任务当前不可用或已锁定")
+	}
+	// A task that is already eligible must be claimed directly. Re-running its
+	// action can spend credits and/or emit duplicate activity without changing
+	// the qualification state.
+	if before.CanClaimReward() {
+		receipt, cerr := claimTaskRewardReceipt(p, a, code)
+		if cerr != nil {
+			return "", fmt.Errorf("领奖未确认: %w", cerr)
+		}
+		if receipt.HasReward() {
+			return fmt.Sprintf("已自动领奖 +%d 分 +%d 能（进度 %s）", receipt.Credit, receipt.Energy, taskProgressText(before)), nil
+		}
+		if receipt.AlreadyClaimedKnown && receipt.AlreadyClaimed {
+			return "奖励此前已领取（进度 " + taskProgressText(before) + "）", nil
+		}
+		return "", fmt.Errorf("领奖响应未确认新增奖励")
 	}
 	msg, err := act.run(p, a)
 	if err != nil {
@@ -450,21 +481,28 @@ func (p *Panel) runGrowthQueued(a *auth.Auth, code string) (string, error) {
 	} else {
 		after, _ = p.taskByCodeWaiting(a, code)
 	}
-	if after != nil && after.Claimable {
-		var credit, energy int64
-		var cerr error
-		if isMP {
-			credit, energy, cerr = p.cfg.Upstream.ClaimRewardMP(a, code)
+	if after == nil {
+		return "", fmt.Errorf("任务进度回读未确认")
+	}
+	if after.IsInactive() {
+		return "", fmt.Errorf("任务完成后状态不可用或已锁定")
+	}
+	if after.CanClaimReward() {
+		receipt, cerr := claimTaskRewardReceipt(p, a, code)
+		if cerr != nil {
+			return "", fmt.Errorf("领奖未确认: %w", cerr)
+		}
+		if receipt.HasReward() {
+			msg += fmt.Sprintf("；自动领奖 +%d 分 +%d 能", receipt.Credit, receipt.Energy)
+		} else if receipt.AlreadyClaimedKnown && receipt.AlreadyClaimed {
+			msg += "；奖励此前已领取"
 		} else {
-			credit, energy, cerr = p.cfg.Upstream.ClaimReward(a, code)
+			return "", fmt.Errorf("领奖响应未确认新增奖励")
 		}
-		if cerr == nil && (credit > 0 || energy > 0) {
-			msg += fmt.Sprintf("；自动领奖 +%d 分 +%d 能", credit, energy)
-		}
+	} else if !after.Claimed {
+		return "", fmt.Errorf("任务进度未达标，未确认完成")
 	}
-	if after != nil {
-		msg += "（进度 " + taskProgressText(after) + "）"
-	}
+	msg += "（进度 " + taskProgressText(after) + "）"
 	log.Printf("panel: 队列 growth uid=%s code=%s: %s", a.UID, code, msg)
 	return msg, nil
 }

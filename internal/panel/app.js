@@ -1729,6 +1729,17 @@ $('btnTaskAcceptAll').onclick = async () => {
   finally { btn.disabled = false; btn.textContent = '全部接受'; loadTasks(); }
 };
 
+function summarizeAutoResults(results) {
+  return results.reduce((out, item) => {
+    if (item.claim_error || item.no_reward === true) out.unconfirmedN++;
+    else if (item.status === 'done' && item.verified === true) out.verifiedN++;
+    else if (item.status === 'skipped') out.skippedN++;
+    else if (item.status === 'error') out.errorN++;
+    else out.unconfirmedN++;
+    return out;
+  }, { verifiedN: 0, skippedN: 0, unconfirmedN: 0, errorN: 0 });
+}
+
 // 一键完成全部可自动任务（耗时较长：含真实对话，逐项回读验证）。
 $('btnTaskAutoAll').onclick = async () => {
   if (!taskUID || taskSessionBlocked()) return;
@@ -1737,11 +1748,9 @@ $('btnTaskAutoAll').onclick = async () => {
   btn.disabled = true; btn.textContent = '执行中…';
   try {
     const r = await api('accounts/' + encodeURIComponent(taskUID) + '/tasks/auto_all', { method: 'POST' });
-    const okN = (r.results || []).filter(x => x.status === 'done').length;
-    const skipN = (r.results || []).filter(x => x.status === 'skipped').length;
-    const errN = (r.results || []).filter(x => x.status === 'error').length;
-    toast(`执行完成：成功 ${okN} 项，跳过 ${skipN} 项${errN ? '，失败 ' + errN + ' 项' : ''}`, errN ? 'err' : 'ok');
-    console.log('auto_all results:', r.results);
+    const summary = summarizeAutoResults(r.results || []);
+    const warning = summary.unconfirmedN + summary.errorN > 0;
+    toast(`执行完成：成功 ${summary.verifiedN} 项，跳过 ${summary.skippedN} 项${warning ? `，未确认 ${summary.unconfirmedN} 项，失败 ${summary.errorN} 项` : ''}`, warning ? 'err' : 'ok');
   } catch (e) { toast(e.message, 'err'); }
   finally { btn.disabled = false; btn.textContent = '一键完成可自动任务'; loadTasks(); }
 };
@@ -1822,15 +1831,24 @@ $('taskBody').addEventListener('click', async ev => {
         if (r.claimed) msg += '，奖励已自动到账';
         else if (r.claimable) msg += r.claim_error ? '，可点「领取」重试' : '';
         else if (r.attempt && !advanced) msg += '；进度未动，该任务可能需要官方客户端';
-        toast(msg, (r.claimed || advanced) ? 'ok' : 'err');
+        const confirmed = r.verified === true || r.claimed === true || r.already_claimed === true;
+        toast(msg, confirmed && !r.claim_error && r.no_reward !== true ? 'ok' : 'err');
       }
       loadOverview(true);
     } else {
       const path = 'accounts/' + encodeURIComponent(taskUID) + '/tasks/' + (kind === 'claim' ? 'claim' : 'accept');
       const body = kind === 'claim' ? { task_code: code } : { task_codes: [code] };
-      await api(path, { method: 'POST', body: JSON.stringify(body) });
-      toast(kind === 'claim' ? '已领取奖励' : '已接受任务', 'ok');
-      if (kind === 'claim') loadOverview(true);
+      const r = await api(path, { method: 'POST', body: JSON.stringify(body) });
+      if (kind === 'claim') {
+        if (r.credit > 0 || r.energy > 0) {
+          toast(`已领取奖励 +${r.credit || 0} 分 +${r.energy || 0} 能`, 'ok');
+          loadOverview(true);
+        } else if (r.already_claimed === true) {
+          toast('该奖励此前已领取', 'ok');
+        } else {
+          toast('领奖响应未确认新增奖励', 'err');
+        }
+      } else toast('已接受任务', 'ok');
     }
   } catch (e) { toast(e.message, 'err'); }
   finally { loadTasks(); }

@@ -27,17 +27,21 @@ import (
 	"sync"
 
 	"github.com/linguo2625469/workbuddy2api-panel/internal/auth"
+	"github.com/linguo2625469/workbuddy2api-panel/internal/upstream"
 )
 
 // TaskSweepStats 一轮补领清扫的汇总（供日志与潜在的未来 HTTP 回执）。
 type TaskSweepStats struct {
-	Accounts int   `json:"accounts"` // 参与清扫的账号数
-	Skipped  int   `json:"skipped"`  // 因正在执行任务动作而跳过的账号数
-	Accepted int   `json:"accepted"` // 本轮接受成功的任务数
-	Claimed  int   `json:"claimed"`  // 本轮领奖成功的任务数
-	Credits  int64 `json:"credits"`  // 本轮到账积分
-	Energy   int64 `json:"energy"`   // 本轮到账能量
-	Errors   int   `json:"errors"`   // 本轮出错（不中断）的次数
+	Accounts       int   `json:"accounts"` // 参与清扫的账号数
+	Skipped        int   `json:"skipped"`  // 因正在执行任务动作而跳过的账号数
+	Accepted       int   `json:"accepted"` // 成功提交报名请求数，不代表资格确认
+	Claimed        int   `json:"claimed"`  // 上游报告新增奖励的任务数
+	Credits        int64 `json:"credits"`  // 上游报告的新增奖励积分
+	Energy         int64 `json:"energy"`   // 上游报告的新增奖励能量
+	Errors         int   `json:"errors"`   // 本轮出错（不中断）的次数
+	Attempted      int   `json:"attempted"`
+	AlreadyClaimed int   `json:"already_claimed"`
+	NoReward       int   `json:"no_reward"`
 }
 
 // RunTaskSweepOnce 对所有账号做一轮幂等补领清扫（账号间并发、账号内串行）。
@@ -68,6 +72,9 @@ func (p *Panel) RunTaskSweepOnce() TaskSweepStats {
 			st.Credits += r.credit
 			st.Energy += r.energy
 			st.Errors += r.errors
+			st.Attempted += r.attempted
+			st.AlreadyClaimed += r.alreadyClaimed
+			st.NoReward += r.noReward
 		}(a, ps.UID)
 	}
 	wg.Wait()
@@ -84,8 +91,8 @@ func (s TaskSweepStats) Claims() int { return s.Claimed }
 
 // sweepResult 单账号清扫结果（RunTaskSweepOnce 汇总用，非导出）。
 type sweepResult struct {
-	accounts, skipped, accepted, claimed, errors int
-	credit, energy                               int64
+	accounts, skipped, accepted, claimed, errors, attempted, alreadyClaimed, noReward int
+	credit, energy                                                                    int64
 }
 
 // sweepAccount 单账号一轮清扫。命中账号锁（正在跑任务动作）时整账号跳过：
@@ -123,8 +130,19 @@ func (p *Panel) sweepAccount(a *auth.Auth, uid string) (res sweepResult) {
 	// 阶段一：接受未接受的任务。默认口径与 mp 口径必须**分开提交**（端标记不同，
 	// 混提交会让 mp 任务报 task not found）。
 	var codes, mpCodes []string
+	counts := map[string]int{}
 	for _, t := range tasks {
-		if t.Claimed || t.Locked {
+		counts[t.TaskCode]++
+	}
+	ambiguous := map[string]bool{}
+	for code, n := range counts {
+		if n > 1 || code == "" {
+			ambiguous[code] = true
+			res.errors++
+		}
+	}
+	for _, t := range tasks {
+		if t.IsInactive() || t.Claimed || ambiguous[t.TaskCode] {
 			continue
 		}
 		if t.AcceptStatus == "accepted" || t.AcceptStatus == "completed" {
@@ -157,26 +175,35 @@ func (p *Panel) sweepAccount(a *auth.Auth, uid string) (res sweepResult) {
 
 	// 阶段二：领取已达标的奖励。claim 幂等（重复领 already_claimed → 0 分 0 能），
 	// 单项出错只记录、不中断后续任务。
+	claimedCodes := map[string]bool{}
 	for _, t := range tasks {
-		if !t.Claimable {
+		if t.IsInactive() || !t.CanClaimReward() || ambiguous[t.TaskCode] || claimedCodes[t.TaskCode] {
 			continue
 		}
+		claimedCodes[t.TaskCode] = true
 		// mp 口径任务必须走 mp 变体领奖端点（缺 mp 头上游返回 task not found）；
 		// 其余走 Web 域端点——与 taskcenter / autotask 的领奖口径一致。
-		var c, e int64
+		res.attempted++
+		var receipt upstream.ClaimReceipt
 		var cErr error
 		if isMPTaskCode(t.TaskCode) || mpOnly[t.TaskCode] {
-			c, e, cErr = p.cfg.Upstream.ClaimRewardMP(a, t.TaskCode)
+			receipt, cErr = p.cfg.Upstream.ClaimRewardMPReceipt(a, t.TaskCode)
 		} else {
-			c, e, cErr = p.cfg.Upstream.ClaimReward(a, t.TaskCode)
+			receipt, cErr = p.cfg.Upstream.ClaimRewardReceipt(a, t.TaskCode)
 		}
 		if cErr != nil {
 			res.errors++
 			continue
 		}
-		res.credit += c
-		res.energy += e
-		res.claimed++
+		if receipt.AlreadyClaimedKnown && receipt.AlreadyClaimed {
+			res.alreadyClaimed++
+		} else if receipt.HasReward() {
+			res.credit += receipt.Credit
+			res.energy += receipt.Energy
+			res.claimed++
+		} else {
+			res.noReward++
+		}
 	}
 	return res
 }
