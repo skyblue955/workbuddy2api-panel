@@ -155,7 +155,7 @@ func (c *Client) ClaimRewardMPReceipt(a *auth.Auth, taskCode string) (ClaimRecei
 	}
 	c.BillingHeaders(req, a)
 	req.Header.Set("X-Client-Platform", mpPlatform)
-	data, err := c.doJSON(req)
+	data, err := c.doClaimJSON(req)
 	if err != nil {
 		// chat 域对该路径 400（部分任务/租户形态）→ Web 域降级（已实测可领）。
 		if ue, ok := err.(*Error); ok && ue.Status == http.StatusBadRequest {
@@ -407,7 +407,7 @@ func (c *Client) ClaimRewardReceipt(a *auth.Auth, taskCode string) (ClaimReceipt
 		req.Header.Set("X-Domain", d)
 	}
 
-	data, err := c.doJSON(req)
+	data, err := c.doClaimJSON(req)
 	if err != nil {
 		return ClaimReceipt{}, err
 	}
