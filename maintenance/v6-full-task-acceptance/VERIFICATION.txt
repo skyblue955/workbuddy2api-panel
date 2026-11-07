@@ -121,3 +121,8 @@ smoke复用v5私有只读脚本，因此输出V5_*前缀不表示部署了旧二
 6个新增目录任务暂无原action handler/已验证编程完成契约；登记成功不代表已适配自动完成。
 未真实验证全量领取到账、夜间分支、外部账号授权或新协议；不会用虚构事件替代真实履约，也不会把GUI设为默认前置或要求用户代做。
 代码/二进制回滚不会撤销真实账号报名状态，不能据此重复报名/领奖。
+
+打包与Git核验
+保留原日志字节（部分502错误行有末尾空格）及合法nested patch上下文，避免改写实际输出。普通文本全量diff --check会对这些证据产生空白提示；源码检查 git diff 70dcd40 --check -- internal/panel 实际exit0；排除DIFF_FILE.patch及evidence/*.log后其余diff检查也exit0。没有修改全局Git设置。
+源码1c44e75、测试4dd5aab、记录8ece4e3已推送fork维护分支，远端头核验一致；PR2为fork main <- fork maintenance/v1-compat-rewards、OPEN。
+实际PR记录 https://github.com/skyblue955/workbuddy2api-panel/pull/2#issuecomment-6705922794 。私有data/live-v6跟踪文件数0；本记录追加前工作区干净。后续只提交此核验记录本身，不改变已测源码/已部署二进制/真实报名状态。
