@@ -1664,6 +1664,87 @@ start();
 
 /* ── 积分任务 ─────────────────────────────────────────────────────── */
 let taskUID = null;
+let taskWorkflowPending = false;
+
+/* TASK_WORKFLOW_UI_START */
+const workflowPendingRequests = new Map();
+function workflowOperationID() {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') return crypto.randomUUID();
+  return 'wf-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 14);
+}
+function workflowResultText(r) {
+  if (!r || r.status === 'planned') return '仅完成条件检查，未执行';
+  const detail = '（请求 ' + (r.chat_calls || 0) + ' 次，进度 ' + (r.progress_before || 0) + ' → ' + (r.progress_after || 0) + '）';
+  if (r.reward_received === true && r.receipt_reward_reported === true && r.upstream_claimed === true && r.balance_verified === true) return '奖励已确认到账' + detail;
+  if (r.status === 'ready_to_claim') return '进度已达标，尚未领奖' + detail;
+  if (r.status === 'already_claimed') return '此前已领取，本轮未重复领取';
+  if (r.status === 'unconfirmed') return '未观察到任务计数增长，已停止，不追加对话' + detail;
+  if (r.status === 'chat_failed') return '对话未确认成功，已停止，不重试' + detail;
+  if (r.status === 'budget_exhausted') return '已到对话次数上限，未确认任务完成' + detail;
+  return '本轮未确认新增奖励：' + (r.status || 'unknown') + detail;
+}
+function workflowEnsureButton() {
+  const reload = $('btnTaskReload'), footer = reload && reload.parentNode;
+  if (!footer || $('btnTaskWorkflowCheck')) return;
+  const b = document.createElement('button'); b.id = 'btnTaskWorkflowCheck'; b.textContent = '检查真实自动化条件';
+  footer.insertBefore(b, reload); b.onclick = workflowCheck;
+}
+async function workflowCheck() {
+  const uid = taskUID; if (!uid || taskWorkflowPending) return;
+  taskWorkflowPending = true;
+  const b = $('btnTaskWorkflowCheck'); if (b) { b.disabled = true; b.textContent = '检查中…'; }
+  try {
+    const d = await api('accounts/' + encodeURIComponent(uid) + '/tasks/workflow', { method: 'POST', body: JSON.stringify({}) });
+    if (taskUID !== uid) return;
+    const st = $('taskState'); if (st) { st.hidden = false; st.textContent = (d.tasks || []).map(t => t.task_code + '：' + (t.reason || t.status)).join('；') || '任务条件暂未确认'; }
+    const chat = (d.tasks || []).find(t => t.task_code === 'chat_5');
+    if (d.ok === true && chat && chat.can_execute === true) workflowRenderExecute();
+  } catch (e) { if (taskUID === uid) toast('条件检查失败：' + e.message, 'err'); }
+  finally { taskWorkflowPending = false; if (b) { b.disabled = false; b.textContent = '检查真实自动化条件'; } }
+}
+function workflowRenderExecute() {
+  const body = $('taskBody'); if (!body) return;
+  const row = Array.from(body.querySelectorAll('tr')).find(x => x.dataset && x.dataset.taskCode === 'chat_5');
+  if (!row) return; const cell = row.querySelector('.acts'); if (!cell || cell.querySelector('[data-workflow]')) return;
+  const b = document.createElement('button'); b.className = 'xs primary'; b.dataset.workflow = 'true'; b.textContent = '尝试真实自动化'; cell.appendChild(b);
+}
+async function workflowExecute(task, button) {
+  const uid = taskUID;
+  if (!uid || taskWorkflowPending || !task || task.task_code !== 'chat_5' || !button || button.disabled) return;
+  taskWorkflowPending = true; const old = button.textContent; button.disabled = true;
+  try {
+    let body = workflowPendingRequests.get(uid);
+    if (!body) {
+      const plan = await api('accounts/' + encodeURIComponent(uid) + '/tasks/workflow', { method: 'POST', body: JSON.stringify({task_codes:['chat_5']}) });
+      if (taskUID !== uid) return;
+      const row = (plan.tasks || []).find(t => t.task_code === 'chat_5');
+      if (plan.ok !== true || !row || row.can_execute !== true) { toast('当前没有已核实可执行的真实任务，请查看条件', 'err'); return; }
+      const model = prompt('模型ID（不加cn:前缀）', 'deepseek-v4-flash'); if (model === null || !String(model).trim()) return;
+      const input = prompt('最多真实对话次数（1-5；无计数增长立即停止）', '1'); if (input === null) return;
+      const calls = Number(input); if (!Number.isInteger(calls) || calls < 1 || calls > 5) { toast('次数必须为1-5', 'err'); return; }
+      if (!confirm('将尝试真实短问答，最多' + calls + '次，每次最多16 tokens，关闭额外推理，可能消耗积分。失败或没有计数增长就停止，不上报虚构完成事件。确认执行？')) return;
+      const claim = confirm('仅当上游确认达标后，是否自动领取该任务奖励一次？取消表示不领奖，仍按上一确认执行对话。');
+      if (taskUID !== uid) return;
+      body = {task_codes:['chat_5'],execute:true,operation_id:workflowOperationID(),model:String(model).trim(),max_chat_calls:calls,max_output_tokens:16,claim_rewards:claim};
+      workflowPendingRequests.set(uid,body);
+    }
+    button.textContent = '执行／核对中…';
+    const result = await api('accounts/' + encodeURIComponent(uid) + '/tasks/workflow', {method:'POST',body:JSON.stringify(body)});
+    workflowPendingRequests.delete(uid);
+    if (taskUID === uid) {
+      toast(workflowResultText(result), result.reward_received === true && result.receipt_reward_reported === true && result.upstream_claimed === true && result.balance_verified === true ? 'ok' : 'err');
+      await loadTasks();
+    }
+  } catch (e) {
+    if ([400,401,404,422].includes(e.httpStatus)) workflowPendingRequests.delete(uid);
+    if (taskUID === uid) toast('执行结果未确认：' + e.message + '。不会自动重试；再次点击只核对原操作ID。', 'err');
+  } finally { taskWorkflowPending = false; button.disabled = false; button.textContent = workflowPendingRequests.has(uid) ? '核对上次执行' : old; }
+}
+$('taskBody').addEventListener('click', ev => {
+  const b = ev.target.closest('button[data-workflow]'); if (!b) return;
+  ev.stopPropagation(); workflowExecute({task_code:'chat_5'}, b);
+});
+/* TASK_WORKFLOW_UI_END */
 
 // 可自动完成的任务（与后端 autoActions 表一致）：判据为行为事件、可经网关复现。
 // 其余任务需在官方客户端内交互，面板只展示指引（行 title 提示）。
@@ -1706,6 +1787,7 @@ function openTasks(uid) {
   $('btnTaskReload').hidden = false;
   $('btnTaskAcceptAll').hidden = taskSessionBlocked();
   $('btnTaskAutoAll').hidden = taskSessionBlocked();
+  workflowEnsureButton();
   loadTasks();
 }
 function closeTasks() { $('taskVeil').classList.remove('on'); taskUID = null; }
@@ -1788,12 +1870,12 @@ async function loadTasks() {
         : '<span class="tag mute">未接受</span>';
       const acted = taskSessionBlocked() ? '<span class="hint">自动化尚未验证</span>' : t.claimed || t.locked ? ''
         : t.claimable ? '<button class="xs primary" data-t="claim" data-c="' + esc(t.task_code) + '">领取</button>'
-        : AUTO_TASKS[t.task_code] ? '<button class="xs primary" data-t="auto" data-c="' + esc(t.task_code) + '" title="' + esc(AUTO_TASKS[t.task_code]) + '">一键完成</button>'
+        : AUTO_TASKS[t.task_code] && t.task_code !== 'chat_5' ? '<button class="xs primary" data-t="auto" data-c="' + esc(t.task_code) + '" title="' + esc(AUTO_TASKS[t.task_code]) + '">一键完成</button>'
         : t.accept_status === 'accepted' ? ''
         : '<button class="xs" data-t="accept" data-c="' + esc(t.task_code) + '">接受</button>';
       // 操作指引（description/task_desc）挂 title 提示：如何完成交给用户看
       const tip = [t.title, t.task_desc || t.description, t.jump_url ? '跳转：' + t.jump_url : ''].filter(Boolean).join('\n');
-      return '<tr title="' + esc(tip) + '"><td class="mark" aria-hidden="true"><i></i></td>' +
+      return '<tr data-task-code="' + esc(t.task_code) + '" title="' + esc(tip) + '"><td class="mark" aria-hidden="true"><i></i></td>' +
         '<td class="who"><div class="nm">' + esc(t.title || t.task_code) + '</div><div class="id">' + esc(t.task_code) + (t.tag ? ' · ' + esc(t.tag) : '') + '</div></td>' +
         '<td class="num">' + esc(prog) + '</td>' +
         '<td class="num">' + esc(reward) + '</td>' +
@@ -1803,6 +1885,7 @@ async function loadTasks() {
     st.hidden = !taskSessionBlocked();
     if (taskSessionBlocked()) st.textContent = '当前登录来源提示尚未核实，旧版任务自动化暂未验证；仅展示官方任务记录。这不等于企业账号，也不证明缺少个人权益。';
     tb.hidden = false;
+    if (list.some(t => t.task_code === 'chat_5' && !t.claimed && !t.locked)) workflowRenderExecute();
   } catch (e) {
     st.className = 'state err';
     st.textContent = e.message;
