@@ -72,7 +72,7 @@ func consumeModelChatCompletion(r io.Reader) error {
 								return fmt.Errorf("non-assistant stream role")
 							}
 						}
-						if call, exists := part["function_call"]; exists && call != nil {
+						if call, exists := part["function_call"]; exists && call != nil && !emptyModelChatFunctionPlaceholder(call) {
 							return fmt.Errorf("completion requires function execution")
 						}
 						if tools, ok := part["tool_calls"].([]any); ok && len(tools) > 0 {
@@ -163,4 +163,24 @@ func validModelChatFinishReason(reason string) bool {
 	default:
 		return false
 	}
+}
+
+// Some domestic streams serialize an unused function_call on the final text
+// frame. Only the known all-empty placeholder is noise; never accept actual
+// tool/function instructions, unknown fields, or malformed values here.
+func emptyModelChatFunctionPlaceholder(value any) bool {
+	fields, ok := value.(map[string]any)
+	if !ok {
+		return false
+	}
+	for key, raw := range fields {
+		if key != "name" && key != "arguments" {
+			return false
+		}
+		v, ok := raw.(string)
+		if !ok || v != "" {
+			return false
+		}
+	}
+	return true
 }

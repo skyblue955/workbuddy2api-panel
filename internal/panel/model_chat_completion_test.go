@@ -161,3 +161,23 @@ func TestRunModelChatCompleteRequestContract(t *testing.T) {
 		t.Fatal("request body changed")
 	}
 }
+
+func TestModelChatEmptyFunctionPlaceholderCompatibility(t *testing.T) {
+	for _, tc := range []struct {
+		name, call string
+		valid      bool
+	}{
+		{"empty-fields", `{"name":"","arguments":""}`, true}, {"empty-object", `{}`, true}, {"empty-name", `{"name":""}`, true},
+		{"actual-name", `{"name":"tool","arguments":""}`, false}, {"actual-arguments", `{"name":"","arguments":"{}"}`, false},
+		{"unknown-key", `{"other":""}`, false}, {"invalid-type", `""`, false}, {"invalid-member", `{"name":0}`, false}, {"null-member", `{"name":null}`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stream := `data: {"choices":[{"index":0,"delta":{"role":"assistant","content":"OK","function_call":null},"finish_reason":""}]}` + "\n\n" +
+				`data: {"choices":[{"index":0,"delta":{"role":"assistant","content":"","function_call":` + tc.call + `},"finish_reason":"stop"}]}` + "\n\ndata: [DONE]\n\n"
+			err := consumeModelChatCompletion(strings.NewReader(stream))
+			if (err == nil) != tc.valid {
+				t.Fatalf("valid=%t error=%v", tc.valid, err)
+			}
+		})
+	}
+}
