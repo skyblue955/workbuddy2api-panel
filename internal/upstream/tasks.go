@@ -17,9 +17,11 @@ package upstream
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 
 	"github.com/linguo2625469/workbuddy2api-panel/internal/auth"
 )
@@ -55,6 +57,34 @@ type Task struct {
 	Claimable    bool   `json:"claimable,omitempty"` // 进度达标且未领取（本地推算）
 	Claimed      bool   `json:"claimed,omitempty"`   // 已领取（accept_status == claimed）
 }
+
+// IsInactive reports states in which a task cannot be claimed.
+func (t Task) IsInactive() bool {
+	if t.Locked {
+		return true
+	}
+	switch strings.ToLower(strings.TrimSpace(t.Status)) {
+	case "expired", "ended", "disabled", "cancelled":
+		return true
+	default:
+		return false
+	}
+}
+
+// CanClaimReward reports whether the locally observed task state is claimable.
+func (t Task) CanClaimReward() bool {
+	return t.Claimable && !t.Claimed && !t.IsInactive() && t.Target > 0 && t.Current >= t.Target
+}
+
+// ClaimReceipt is the normalized result of a reward claim.
+type ClaimReceipt struct {
+	Credit              int64
+	Energy              int64
+	AlreadyClaimed      bool
+	AlreadyClaimedKnown bool
+}
+
+func (r ClaimReceipt) HasReward() bool { return r.Credit > 0 || r.Energy > 0 }
 
 // ListTasks 拉取全量任务列表（默认口径，无端标记头）。
 // 响应形如 data.tasks[]，元素字段随任务类型变化（progress 可能是 {current,target} 或平铺），
@@ -112,10 +142,16 @@ func (c *Client) AcceptTasksMP(a *auth.Auth, taskCodes []string) error {
 // + mp 头（上游 task_runner claim_one(mp=True) 同款）；chat 域 400 时降级 Web 域
 // 领奖端点（ClaimReward，x-client-platform: web 形态）。返回 (credit, energy, err)。
 func (c *Client) ClaimRewardMP(a *auth.Auth, taskCode string) (credit, energy int64, err error) {
+	r, err := c.ClaimRewardMPReceipt(a, taskCode)
+	return r.Credit, r.Energy, err
+}
+
+// ClaimRewardMPReceipt is the receipt form of ClaimRewardMP.
+func (c *Client) ClaimRewardMPReceipt(a *auth.Auth, taskCode string) (ClaimReceipt, error) {
 	req, err := http.NewRequest(http.MethodPost,
 		c.chatBase(a)+"/activity/growth/tasks/"+url.PathEscape(taskCode)+"/claim", nil)
 	if err != nil {
-		return 0, 0, err
+		return ClaimReceipt{}, err
 	}
 	c.BillingHeaders(req, a)
 	req.Header.Set("X-Client-Platform", mpPlatform)
@@ -123,24 +159,87 @@ func (c *Client) ClaimRewardMP(a *auth.Auth, taskCode string) (credit, energy in
 	if err != nil {
 		// chat 域对该路径 400（部分任务/租户形态）→ Web 域降级（已实测可领）。
 		if ue, ok := err.(*Error); ok && ue.Status == http.StatusBadRequest {
-			return c.ClaimReward(a, taskCode)
+			return c.ClaimRewardReceipt(a, taskCode)
 		}
-		return 0, 0, err
+		return ClaimReceipt{}, err
 	}
-	return parseClaimReward(data)
+	return parseClaimRewardReceipt(data)
 }
 
-// parseClaimReward 解析领奖响应 data：{"already_claimed":bool,"credit":n,"energy":n}。
+// parseClaimRewardReceipt strictly parses the claim data object while allowing
+// unknown extension fields.
+func parseClaimRewardReceipt(data json.RawMessage) (ClaimReceipt, error) {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	tok, err := dec.Token()
+	if err != nil {
+		return ClaimReceipt{}, err
+	}
+	if d, ok := tok.(json.Delim); !ok || d != '{' {
+		return ClaimReceipt{}, fmt.Errorf("claim receipt must be an object")
+	}
+	obj := make(map[string]json.RawMessage)
+	for dec.More() {
+		kt, err := dec.Token()
+		if err != nil {
+			return ClaimReceipt{}, err
+		}
+		key, ok := kt.(string)
+		if !ok {
+			return ClaimReceipt{}, fmt.Errorf("invalid claim receipt key")
+		}
+		if _, exists := obj[key]; exists {
+			return ClaimReceipt{}, fmt.Errorf("duplicate claim receipt key")
+		}
+		var raw json.RawMessage
+		if err := dec.Decode(&raw); err != nil {
+			return ClaimReceipt{}, err
+		}
+		obj[key] = raw
+	}
+	if _, err := dec.Token(); err != nil {
+		return ClaimReceipt{}, err
+	}
+	var extra any
+	if err := dec.Decode(&extra); err != io.EOF {
+		return ClaimReceipt{}, fmt.Errorf("trailing claim receipt data")
+	}
+	var r ClaimReceipt
+	knownAmount := false
+	for key, raw := range obj {
+		switch key {
+		case "credit", "energy":
+			var n *int64
+			if err := json.Unmarshal(raw, &n); err != nil || n == nil || *n < 0 {
+				return ClaimReceipt{}, fmt.Errorf("invalid %s", key)
+			}
+			knownAmount = true
+			v := *n
+			if key == "credit" {
+				r.Credit = v
+			} else {
+				r.Energy = v
+			}
+		case "already_claimed":
+			var b *bool
+			if err := json.Unmarshal(raw, &b); err != nil || b == nil {
+				return ClaimReceipt{}, fmt.Errorf("invalid already_claimed")
+			}
+			r.AlreadyClaimed, r.AlreadyClaimedKnown = *b, true
+		}
+	}
+	if r.AlreadyClaimed && r.HasReward() {
+		return ClaimReceipt{}, fmt.Errorf("already claimed receipt has reward")
+	}
+	if !knownAmount && !r.AlreadyClaimed {
+		return ClaimReceipt{}, fmt.Errorf("empty claim receipt")
+	}
+	return r, nil
+}
+
+// parseClaimReward preserves the legacy tuple API.
 func parseClaimReward(data json.RawMessage) (credit, energy int64, err error) {
-	var resp struct {
-		AlreadyClaimed bool  `json:"already_claimed"`
-		Credit         int64 `json:"credit"`
-		Energy         int64 `json:"energy"`
-	}
-	if err := json.Unmarshal(data, &resp); err != nil {
-		return 0, 0, err
-	}
-	return resp.Credit, resp.Energy, nil
+	r, err := parseClaimRewardReceipt(data)
+	return r.Credit, r.Energy, err
 }
 
 // parseGrowthTasks 解析 growth 任务列表 data.tasks[]（默认与 mp 口径共用）。
@@ -174,12 +273,17 @@ func parseGrowthTasks(data json.RawMessage) ([]Task, error) {
 		cur, tgt := t.Current, t.Target
 		// progress 可能是 {current,target} 对象（实测口径），覆盖平铺字段。
 		if len(t.Progress) > 0 && string(t.Progress) != "null" {
-			var pr struct {
-				Current int64 `json:"current"`
-				Target  int64 `json:"target"`
-			}
-			if json.Unmarshal(t.Progress, &pr) == nil && (pr.Target > 0 || pr.Current > 0) {
-				cur, tgt = pr.Current, pr.Target
+			pr, ok := parseProgress(t.Progress)
+			// A nested progress object is treated as an atomic snapshot.  Do not
+			// combine one nested field with stale flat fields: a partial snapshot
+			// is not sufficient evidence for claiming a reward.
+			if ok && len(pr) == 2 {
+				cur = pr["current"]
+				tgt = pr["target"]
+			} else {
+				// A supplied but malformed/non-object progress must not leave
+				// stale flat progress eligible.
+				cur, tgt = 0, 0
 			}
 		}
 		claimed := t.AcceptStatus == "claimed"
@@ -200,11 +304,56 @@ func parseGrowthTasks(data json.RawMessage) ([]Task, error) {
 			Current:      cur,
 			AcceptStatus: t.AcceptStatus,
 			Status:       t.Status,
-			Claimable:    !claimed && tgt > 0 && cur >= tgt,
+			Claimable:    !claimed && !t.Locked && !strings.EqualFold(strings.TrimSpace(t.Status), "expired") && !strings.EqualFold(strings.TrimSpace(t.Status), "ended") && !strings.EqualFold(strings.TrimSpace(t.Status), "disabled") && !strings.EqualFold(strings.TrimSpace(t.Status), "cancelled") && tgt > 0 && cur >= tgt,
 			Claimed:      claimed,
 		})
 	}
 	return out, nil
+}
+
+func parseProgress(raw json.RawMessage) (map[string]int64, bool) {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	tok, err := dec.Token()
+	if err != nil {
+		return nil, false
+	}
+	d, ok := tok.(json.Delim)
+	if !ok || d != '{' {
+		return nil, false
+	}
+	out := make(map[string]int64)
+	seen := make(map[string]bool)
+	for dec.More() {
+		kt, err := dec.Token()
+		if err != nil {
+			return nil, false
+		}
+		key, ok := kt.(string)
+		if !ok || seen[key] {
+			return nil, false
+		}
+		seen[key] = true
+		var v json.RawMessage
+		if err := dec.Decode(&v); err != nil {
+			return nil, false
+		}
+		if key != "current" && key != "target" {
+			continue
+		}
+		var n *int64
+		if err := json.Unmarshal(v, &n); err != nil || n == nil || *n < 0 {
+			return nil, false
+		}
+		out[key] = *n
+	}
+	if _, err := dec.Token(); err != nil {
+		return nil, false
+	}
+	var extra any
+	if err := dec.Decode(&extra); err != io.EOF {
+		return nil, false
+	}
+	return out, true
 }
 
 // AcceptTasks 接受任务（幂等：已 accepted 时上游返回成功或业务提示，均不视为致命错误）。
@@ -225,10 +374,16 @@ func (c *Client) AcceptTasks(a *auth.Auth, taskCodes []string) error {
 // 一直返回 400 "task not completed"，是此前领奖失败的真实原因。
 // 本实现返回 (credit, energy, err)：credit/energy 为本次到账奖励（已领取过时为 0）。
 func (c *Client) ClaimReward(a *auth.Auth, taskCode string) (credit, energy int64, err error) {
+	r, err := c.ClaimRewardReceipt(a, taskCode)
+	return r.Credit, r.Energy, err
+}
+
+// ClaimRewardReceipt is the receipt form of ClaimReward.
+func (c *Client) ClaimRewardReceipt(a *auth.Auth, taskCode string) (ClaimReceipt, error) {
 	req, err := http.NewRequest(http.MethodPost,
 		c.webBase(a)+"/activity/growth/tasks/"+url.PathEscape(taskCode)+"/claim", nil)
 	if err != nil {
-		return 0, 0, err
+		return ClaimReceipt{}, err
 	}
 	// Web 端请求头形状（对照浏览器实际请求）：Origin/Referer 指向 workbuddy.cn 成长中心，
 	// 带 x-client-platform: web 标记来源端。
@@ -254,19 +409,7 @@ func (c *Client) ClaimReward(a *auth.Auth, taskCode string) (credit, energy int6
 
 	data, err := c.doJSON(req)
 	if err != nil {
-		return 0, 0, err
+		return ClaimReceipt{}, err
 	}
-	// 响应 data：{"already_claimed":bool,"credit":100,"energy":5,...}
-	var resp struct {
-		AlreadyClaimed bool  `json:"already_claimed"`
-		Credit         int64 `json:"credit"`
-		Energy         int64 `json:"energy"`
-	}
-	if err := json.Unmarshal(data, &resp); err != nil {
-		return 0, 0, err
-	}
-	if resp.AlreadyClaimed {
-		return 0, 0, nil // 幂等：重复领取不算错误，但无新增奖励
-	}
-	return resp.Credit, resp.Energy, nil
+	return parseClaimRewardReceipt(data)
 }
