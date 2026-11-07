@@ -1,0 +1,39 @@
+2026-11-07（Asia/Shanghai）积分任务检查与仅达标奖励领取执行
+基线4a1bc43；maintenance/v1-compat-rewards；本轮无生产源码修改、无部署。
+
+CHECK
+命令：UV_CACHE_DIR=/private/tmp/uv-workbuddy-cache uv run --no-project python data/live-v7-claim/check.py --check
+输入：唯一已登录国内普通账号；原Panel GET /panel/api/accounts/{uid}/tasks，内部合并默认/MP两口径。
+结果：tasks=19 eligible_points_tasks=0 already_claimed=3 local_http_statuses=[200,200] config_auth_unchanged=true；exit0。
+完整任务视图仅存gitignored0600私有文件，公开汇总没有账号标识。
+
+EXECUTE
+命令：UV_CACHE_DIR=/private/tmp/uv-workbuddy-cache uv run --no-project python data/live-v7-claim/execute.py --execute-ready
+输入：上述19个唯一任务码，按现有claim_ready的1..10上限分2批，execute=true；不调用auto/auto_all。
+两次POST /panel/api/accounts/{uid}/tasks/claim_ready均HTTP200/no_op；代码再次查询资格，不试领未达标任务。
+字面结果：
+tasks_checked=19 execute_batches=2 selected=0 upstream_claim_attempts=0 rewards_confirmed=0
+reason_counts={not_ready:15,already_claimed:3,missing_task:1}
+before_claimed=3 after_claimed=3 balance_delta_observed=0 config_auth_unchanged=true
+chat_calls=0 event_calls=0 enrollment_calls=0 automatic_claim_retries=0
+exit0。已实际运行领取流程，但没有合格候选，所以没有上游领奖POST，不能称新增领奖成功。
+执行共6次本地API访问：overview GET、余额POST、两批claim_ready POST、合并任务GET、余额POST，全部200。余额POST只是只读上游查询与本地缓存更新。
+不宣称逐个上游原始HTTP/业务码，本轮记录的是已运行Panel返回值。
+missing_task是未在默认领奖列表中的小程序任务；初始合并查询已覆盖它，本轮未达标，也未尝试未支持的领奖通道。
+前后已领仍3；余额接口观测差0，没有把旧已领记录当新增奖励。
+
+预检错误及核查
+首次execute脚本的只读预检误用Request.method而非get_method，尚未创建execute marker或调用claim_ready，退出1，私有error记录保留。
+修正Python属性后继续，不是重试领奖。O_EXCL执行标记、每批私有回执保留，无重复领奖或无限轮询。
+独立reviewer检查现有入口资格/去重/MP边界及脱敏结果；本轮0领奖写入不等于领奖成功。
+其对零奖励complete/HasReward的建议仅记待契约审计：complete与reward_received语义不同、HasReward可能省略，未贸然改已验收源码或宣布新缺陷已复现。
+命令：bash scripts/verify.sh
+输入：未改生产源码及确定性fixtures。
+字面结果：ACCEPTANCE PASS；V7_VERIFY_EXIT=0；exit0。见evidence/verify.log。
+CI无真实账号操作；认证/config哈希相同，原有关闭计划未开启。
+
+保存与边界
+本轮只追加维护记录，无源码或实际领奖状态改动需要回滚，不调用撤销/重复领奖制造回滚证据。
+公开check-summary.json与execute-summary.json只有路由类别、HTTP状态和计数/差值，没有UID/凭据/绝对余额/原账号记录。
+私有脚本/完整记录不入Git。本轮不执行任务动作、报名、签到、聊天、事件、兑换、协议或领养。
+结论：19项已检查，0项可领，3项旧已领，本次新增奖励0。报名不等于完成，不尝试领取未达标项目。
