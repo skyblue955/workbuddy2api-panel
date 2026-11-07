@@ -5,6 +5,6 @@ DONE I1 implementer仅改accountTaskAuto ready分支，已达标不重做动作�
 DONE V1 root实际baseline/modified/clean/rollback完整gate全部0；同输入原路由fixture before=accept/chat/report各1，新版各0，原claim均1；回滚恢复旧缺陷。
 DONE V2 独立reviewer无blocker，两个P2测试补齐后复核关闭；Web/MP和失败回执/资格撤销/已领锁定回归PASS。
 DONE D1 本地binary e00ce960...已更新，before-v9备份144c62bd...，overview200/8计划关闭/global关闭/凭据与配置未改。
-PENDING D2 小提交、fork推送、PR2回执、remote一致性核实。
+DONE D2 source6530d57/records b2a14ca已推origin，PR2 OPEN且head一致，验收comment6707086078保存；详GIT_DELIVERY.txt。
 OPEN 真实全量任务完成及新奖励到账仍未验证；旧报告端点当前记分不在本轮live执行，新增任务执行器/专家部分成功语义等保留待办。
 本轮无live chat/report/enroll/claim/agreement等写入；v8新授权已用1/5，本轮不续用剩余4次，旧专家预算不混用。
