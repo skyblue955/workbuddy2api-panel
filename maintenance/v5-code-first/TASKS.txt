@@ -1,0 +1,8 @@
+2026-11-07 v5代码入口优先队列
+C1 DONE 原facf981先完整verify和同输入探针，正常原代码entry tests在基线通过；定位领奖外层信封误接受。
+C2 DONE 双路只读代码调查，旧client/desktop/autotask3文件hash不变；requestID跟踪契约与最终完成分开。
+C3 DONE 最小doClaimJSON局部修复，独立审查+正常/错误/MPfallback/race通过，提交ce1525c。
+C4 DONE 一次真实project Panel/Upstream只读5请求全200/code0；19任务0eligible，marketagent/team各20，resourcevalid，config/authunchanged。
+C5 PARTIAL 原真实Panelroute+runChat5、原runExpertBatch在确定性假上游通过，提交b3b20c1；真实原DesktopChatWithExpert1次HTTP200/id/content但无DONE；立即及延迟task仍1/5、0/3，UNCONFIRMED(exit3)，未领奖/未上报合成事件。原8额度历史1UI+本轮1code，剩6。不得称全量真实任务通过，不把GUI交还用户作为前置。
+C6 DONE 完整modified/clean/rollback门禁、5hash/absence恢复、实际localdeploy/只读smoke及binary副本rollbackPASS；审查整改、fork/PR交付记录另见VERIFICATION。
+OPEN 完整回答观察契约、其余任务真实资格/进度/到账、明确规则新活动渠道；需要当前可验证契约，不靠改造虚构完成事件填补。

@@ -1,0 +1,124 @@
+v5 代码入口优先验收 — 2026-11-07
+当前维护分支 maintenance/v1-compat-rewards；基线 facf98168bcb351fb9876377f6eefcdbb684b023。
+修复提交 ce1525c；原代码入口回归提交 b3b20c1。
+PR https://github.com/skyblue955/workbuddy2api-panel/pull/2 。
+本轮交付不代表所有积分任务自动完成/自动领奖已通过真实验收。
+
+改变的分支/字段
+ClaimRewardReceipt 与 ClaimRewardMPReceipt 的响应分支由 doJSON 切到局部 doClaimJSON。
+严格校验 HTTP2xx、唯一整数code==0、JSON对象/尾部/1MiB体积；阻断3xx重定向，不改变共享HTTPClient。
+正常回执credit/energy/already_claimed、非零业务码分类、MP HTTP400的一次Web回退保持。
+只修已用基线fixture复现的缺失/null code与302误报奖励。任务URL、请求头、正常业务动作不重写。
+client.go、desktop.go、autotask.go全文件与facf981 SHA256一致（3/3），见old-actions-preserved.json。
+
+四个交付物（最终已逐一重新打开）
+MODIFIED_FILE=/Users/jinyanya/Code/Codex/workbuddy/maintenance/v5-code-first/MODIFIED_FILE.go.txt
+DIFF_FILE=/Users/jinyanya/Code/Codex/workbuddy/maintenance/v5-code-first/DIFF_FILE.patch
+VERIFICATION=/Users/jinyanya/Code/Codex/workbuddy/maintenance/v5-code-first/VERIFICATION.txt
+ROLLBACK=/Users/jinyanya/Code/Codex/workbuddy/maintenance/v5-code-first/ROLLBACK.sh
+MODIFIED_FILE精确复制新tasks.go。DIFF覆盖5个源码/测试文件；ORIGINAL_SHA256保存原tasks.go哈希和4个ABSENT；ROLLBACK为0755。
+真实工作区保留修改；回滚在另一份源码副本执行。
+
+执行环境
+PATH=/Users/jinyanya/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.3.darwin-arm64/bin:$PATH
+GOTOOLCHAIN=local GOCACHE=/private/tmp/workbuddy-gocache GOMODCACHE=/Users/jinyanya/go/pkg/mod GOPROXY=off
+Node22.21.1（fnm）；Python命令均为 UV_CACHE_DIR=/private/tmp/uv-workbuddy-cache uv run --no-project python。
+完整门禁需要本地httptest监听；这些测试不访问真实账号。
+
+BASELINE
+目录：/private/tmp/workbuddy-code-first-base.M2Affs，干净git archive facf981。
+命令：bash scripts/verify.sh
+输入：原有源码和确定性fixtures。
+字面结果：ACCEPTANCE PASS；CODE_FIRST_BASELINE_EXIT=0；exit0。evidence/baseline-verify.log。
+复制PROBE_test.go.txt为internal/upstream/code_first_probe_test.go后命令：
+go test -v ./internal/upstream -run '^TestCodeFirstBaselineEvidence$' -count=1
+输入literal：
+valid HTTP200 {"code":0,"data":{"credit":100,"energy":5}}
+missing_code HTTP200 {"data":{"credit":100}}
+null_code HTTP200 {"code":null,"data":{"credit":100}}
+redirect HTTP302 {"code":0,"data":{"credit":100}}
+expert HTTP200 SSE data: {"id":"cmb-0123456789abcdef0123456789abcdef"} 后为空行，无content/DONE。
+字面输出：
+CLAIM valid accepted=true credit=100 energy=5
+CLAIM missing_code accepted=true credit=100 energy=0
+CLAIM null_code accepted=true credit=100 energy=0
+CLAIM redirect accepted=true credit=100 energy=0
+EXPERT truncated_id_only accepted=true has_id=true
+exit0；evidence/baseline-probe.log。探针exit0是收集证据成功，不是无bug。
+
+MODIFIED
+命令：bash scripts/verify.sh
+输入：当前修改源码/fixtures，包括Node/shell语法、go vet ./...、go test -race ./...、go build ./...。
+字面结果：ACCEPTANCE PASS；MODIFIED_VERIFY_EXIT=0；exit0。evidence/modified-verify.log。
+干净archive+正向DIFF同命令：ACCEPTANCE PASS；CLEAN_MODIFIED_EXIT=0；exit0。evidence/clean-modified-verify.log。
+同一PROBE命令、同一literal输入，字面输出：
+CLAIM valid accepted=true credit=100 energy=5
+CLAIM missing_code accepted=false credit=0 energy=0
+CLAIM null_code accepted=false credit=0 energy=0
+CLAIM redirect accepted=false credit=0 energy=0
+EXPERT truncated_id_only accepted=true has_id=true
+exit0；evidence/modified-probe.log。专家函数只取tracking ID是原契约，不改成完整回答解析，也不把它当最终完成。
+定向命令：go test -race ./internal/upstream -run 'TestClaimEnvelope|TestClaimRewardMPFallsBack|TestMarketExpert|TestDesktopChat' -count=1
+字面结果：ok github.com/linguo2625469/workbuddy2api-panel/internal/upstream 1.548s；exit0。
+代码入口命令：go test -race -v ./internal/panel -run 'Test(CodeEntryPanel|RunExpertBatch)' -count=1
+字面结果：PASS / ok；exit0。实际真实Panel route+原runChat5，只连接假上游，无真实事件。
+fixture进度5/5→claimed，receipt100/5，余额差100；重复执行差0；1/5不领取；noop0/0不计新增；动作失败不宣称完成。
+同两组新测试复制到干净facf981后：
+go test -race -v ./internal/upstream ./internal/panel -run 'Test(MarketExpert|DesktopChat|RunExpertBatch|CodeEntryPanel)' -count=1
+结果两package PASS，BASELINE_CODE_ENTRY_EXIT=0，exit0。说明原正常编排无需为GUI控制失败重写。
+
+ROLLBACK
+输入：/private/tmp/workbuddy-v5-rollback.CyENlz，另一份干净archive先正向应用DIFF，完整门禁通过后再反转。
+命令：bash /Users/jinyanya/Code/Codex/workbuddy/maintenance/v5-code-first/ROLLBACK.sh /private/tmp/workbuddy-v5-rollback.CyENlz
+字面输出：ROLLBACK PASS: facf981 source restored; 5 hashes/absences matched；exit0。
+命令：bash scripts/verify.sh（回滚副本）
+字面输出：ACCEPTANCE PASS；ROLLBACK_VERIFY_EXIT=0；exit0。
+同一PROBE命令和literal输入恢复：
+CLAIM valid accepted=true credit=100 energy=5
+CLAIM missing_code accepted=true credit=100 energy=0
+CLAIM null_code accepted=true credit=100 energy=0
+CLAIM redirect accepted=true credit=100 energy=0
+EXPERT truncated_id_only accepted=true has_id=true
+exit0。旧行为/状态和5个原文件哈希/缺省状态恢复；实际维护工作区仍是修改版。
+证据：rollback.log、rollback-verify.log、rollback-probe.log、worktree-still-modified.sha256。
+
+真实验收（与fixture分开；本轮没有GUI操作）
+1 ./data/live-v5/code-entry-probe/probe -readonly
+真实调用项目Panel tasks路由→原ListTasks/ListTasksMP；原MarketExpertList agent/team；原UserResource。
+字面结果：LIVE_READONLY_EXIT=0。5次HTTP全部200/业务code0；任务合并19项、0可领、3已领；专家/团目录各20；余额schema有效。
+选中两项 expert_5=1/5，Expert_team_use_3=0/3；聊天0、领奖0、事件0、凭据/config哈希未变。
+2 ./data/live-v5/code-entry-probe/probe -one-expert-chat
+已登记复用原8次授权中的1次；不新增额度、不自动重试，不执行runExpertBatch中的合成召唤/完成事件。
+真实调用原DesktopChatWithExpert，保持原请求shape/fast-model/X-Expert-Id。
+字面结果：chat_post_attempts=1 request_id_extracted=true reply_observed=true content_observed=true done_observed=false chat_error=none
+聊天HTTP200；SSE没有JSON外层code，记business_code=unknown，不凭空填0。
+原helper得到ID即关闭；观察到非空content但没有DONE，不能当完整最终回答。
+前后任务仍1/5、0/3，0可领，claimed未变；即时resource有效差0（不等于已证明免费/最终计费0）。
+字面结果：CHAT_TASK_ACCEPTANCE=UNCONFIRMED tracking_id_is_not_completion；LIVE_CODE_CHAT_EXIT=3。
+整个mode8次HTTP（4taskGET、1marketPOST、2resourcePOST、1chatPOST），全部200，领奖0/事件0/报名0。
+3 ./data/live-v5/progress-followup read
+追加一次旧ListTasks只读GET，HTTP200，expert仍1/5/team0/3，均不合格；writes0；exit0。
+因此没有发出任一领取请求；没有把200/得到ID/看到content当任务完成。
+历史UI1次+本轮代码POST1次=2次实际提交；原8次尚余6次，两个任务领奖各1次额度仍未用。
+配置/凭据未变；两次前后即时余额为差0，后续延迟计费不在此断言内。
+证据：live-readonly.log、live-one-expert-chat.log、live-delayed-progress.log（仅脱敏摘要，无凭据/UID/完整账号记录）。
+
+独立审查与本地部署
+生产claim guard由security_reviewer独立审查通过，含race fixture；原入口新tests/privateprobe由另一reviewer复核。
+私有探针整改过：重复marker、漏计请求、可能回写realm的LoadDir、summary覆写、nil body、SSE null finishreason等；最终无新增阻断。
+分包SSE完整run fixture证明原helper只Read1/Close1不drain，exit3 UNCONFIRMED、POST1；不为改成“通过”而改生产契约。
+本地新原生binary55dc6850292e0a17677816dec29333187d11d03a6509e0bcaa81a20700c9fe5c已部署127.0.0.1:7863。
+备份e50ea8515ff1ac1af6717db6a576c029199be01d1f8f0e48748aa6b373278da3；源码隔离回滚及二进制副本恢复都PASS。
+只读smoke：overview200、400/401/404拒绝路径PASS、8计划off/globalfalse、config/authunchanged，exit0。
+首次smoke脚本误将logging.request_archive_enabled也计为schedule，断言9!=8退出1；仅改检查范围为cfg.schedule后通过，未改实际配置。
+
+未完成/边界
+- 专家/团自动真实完成与两项真实领奖未通过；本轮没有合格任务，未探测性领取。
+- 17项event-only与其余hybrid全量真实有效性未证明；fake fixture不代表实际产品操作或上游支持。
+- 不用补发虚构点击/成功事件点亮进度；旧私有接口不声明官方支持，也不因未确认便重写接口/伪造参数。
+- 原helper早返ID无法完整确认回答；本轮保留契约，明确记录未确认，而不是偷换成功标准。
+- 新增活动/积分渠道仍须当前明确规则、资格和可用契约；19项快照不等于发现并适配新活动。
+- GUI不再是前置，不要求用户代做剩余4专家+3团队；保留历史不把原GUI控制故障误报为API故障。
+
+打包检查说明
+直接 git diff --cached --check 曾因把DIFF_FILE.patch内的合法补丁上下文前缀“空格+Go制表符”当作新增文本空白而exit2；没有源码空白缺陷。保留已演练的补丁原字节；使用 git diff --cached --check -- . ':!maintenance/v5-code-first/DIFF_FILE.patch' 检查其余改动，并以实际git apply正反向验证补丁，均通过。不修改全局Git配置。

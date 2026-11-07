@@ -1,0 +1,18 @@
+本地v5交付 / 2026-11-07
+面板 http://127.0.0.1:7863/panel/ ，保持8个自动计划关闭、global.enabled=false。
+当前源码ce1525c+b3b20c1；binary /Users/jinyanya/Code/Codex/workbuddy/data/local-dev/wb2api
+SHA256 55dc6850292e0a17677816dec29333187d11d03a6509e0bcaa81a20700c9fe5c
+备份 /Users/jinyanya/Code/Codex/workbuddy/data/local-dev/wb2api.before-v5
+SHA256 e50ea8515ff1ac1af6717db6a576c029199be01d1f8f0e48748aa6b373278da3
+实际 go build -buildvcs=false -o data/local-dev/wb2api.next ./cmd/server exit0。
+保存备份→service.sh stop→等待旧PID退出→替换binary→service.sh start，观察running PID50472（当时值）。
+只读smoke最终PASS exit0，凭据/config哈希相同；无自动签到/模型/奖励请求。真实验收额外1次聊天单独记账，不属于smoke。
+干净archive正向patch的 bash scripts/verify.sh PASS；依赖来自缓存，不宣称首次无网络可下载。
+按README配置私有config/auth；普通账号不要求开发者账号；可选官方OAuth凭据与旧账号凭据分开。
+
+源码回滚：维护分支通过 git revert b3b20c1 ce1525c 保留历史，再bash scripts/verify.sh，不强推。
+隔离演练：bash /Users/jinyanya/Code/Codex/workbuddy/maintenance/v5-code-first/ROLLBACK.sh /绝对路径/隔离源码副本
+脚本拒绝真实维护工作区，已验证forward/reverse/fullgate/5hash&absence恢复。
+原生回滚：service.sh stop，等待旧PID退出，cp data/local-dev/wb2api.before-v5 data/local-dev/wb2api，service.sh start；再只读smoke。
+副本二进制覆盖恢复、cmp和-help启动已实际PASS；未回滚当前部署。
+代码或二进制回滚不会撤销真实账号计费/任务/奖励，不能据此重放领取。

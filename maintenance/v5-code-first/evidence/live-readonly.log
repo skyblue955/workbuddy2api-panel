@@ -1,0 +1,12 @@
+mode=-readonly task_route_status=200 task_count=19 claimable_count=0 claimed_count=3 selected_before="Expert_team_use_3 current=0 target=3 claimed=false canclaim=false;expert_5 current=1 target=5 claimed=false canclaim=false"
+market_agent=success count=20
+market_team=success count=20
+resource=valid
+inference=0 reward=0 event=0
+http method=GET host=copilot.tencent.com path=/v2/activity/growth/tasks status=200 business_code=0
+http method=GET host=copilot.tencent.com path=/v2/activity/growth/tasks status=200 business_code=0
+http method=POST host=copilot.tencent.com path=/portal/operation-platform/market/expert/list status=200 business_code=0
+http method=POST host=copilot.tencent.com path=/portal/operation-platform/market/expert/list status=200 business_code=0
+http method=POST host=www.codebuddy.cn path=/v2/billing/meter/get-user-resource status=200 business_code=0
+config_auth_unchanged=true
+LIVE_READONLY_EXIT=0

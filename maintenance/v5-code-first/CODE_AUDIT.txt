@@ -1,0 +1,24 @@
+2026-11-07 代码入口审计（两个repo_explorer独立只读调查，root复核）
+
+保留的旧实现
+- MarketExpertList：原POST市场列表接口，expert_type=agent/team；是只读查询，不能据此认定已使用专家。
+- DesktopChatWithExpert：原POST聊天接口、普通messages/fast-model/stream及X-Expert-Id，返回服务端requestId。没有取专家提示词或在body声明角色；是否上游按expert处理不能仅由本地代码判断。
+- 原helper拿到合法id即返回；id-only SSE能返回id是提交跟踪契约，不是最终回答/任务完成证明。本轮不为强加新语义重写它。
+- 原runExpertBatch串联列表、召唤事件、真实聊天、使用事件；本轮在假上游验证代码编排，不向真实上游伪造未执行的UI点击/完成事件。
+- 单任务POST /panel/api/accounts/{uid}/tasks/auto外层已有回读verified/claimable门控。部分动作返回nil并不等于整项成功，必须看回读和实际回执。
+- RunTaskSweepOnce只接受/补领，不执行聊天或事件。显式claim_ready默认dry-run、仅指定名单、达标才领取，再读claimed；不把200或0分当新增到账。
+
+已证实需要最小修复
+- 干净facf981 ClaimRewardReceipt接受HTTP200缺失/null业务码的正金额data，也接受HTTP302；基线probe可复现。只给领奖请求加局部信封/状态校验，通用doJSON及旧请求shape不改。
+
+未直接改写的风险/边界
+- 专家批处理忽略fail计数，ok<count可返回nil，但外层仍会回读unconfirmed；先用真实路由fixture验收，避免把辅助函数文案等同实际领取成功。
+- 事件构造helper对短requestId后缀切片可能panic；当前真实请求来源强制32hex格式，本轮不扩展事件构造/不放宽id规则来点亮任务。
+- MarketExpertList返回条目完整性、专家角色是否实际加载及实际积分计数需要进一步契约/回读证据，不能凭旧注释或header宣布恢复。
+- 17个event-only动作仍按源实现与真实产品操作区分，不用试发假事件来判断能否拿分。
+
+验收层次
+1 原生产函数+本地假上游：判断代码编排/错误/资格/重复保护是否正确。
+2 同一项目Client/Panel真实只读入口：看认证、请求和响应是否仍兼容。
+3 明确批准范围内的一次真实聊天（如执行）：只测原真实聊天函数，不上报合成事件；前后回读任务与余额，分别记录“请求ID已提取”“是否看到回复”“任务是否增加”“是否达标/领取”，不混为一项成功。
+GUI只用于必要的矛盾核对，不作为上述任何测试的前置，不再让用户代做客户端任务。

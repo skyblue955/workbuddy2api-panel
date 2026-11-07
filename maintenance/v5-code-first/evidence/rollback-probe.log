@@ -1,0 +1,9 @@
+=== RUN   TestCodeFirstBaselineEvidence
+CLAIM valid accepted=true credit=100 energy=5
+CLAIM missing_code accepted=true credit=100 energy=0
+CLAIM null_code accepted=true credit=100 energy=0
+CLAIM redirect accepted=true credit=100 energy=0
+EXPERT truncated_id_only accepted=true has_id=true
+--- PASS: TestCodeFirstBaselineEvidence (0.00s)
+PASS
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/upstream	0.499s
