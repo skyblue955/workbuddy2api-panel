@@ -15,3 +15,5 @@
    acceptPendingTasks 仍仅默认列表/默认报名；不宣称 MP 队列恢复。17类旧事件-only动作没有真实产品行为，本轮不扩展其报名或伪造事件获奖能力。旧代码和记录保留，没有静默删除。
 
 安全复审确认原 partial-progress P2 已解决，新增队列守卫/回执未见实质安全问题；未发现本轮新增凭证泄漏/鉴权弱化/账号锁回归。根协调者执行完整race gate、干净副本gate、隔离回滚和哈希验证，见 VERIFICATION.txt。
+
+最终 reviewer 复审（整改后）：确认原 queue 守卫/重复动作、claim_error/no_reward/donefalse汇总问题已解决；MP报名为已记录原有限制，不构成本轮引入缺陷；未发现新的本轮实质性回归。root补正unready期望和回读503后实际focused/race/fullgate已通过。

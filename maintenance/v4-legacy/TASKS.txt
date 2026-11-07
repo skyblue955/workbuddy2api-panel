@@ -7,3 +7,4 @@ R4 PARTIAL：真实两项报名accepted已确认。当前已发送0次/领奖0�
 R5 DONE(code)：独立review/security_review、整改、完整modified和clean archive gate、隔离rollback/fullgate/11文件原hash均通过。已更新本地面板，凭证配置不变，8计划/global关闭。fork提交/远端证据在交付时补记。
 R6 OUTSTANDING：用户空间选择后，先查私有账本再接续8次真实短问答；确认上游达标后每项至多一次领取；余额/实际回执分别记录。失败停止，不通过改造事件去凑进度。
 R7 LIMITS：MP队列报名未适配；其余hybrid/新活动/全模型未实测；v3 Library_read旧列表资格缺口仍在。此轮代码交付不等于25项全部自动完成，更不等于整个长期维护项目结束。
+Git更新：09e59b5+7a10f04+cf0bc9a已推送origin维护分支，远端PR2 OPEN/headcf0bc9a已核对；最后证据补记提交另存。独立review最终确认无新增本轮实质回归；不掩盖MP已知限制。

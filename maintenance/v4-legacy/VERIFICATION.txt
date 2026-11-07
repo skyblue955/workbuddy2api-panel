@@ -115,3 +115,11 @@ PENDING 8次官方国内客户端专家/专家团真实问答、资格回读、�
 - 严格回执只代表上游报告新增奖励，不是独立余额对账，也不保证分布式或崩溃后的exactly-once；旧MP400fallback保留，未做真实MP领奖验收。
 - 无新活动公开契约/可用资格的真实奖励渠道被验证；本轮不编造新渠道或把私有接口标为官方支持。
 - 所有本地定时计划仍关闭；普通账号授权无需开发者账号；可选官方OAuth兑换与此相互独立。
+
+Git交付实证
+精确命令：git push origin maintenance/v1-compat-rewards
+字面结果：ec78db5..cf0bc9a maintenance/v1-compat-rewards -> maintenance/v1-compat-rewards；exit0。
+精确命令：gh pr view 2 --repo skyblue955/workbuddy2api-panel --json url,state,headRefName,headRefOid,baseRefName
+字面结果：state=OPEN；baseRefName=main；headRefName=maintenance/v1-compat-rewards；headRefOid=cf0bc9a5ad5c11567f36f455b002fcec4115b832；exit0。随后追加本轮PR验收/未完成说明，未合并发布。
+源码09e59b5/7a10f04，审计证据cf0bc9a。最后文档补记提交在交付时核对，不将本文件自身哈希循环写入自身。
+空白检查：源码diff --check通过；文档缓存diff --check按格式排除DIFF_FILE.patch（统一diff上下文前导空格不是源码错误），其余通过；完整补丁已实际正反向应用。
