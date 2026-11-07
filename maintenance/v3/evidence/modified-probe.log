@@ -1,0 +1,6 @@
+=== RUN   TestV3BehaviorEvidence
+HTTP=200 UPSTREAM_WRITES=0
+HTTP=400 UPSTREAM_WRITES=0
+--- PASS: TestV3BehaviorEvidence (0.00s)
+PASS
+ok  	github.com/linguo2625469/workbuddy2api-panel/internal/panel	1.118s

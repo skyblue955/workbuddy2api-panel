@@ -1,0 +1,48 @@
+{
+  "realm": "cn",
+  "live_chat_requests": 3,
+  "maximum_requested_output_tokens_per_request": 16,
+  "chat_automatic_retries": 0,
+  "initial_nonstream": {
+    "model": "hy4-preview-f",
+    "http_status": 200,
+    "passed": false,
+    "failure": "reasoning_only_no_final_content_under_budget"
+  },
+  "stream": {
+    "model": "deepseek-v4-flash",
+    "http_status": 200,
+    "passed": true,
+    "terminal_done": true,
+    "reply_matches_ok": true,
+    "reasoning_output_absent": true
+  },
+  "additional_separately_authorized_nonstream": {
+    "model": "deepseek-v4-flash",
+    "http_status": 200,
+    "passed": true,
+    "reply_matches_ok": true,
+    "reasoning_output_absent": true
+  },
+  "task_accept_attempts": 1,
+  "accept_response_http_status": 200,
+  "registration_confirmed_after_accept": false,
+  "task_reading": "user completed reading in official domestic client",
+  "eligibility_source": "user confirmed official domestic task card ready; legacy auto-list disagreed",
+  "claim_attempts": 1,
+  "claim_http_status": 200,
+  "claim_business_code": 0,
+  "claim_status": "awarded",
+  "strict_oneoff_receipt_valid": true,
+  "server_reported_reward_credit": 100,
+  "server_reported_reward_energy": 5,
+  "observed_interval_credit_delta": 100,
+  "balance_queries": 2,
+  "balance_before_and_after_valid": true,
+  "postclaim_legacy_claimed": true,
+  "claim_automatic_retries": 0,
+  "controlled_script_other_state_changing_calls": 0,
+  "overseas_chat_task_claim_actions": 0,
+  "raw_credentials_account_records_prompts_replies_in_report": false,
+  "remaining_gap": "automatic preclaim eligibility discovery for this task still unverified/failed; no guard bypass added"
+}
