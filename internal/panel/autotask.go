@@ -695,10 +695,18 @@ func (p *Panel) accountTaskAuto(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "skipped": true, "message": "该任务已领取过奖励"})
 		return
 	}
-	msg, err := act.run(p, a)
-	if err != nil {
-		writeErr(w, http.StatusBadGateway, "执行失败: "+err.Error())
-		return
+	// A task that is already claimable has completed its upstream work.  Do not
+	// replay the action (some actions send real chat/events); still perform the
+	// normal readback and claim flow below so a ready reward is collected.
+	msg := ""
+	if before.CanClaimReward() {
+		msg = "任务已达标，跳过重复动作"
+	} else {
+		msg, err = act.run(p, a)
+		if err != nil {
+			writeErr(w, http.StatusBadGateway, "执行失败: "+err.Error())
+			return
+		}
 	}
 	// 回读验证：上报 200 ≠ 计分（上游可能静默丢弃 + 计分异步），
 	// 用有界轮询等异步计时落定，再决定是否自动领奖（mp 任务同口径回读）。
